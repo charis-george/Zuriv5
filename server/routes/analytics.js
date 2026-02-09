@@ -2,153 +2,350 @@ const express = require('express');
 const router = express.Router();
 const { getDb } = require('../database');
 
-const db = getDb();
+const supabase = getDb();
 
 // Get sales summary
-router.get('/sales/:businessId', (req, res) => {
-  const { businessId } = req.params;
-  const { period = 'day' } = req.query; // day, week, month
+router.get('/sales/:businessId', async (req, res) => {
+  try {
+    const { businessId } = req.params;
+    const { period = 'day' } = req.query; // day, week, month
 
-  let dateFilter = '';
-  if (period === 'day') {
-    dateFilter = "DATE(createdAt) = DATE('now')";
-  } else if (period === 'week') {
-    dateFilter = "DATE(createdAt) >= DATE('now', '-7 days')";
-  } else if (period === 'month') {
-    dateFilter = "DATE(createdAt) >= DATE('now', '-30 days')";
-  }
+    const now = new Date();
+    let startDate = new Date();
 
-  db.all(
-    `SELECT 
-      COUNT(*) as totalOrders,
-      SUM(totalAmount) as totalRevenue,
-      AVG(totalAmount) as averageOrderValue,
-      SUM(CASE WHEN status = 'completed' THEN totalAmount ELSE 0 END) as completedRevenue
-     FROM orders
-     WHERE businessId = ? AND ${dateFilter}`,
-    [businessId],
-    (err, result) => {
-      if (err) {
-        return res.status(500).json({ error: 'Database error' });
-      }
-      res.json(result[0] || { totalOrders: 0, totalRevenue: 0, averageOrderValue: 0, completedRevenue: 0 });
+    if (period === 'day') {
+      startDate.setHours(0, 0, 0, 0);
+    } else if (period === 'week') {
+      startDate.setDate(now.getDate() - 7);
+    } else if (period === 'month') {
+      startDate.setDate(now.getDate() - 30);
     }
-  );
+
+    const { data: orders, error } = await supabase
+      .from('orders')
+      .select('total_amount, status')
+      .eq('business_id', businessId)
+      .gte('created_at', startDate.toISOString());
+
+    if (error) {
+      console.error('Get sales summary error:', error);
+      return res.status(500).json({ error: 'Database error' });
+    }
+
+    let totalOrders = 0;
+    let totalRevenue = 0;
+    let completedRevenue = 0;
+
+    orders?.forEach(order => {
+      totalOrders++;
+      totalRevenue += order.total_amount || 0;
+      if (order.status === 'completed') {
+        completedRevenue += order.total_amount || 0;
+      }
+    });
+
+    const averageOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+
+    res.json({
+      totalOrders,
+      totalRevenue,
+      averageOrderValue,
+      completedRevenue
+    });
+  } catch (error) {
+    console.error('Get sales summary error:', error);
+    res.status(500).json({ error: 'Database error' });
+  }
 });
 
 // Get sales by date
-router.get('/sales-by-date/:businessId', (req, res) => {
-  const { businessId } = req.params;
-  const { days = 30 } = req.query;
+router.get('/sales-by-date/:businessId', async (req, res) => {
+  try {
+    const { businessId } = req.params;
+    const { days = 30 } = req.query;
 
-  db.all(
-    `SELECT 
-      DATE(createdAt) as date,
-      COUNT(*) as orderCount,
-      SUM(totalAmount) as revenue,
-      SUM(CASE WHEN status = 'completed' THEN totalAmount ELSE 0 END) as completedRevenue
-     FROM orders
-     WHERE businessId = ? AND DATE(createdAt) >= DATE('now', '-${days} days')
-     GROUP BY DATE(createdAt)
-     ORDER BY date DESC`,
-    [businessId],
-    (err, results) => {
-      if (err) {
-        return res.status(500).json({ error: 'Database error' });
-      }
-      res.json(results);
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - parseInt(days));
+
+    const { data: orders, error } = await supabase
+      .from('orders')
+      .select('created_at, total_amount, status')
+      .eq('business_id', businessId)
+      .gte('created_at', startDate.toISOString());
+
+    if (error) {
+      console.error('Get sales by date error:', error);
+      return res.status(500).json({ error: 'Database error' });
     }
-  );
+
+    const salesByDate = {};
+
+    orders?.forEach(order => {
+      const date = new Date(order.created_at);
+      const dateKey = date.toISOString().split('T')[0];
+
+      if (!salesByDate[dateKey]) {
+        salesByDate[dateKey] = {
+          date: dateKey,
+          orderCount: 0,
+          revenue: 0,
+          completedRevenue: 0
+        };
+      }
+
+      salesByDate[dateKey].orderCount++;
+      salesByDate[dateKey].revenue += order.total_amount || 0;
+      if (order.status === 'completed') {
+        salesByDate[dateKey].completedRevenue += order.total_amount || 0;
+      }
+    });
+
+    res.json(Object.values(salesByDate).sort((a, b) => b.date.localeCompare(a.date)));
+  } catch (error) {
+    console.error('Get sales by date error:', error);
+    res.status(500).json({ error: 'Database error' });
+  }
 });
 
 // Get most ordered items
-router.get('/popular-items/:businessId', (req, res) => {
-  const { businessId } = req.params;
-  const { limit = 10, days = 30 } = req.query;
+router.get('/popular-items/:businessId', async (req, res) => {
+  try {
+    const { businessId } = req.params;
+    const { limit = 10, days = 30 } = req.query;
 
-  db.all(
-    `SELECT 
-      m.id,
-      m.name,
-      m.price,
-      SUM(oi.quantity) as totalQuantity,
-      SUM(oi.quantity * oi.price) as totalRevenue,
-      COUNT(DISTINCT oi.orderId) as orderCount
-     FROM order_items oi
-     JOIN menu_items m ON oi.menuItemId = m.id
-     JOIN orders o ON oi.orderId = o.id
-     WHERE m.businessId = ? AND DATE(o.createdAt) >= DATE('now', '-${days} days')
-     GROUP BY m.id, m.name, m.price
-     ORDER BY totalQuantity DESC
-     LIMIT ?`,
-    [businessId, parseInt(limit)],
-    (err, results) => {
-      if (err) {
-        return res.status(500).json({ error: 'Database error' });
-      }
-      res.json(results);
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - parseInt(days));
+
+    // Get orders in the time period
+    const { data: orders, error: ordersError } = await supabase
+      .from('orders')
+      .select('id')
+      .eq('business_id', businessId)
+      .gte('created_at', startDate.toISOString());
+
+    if (ordersError) {
+      console.error('Get popular items error:', ordersError);
+      return res.status(500).json({ error: 'Database error' });
     }
-  );
+
+    if (!orders || orders.length === 0) {
+      return res.json([]);
+    }
+
+    const orderIds = orders.map(o => o.id);
+
+    // Get order items for these orders
+    const { data: orderItems, error: itemsError } = await supabase
+      .from('order_items')
+      .select('menu_item_id, quantity, price, order_id')
+      .in('order_id', orderIds);
+
+    if (itemsError) {
+      console.error('Get popular items error:', itemsError);
+      return res.status(500).json({ error: 'Database error' });
+    }
+
+    // Get menu item details
+    const menuItemIds = [...new Set(orderItems?.map(item => item.menu_item_id) || [])];
+    const { data: menuItems } = await supabase
+      .from('menu_items')
+      .select('id, name, price')
+      .eq('business_id', businessId)
+      .in('id', menuItemIds);
+
+    const menuItemMap = {};
+    menuItems?.forEach(item => {
+      menuItemMap[item.id] = item;
+    });
+
+    const itemStats = {};
+
+    orderItems?.forEach(item => {
+      const menuItemId = item.menu_item_id;
+      const menuItem = menuItemMap[menuItemId];
+      
+      if (!menuItem) return; // Skip if menu item not found
+
+      if (!itemStats[menuItemId]) {
+        itemStats[menuItemId] = {
+          id: menuItemId,
+          name: menuItem.name,
+          price: menuItem.price,
+          totalQuantity: 0,
+          totalRevenue: 0,
+          orderCount: new Set()
+        };
+      }
+
+      itemStats[menuItemId].totalQuantity += item.quantity;
+      itemStats[menuItemId].totalRevenue += item.quantity * item.price;
+      itemStats[menuItemId].orderCount.add(item.order_id);
+    });
+
+    const results = Object.values(itemStats).map(stats => ({
+      id: stats.id,
+      name: stats.name,
+      price: stats.price,
+      totalQuantity: stats.totalQuantity,
+      totalRevenue: stats.totalRevenue,
+      orderCount: stats.orderCount.size
+    }));
+
+    results.sort((a, b) => b.totalQuantity - a.totalQuantity);
+    res.json(results.slice(0, parseInt(limit)));
+  } catch (error) {
+    console.error('Get popular items error:', error);
+    res.status(500).json({ error: 'Database error' });
+  }
 });
 
 // Get peak hours
-router.get('/peak-hours/:businessId', (req, res) => {
-  const { businessId } = req.params;
-  const { days = 30 } = req.query;
+router.get('/peak-hours/:businessId', async (req, res) => {
+  try {
+    const { businessId } = req.params;
+    const { days = 30 } = req.query;
 
-  db.all(
-    `SELECT 
-      strftime('%H', createdAt) as hour,
-      COUNT(*) as orderCount,
-      SUM(totalAmount) as revenue
-     FROM orders
-     WHERE businessId = ? AND DATE(createdAt) >= DATE('now', '-${days} days')
-     GROUP BY strftime('%H', createdAt)
-     ORDER BY hour`,
-    [businessId],
-    (err, results) => {
-      if (err) {
-        return res.status(500).json({ error: 'Database error' });
-      }
-      res.json(results);
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - parseInt(days));
+
+    const { data: orders, error } = await supabase
+      .from('orders')
+      .select('created_at, total_amount')
+      .eq('business_id', businessId)
+      .gte('created_at', startDate.toISOString());
+
+    if (error) {
+      console.error('Get peak hours error:', error);
+      return res.status(500).json({ error: 'Database error' });
     }
-  );
+
+    const hourStats = {};
+
+    orders?.forEach(order => {
+      const date = new Date(order.created_at);
+      const hour = date.getHours().toString().padStart(2, '0');
+
+      if (!hourStats[hour]) {
+        hourStats[hour] = {
+          hour,
+          orderCount: 0,
+          revenue: 0
+        };
+      }
+
+      hourStats[hour].orderCount++;
+      hourStats[hour].revenue += order.total_amount || 0;
+    });
+
+    const results = Object.values(hourStats).sort((a, b) => a.hour.localeCompare(b.hour));
+    res.json(results);
+  } catch (error) {
+    console.error('Get peak hours error:', error);
+    res.status(500).json({ error: 'Database error' });
+  }
 });
 
 // Get profit margins
-router.get('/profit-margins/:businessId', (req, res) => {
-  const { businessId } = req.params;
-  const { days = 30 } = req.query;
+router.get('/profit-margins/:businessId', async (req, res) => {
+  try {
+    const { businessId } = req.params;
+    const { days = 30 } = req.query;
 
-  db.all(
-    `SELECT 
-      m.id,
-      m.name,
-      m.price,
-      m.cost,
-      SUM(oi.quantity) as totalQuantity,
-      SUM(oi.quantity * oi.price) as totalRevenue,
-      SUM(oi.quantity * COALESCE(m.cost, 0)) as totalCost,
-      SUM(oi.quantity * oi.price) - SUM(oi.quantity * COALESCE(m.cost, 0)) as profit,
-      CASE 
-        WHEN SUM(oi.quantity * oi.price) > 0 
-        THEN ((SUM(oi.quantity * oi.price) - SUM(oi.quantity * COALESCE(m.cost, 0))) / SUM(oi.quantity * oi.price)) * 100
-        ELSE 0
-      END as marginPercentage
-     FROM order_items oi
-     JOIN menu_items m ON oi.menuItemId = m.id
-     JOIN orders o ON oi.orderId = o.id
-     WHERE m.businessId = ? AND DATE(o.createdAt) >= DATE('now', '-${days} days')
-     GROUP BY m.id, m.name, m.price, m.cost
-     ORDER BY profit DESC`,
-    [businessId],
-    (err, results) => {
-      if (err) {
-        return res.status(500).json({ error: 'Database error' });
-      }
-      res.json(results);
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - parseInt(days));
+
+    // Get orders in the time period
+    const { data: orders, error: ordersError } = await supabase
+      .from('orders')
+      .select('id')
+      .eq('business_id', businessId)
+      .gte('created_at', startDate.toISOString());
+
+    if (ordersError) {
+      console.error('Get profit margins error:', ordersError);
+      return res.status(500).json({ error: 'Database error' });
     }
-  );
+
+    if (!orders || orders.length === 0) {
+      return res.json([]);
+    }
+
+    const orderIds = orders.map(o => o.id);
+
+    // Get order items for these orders
+    const { data: orderItems, error: itemsError } = await supabase
+      .from('order_items')
+      .select('menu_item_id, quantity, price')
+      .in('order_id', orderIds);
+
+    if (itemsError) {
+      console.error('Get profit margins error:', itemsError);
+      return res.status(500).json({ error: 'Database error' });
+    }
+
+    // Get menu item details
+    const menuItemIds = [...new Set(orderItems?.map(item => item.menu_item_id) || [])];
+    const { data: menuItems } = await supabase
+      .from('menu_items')
+      .select('id, name, price, cost')
+      .eq('business_id', businessId)
+      .in('id', menuItemIds);
+
+    const menuItemMap = {};
+    menuItems?.forEach(item => {
+      menuItemMap[item.id] = item;
+    });
+
+    const itemStats = {};
+
+    orderItems?.forEach(item => {
+      const menuItemId = item.menu_item_id;
+      const menuItem = menuItemMap[menuItemId];
+      
+      if (!menuItem) return; // Skip if menu item not found
+
+      if (!itemStats[menuItemId]) {
+        itemStats[menuItemId] = {
+          id: menuItemId,
+          name: menuItem.name,
+          price: menuItem.price,
+          cost: menuItem.cost || 0,
+          totalQuantity: 0,
+          totalRevenue: 0,
+          totalCost: 0
+        };
+      }
+
+      itemStats[menuItemId].totalQuantity += item.quantity;
+      itemStats[menuItemId].totalRevenue += item.quantity * item.price;
+      itemStats[menuItemId].totalCost += item.quantity * (menuItem.cost || 0);
+    });
+
+    const results = Object.values(itemStats).map(stats => {
+      const profit = stats.totalRevenue - stats.totalCost;
+      const marginPercentage = stats.totalRevenue > 0 
+        ? (profit / stats.totalRevenue) * 100 
+        : 0;
+
+      return {
+        id: stats.id,
+        name: stats.name,
+        price: stats.price,
+        cost: stats.cost,
+        totalQuantity: stats.totalQuantity,
+        totalRevenue: stats.totalRevenue,
+        totalCost: stats.totalCost,
+        profit: profit,
+        marginPercentage: marginPercentage
+      };
+    });
+
+    results.sort((a, b) => b.profit - a.profit);
+    res.json(results);
+  } catch (error) {
+    console.error('Get profit margins error:', error);
+    res.status(500).json({ error: 'Database error' });
+  }
 });
 
 module.exports = router;

@@ -3,16 +3,16 @@ const router = express.Router();
 const QRCode = require('qrcode');
 const { getDb } = require('../database');
 
-const db = getDb();
+const supabase = getDb();
 
 // Generate QR code for business
 router.get('/generate/:businessId', async (req, res) => {
-  const { businessId } = req.params;
-  const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-
-  const qrUrl = `${baseUrl}/order/${businessId}`;
-
   try {
+    const { businessId } = req.params;
+    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+    const qrUrl = `${baseUrl}/order/${businessId}`;
+
     const qrCodeDataUrl = await QRCode.toDataURL(qrUrl, {
       errorCorrectionLevel: 'H',
       type: 'image/png',
@@ -24,10 +24,10 @@ router.get('/generate/:businessId', async (req, res) => {
       }
     });
 
-    res.json({ 
+    res.json({
       qrUrl,
       qrCodeDataUrl,
-      businessId 
+      businessId
     });
   } catch (err) {
     console.error('QR generation error:', err);
@@ -36,22 +36,30 @@ router.get('/generate/:businessId', async (req, res) => {
 });
 
 // Get business public info (for customer ordering page)
-router.get('/business/:businessId', (req, res) => {
-  const { businessId } = req.params;
+router.get('/business/:businessId', async (req, res) => {
+  try {
+    const { businessId } = req.params;
 
-  db.get(
-    'SELECT id, name, phone, address FROM businesses WHERE id = ?',
-    [businessId],
-    (err, business) => {
-      if (err) {
-        return res.status(500).json({ error: 'Database error' });
-      }
-      if (!business) {
-        return res.status(404).json({ error: 'Business not found' });
-      }
-      res.json(business);
+    const { data: business, error } = await supabase
+      .from('businesses')
+      .select('id, name, phone, address')
+      .eq('id', businessId)
+      .single();
+
+    if (error || !business) {
+      return res.status(404).json({ error: 'Business not found' });
     }
-  );
+
+    res.json({
+      id: business.id,
+      name: business.name,
+      phone: business.phone,
+      address: business.address
+    });
+  } catch (error) {
+    console.error('Get business info error:', error);
+    res.status(500).json({ error: 'Database error' });
+  }
 });
 
 module.exports = router;
