@@ -20,7 +20,16 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    sourcemap: false
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          'qr-vendor': ['html5-qrcode'],
+        },
+      },
+    },
+    chunkSizeWarningLimit: 1000,
   }
 })
 
