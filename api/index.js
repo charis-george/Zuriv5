@@ -49,17 +49,25 @@ const orderRoutes = require('../server/routes/order');
 const analyticsRoutes = require('../server/routes/analytics');
 const qrRoutes = require('../server/routes/qr');
 const paymentRoutes = require('../server/routes/payment');
+const contactRoutes = require('../server/routes/contact');
+const subscriptionRoutes = require('../server/routes/subscription');
+const aiRoutes = require('../server/routes/ai');
+const banksRoutes = require('../server/routes/banks');
 
-// Routes
-app.use('/business', businessRoutes);
-app.use('/menu', menuRoutes);
-app.use('/order', orderRoutes);
-app.use('/analytics', analyticsRoutes);
-app.use('/qr', qrRoutes);
-app.use('/payment', paymentRoutes);
+// Mount under /api so client calls like /api/business/login work
+app.use('/api/business', businessRoutes);
+app.use('/api/banks', banksRoutes);
+app.use('/api/menu', menuRoutes);
+app.use('/api/order', orderRoutes);
+app.use('/api/analytics', analyticsRoutes);
+app.use('/api/qr', qrRoutes);
+app.use('/api/payment', paymentRoutes);
+app.use('/api/contact', contactRoutes);
+app.use('/api/subscription', subscriptionRoutes);
+app.use('/api/ai', aiRoutes);
 
 // Health check
-app.get('/health', (req, res) => {
+app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
