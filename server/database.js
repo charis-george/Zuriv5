@@ -35,7 +35,8 @@ const init = async () => {
           email: 'demo@zuri.com',
           password: defaultPassword,
           phone: '+234 123 456 7890',
-          address: '123 Demo Street'
+          address: '123 Demo Street',
+          plan: 'zuri_plus'
         });
 
       if (insertError) {
@@ -50,6 +51,11 @@ const init = async () => {
       await seedDemoData(businessId);
     } else {
       console.log('Demo business already exists');
+      // Ensure demo account is on Zuri Plus
+      await supabase
+        .from('businesses')
+        .update({ plan: 'zuri_plus' })
+        .eq('email', 'demo@zuri.com');
     }
     
     console.log('Supabase database initialized successfully');

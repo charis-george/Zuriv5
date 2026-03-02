@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../database');
+const { getBusinessPlan, canAccessAnalytics } = require('../lib/plans');
 
 const supabase = getDb();
 
@@ -8,6 +9,10 @@ const supabase = getDb();
 router.get('/sales/:businessId', async (req, res) => {
   try {
     const { businessId } = req.params;
+    const plan = await getBusinessPlan(businessId);
+    if (!canAccessAnalytics(plan)) {
+      return res.status(403).json({ error: 'Analytics available on Basic plan and above. Upgrade to unlock.' });
+    }
     const { period = 'day' } = req.query; // day, week, month
 
     const now = new Date();
@@ -25,6 +30,7 @@ router.get('/sales/:businessId', async (req, res) => {
       .from('orders')
       .select('total_amount, status')
       .eq('business_id', businessId)
+      .neq('status', 'cancelled')
       .gte('created_at', startDate.toISOString());
 
     if (error) {
@@ -32,12 +38,11 @@ router.get('/sales/:businessId', async (req, res) => {
       return res.status(500).json({ error: 'Database error' });
     }
 
-    let totalOrders = 0;
+    let totalOrders = orders?.length ?? 0;
     let totalRevenue = 0;
     let completedRevenue = 0;
 
     orders?.forEach(order => {
-      totalOrders++;
       totalRevenue += order.total_amount || 0;
       if (order.status === 'completed') {
         completedRevenue += order.total_amount || 0;
@@ -62,6 +67,10 @@ router.get('/sales/:businessId', async (req, res) => {
 router.get('/sales-by-date/:businessId', async (req, res) => {
   try {
     const { businessId } = req.params;
+    const plan = await getBusinessPlan(businessId);
+    if (!canAccessAnalytics(plan)) {
+      return res.status(403).json({ error: 'Analytics available on Basic plan and above. Upgrade to unlock.' });
+    }
     const { days = 30 } = req.query;
 
     const startDate = new Date();
@@ -71,6 +80,7 @@ router.get('/sales-by-date/:businessId', async (req, res) => {
       .from('orders')
       .select('created_at, total_amount, status')
       .eq('business_id', businessId)
+      .neq('status', 'cancelled')
       .gte('created_at', startDate.toISOString());
 
     if (error) {
@@ -111,6 +121,10 @@ router.get('/sales-by-date/:businessId', async (req, res) => {
 router.get('/popular-items/:businessId', async (req, res) => {
   try {
     const { businessId } = req.params;
+    const plan = await getBusinessPlan(businessId);
+    if (!canAccessAnalytics(plan)) {
+      return res.status(403).json({ error: 'Analytics available on Basic plan and above. Upgrade to unlock.' });
+    }
     const { limit = 10, days = 30 } = req.query;
 
     const startDate = new Date();
@@ -121,6 +135,7 @@ router.get('/popular-items/:businessId', async (req, res) => {
       .from('orders')
       .select('id')
       .eq('business_id', businessId)
+      .neq('status', 'cancelled')
       .gte('created_at', startDate.toISOString());
 
     if (ordersError) {
@@ -203,6 +218,10 @@ router.get('/popular-items/:businessId', async (req, res) => {
 router.get('/peak-hours/:businessId', async (req, res) => {
   try {
     const { businessId } = req.params;
+    const plan = await getBusinessPlan(businessId);
+    if (!canAccessAnalytics(plan)) {
+      return res.status(403).json({ error: 'Analytics available on Basic plan and above. Upgrade to unlock.' });
+    }
     const { days = 30 } = req.query;
 
     const startDate = new Date();
@@ -212,6 +231,7 @@ router.get('/peak-hours/:businessId', async (req, res) => {
       .from('orders')
       .select('created_at, total_amount')
       .eq('business_id', businessId)
+      .neq('status', 'cancelled')
       .gte('created_at', startDate.toISOString());
 
     if (error) {
@@ -249,6 +269,10 @@ router.get('/peak-hours/:businessId', async (req, res) => {
 router.get('/profit-margins/:businessId', async (req, res) => {
   try {
     const { businessId } = req.params;
+    const plan = await getBusinessPlan(businessId);
+    if (!canAccessAnalytics(plan)) {
+      return res.status(403).json({ error: 'Analytics available on Basic plan and above. Upgrade to unlock.' });
+    }
     const { days = 30 } = req.query;
 
     const startDate = new Date();
@@ -259,6 +283,7 @@ router.get('/profit-margins/:businessId', async (req, res) => {
       .from('orders')
       .select('id')
       .eq('business_id', businessId)
+      .neq('status', 'cancelled')
       .gte('created_at', startDate.toISOString());
 
     if (ordersError) {

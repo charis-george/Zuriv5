@@ -1,9 +1,60 @@
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
+const path = require('path');
 const { getDb } = require('../database');
+const { getBusinessPlan, canAddMenuPictures } = require('../lib/plans');
 
 const supabase = getDb();
+
+const BUCKET = 'menu-items';
+const MAX_SIZE = 5 * 1024 * 1024; // 5MB
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_SIZE },
+  fileFilter: (_req, file, cb) => {
+    const allowed = /^image\/(jpeg|jpg|png|gif|webp)$/i.test(file.mimetype);
+    if (allowed) cb(null, true);
+    else cb(new Error('Only images (JPEG, PNG, GIF, WebP) are allowed'));
+  }
+});
+
+// Upload menu item image (returns public URL)
+router.post('/upload-image', upload.single('image'), async (req, res) => {
+  try {
+    const businessId = req.body?.businessId;
+    if (!businessId) return res.status(400).json({ error: 'businessId is required' });
+    const plan = await getBusinessPlan(businessId);
+    if (!canAddMenuPictures(plan)) return res.status(403).json({ error: 'Menu pictures are available on Starter plan and above. Upgrade to add images.' });
+    if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'No image file provided' });
+
+    const ext = path.extname(req.file.originalname) || '.jpg';
+    const safeExt = /^\.(jpe?g|png|gif|webp)$/i.test(ext) ? ext : '.jpg';
+    const filePath = `${businessId}/${uuidv4()}${safeExt}`;
+
+    const { error: uploadError } = await supabase.storage.from(BUCKET).upload(filePath, req.file.buffer, {
+      contentType: req.file.mimetype,
+      upsert: false
+    });
+    if (uploadError) {
+      console.error('Supabase storage upload error:', uploadError);
+      if (uploadError.message && uploadError.message.toLowerCase().includes('bucket not found')) {
+        return res.status(500).json({
+          error: `Create a public bucket named "${BUCKET}" in Supabase Dashboard → Storage, then try again.`
+        });
+      }
+      return res.status(500).json({ error: uploadError.message || 'Failed to upload image' });
+    }
+
+    const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(filePath);
+    res.json({ imageUrl: urlData.publicUrl });
+  } catch (err) {
+    if (err.message && err.message.includes('Only images')) return res.status(400).json({ error: err.message });
+    console.error('Upload menu image error:', err);
+    res.status(500).json({ error: 'Failed to upload image' });
+  }
+});
 
 // Get menu for a business
 router.get('/business/:businessId', async (req, res) => {
@@ -144,6 +195,8 @@ router.post('/category', async (req, res) => {
 router.post('/item', async (req, res) => {
   try {
     const { businessId, categoryId, name, description, price, cost, imageUrl, displayOrder } = req.body;
+    const plan = await getBusinessPlan(businessId);
+    const allowImage = canAddMenuPictures(plan);
     const itemId = uuidv4();
 
     const { data, error } = await supabase
@@ -156,7 +209,7 @@ router.post('/item', async (req, res) => {
         description: description || null,
         price,
         cost: cost || 0,
-        image_url: imageUrl || null,
+        image_url: allowImage ? (imageUrl || null) : null,
         available: true,
         display_order: displayOrder || 0
       })
@@ -191,12 +244,16 @@ router.put('/item/:id', async (req, res) => {
     const { id } = req.params;
     const { name, description, price, cost, imageUrl, available, displayOrder, categoryId } = req.body;
 
+    const { data: existing } = await supabase.from('menu_items').select('business_id').eq('id', id).single();
+    const plan = existing ? await getBusinessPlan(existing.business_id) : 'free';
+    const allowImage = canAddMenuPictures(plan);
+
     const updateData = {};
     if (name !== undefined) updateData.name = name;
     if (description !== undefined) updateData.description = description;
     if (price !== undefined) updateData.price = price;
     if (cost !== undefined) updateData.cost = cost;
-    if (imageUrl !== undefined) updateData.image_url = imageUrl;
+    if (imageUrl !== undefined) updateData.image_url = allowImage ? imageUrl : null;
     if (available !== undefined) updateData.available = available;
     if (displayOrder !== undefined) updateData.display_order = displayOrder;
     if (categoryId !== undefined) updateData.category_id = categoryId || null;

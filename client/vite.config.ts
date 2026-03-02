@@ -23,9 +23,16 @@ export default defineConfig({
     sourcemap: false,
     rollupOptions: {
       output: {
-        manualChunks: {
-          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
-          'qr-vendor': ['html5-qrcode'],
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('react') || id.includes('react-dom') || id.includes('react-router-dom')) {
+              return 'react-vendor';
+            }
+            if (id.includes('html5-qrcode')) {
+              return 'qr-vendor';
+            }
+            return 'vendor';
+          }
         },
       },
     },

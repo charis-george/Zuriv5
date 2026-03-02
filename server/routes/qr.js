@@ -5,11 +5,15 @@ const { getDb } = require('../database');
 
 const supabase = getDb();
 
-// Generate QR code for business
+// Generate QR code for business (universal: full URL so phone camera opens menu)
 router.get('/generate/:businessId', async (req, res) => {
   try {
     const { businessId } = req.params;
-    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    let baseUrl = req.query.baseUrl || process.env.FRONTEND_URL || 'http://localhost:5173';
+
+    if (typeof baseUrl !== 'string') baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    baseUrl = baseUrl.replace(/\/$/, ''); // no trailing slash
+    if (!/^https?:\/\//i.test(baseUrl)) baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
 
     const qrUrl = `${baseUrl}/order/${businessId}`;
 
@@ -42,7 +46,7 @@ router.get('/business/:businessId', async (req, res) => {
 
     const { data: business, error } = await supabase
       .from('businesses')
-      .select('id, name, phone, address')
+      .select('id, name, phone, address, logo_url')
       .eq('id', businessId)
       .single();
 
@@ -54,7 +58,8 @@ router.get('/business/:businessId', async (req, res) => {
       id: business.id,
       name: business.name,
       phone: business.phone,
-      address: business.address
+      address: business.address,
+      logoUrl: business.logo_url || null
     });
   } catch (error) {
     console.error('Get business info error:', error);

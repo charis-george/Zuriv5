@@ -30,7 +30,8 @@ This guide will help you set up Supabase (PostgreSQL) for the ZURI application.
 ### API Keys
 - **`anon` key**: Public key (for client-side, if needed)
 - **`service_role` key**: Secret key (for server-side) - **Keep this secret!**
-- The service_role key looks like: `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...`
+- The **service_role** key is a long JWT starting with `eyJhbGciOiJ...` (hundreds of characters). Use this in `SUPABASE_SERVICE_ROLE_KEY`.
+- Do **not** use the anon key or any key that looks like `sb_publishable_...` for the server: Storage uploads and RLS bypass require the real **service_role** secret.
 
 **Copy these values** - you'll need them for your `.env` file.
 
@@ -51,6 +52,22 @@ This guide will help you set up Supabase (PostgreSQL) for the ZURI application.
    - `menu_items`
    - `orders`
    - `order_items`
+
+## Step 4b: Create Storage Bucket (for menu item images)
+
+To allow businesses to upload menu item photos:
+
+1. In the left sidebar, go to **Storage**
+2. Click **"New bucket"**
+3. Name: **`menu-items`** (exactly)
+4. Enable **Public bucket** (so storefront can show images)
+5. Click **Create bucket**
+
+If this bucket is missing, menu image uploads will fail with "Bucket not found"; creating it fixes the issue.
+
+**If uploads fail with "new row violates row-level security policy" (403):** add Storage RLS policies so the backend can upload. In **SQL Editor**, run the contents of `supabase/migrations/006_storage_menu_items_policies.sql`. That adds:
+- INSERT policy for `service_role` on bucket `menu-items`
+- SELECT policy for `public` on bucket `menu-items` (so images are viewable)
 
 ## Step 5: Configure Environment Variables
 
