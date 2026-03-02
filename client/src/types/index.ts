@@ -1,4 +1,8 @@
 // Business Types
+export type PlanId = 'free' | 'starter' | 'growth' | 'pro' | 'zuri_plus' | 'enterprise' | 'basic' | 'advanced'
+
+export type BillingInterval = 'monthly' | 'yearly'
+
 export interface Business {
   id: string
   name: string
@@ -6,7 +10,50 @@ export interface Business {
   phone?: string
   address?: string
   createdAt?: string
+  plan?: PlanId
+  paystackPublicKey?: string | null
+  logoUrl?: string | null
+  bankAccount?: {
+    bankName: string | null
+    accountNumberMasked: string | null
+    accountName: string | null
+  } | null
 }
+
+export const PLAN_LABELS: Record<PlanId, string> = {
+  free: 'Free',
+  starter: 'Starter',
+  growth: 'Growth',
+  pro: 'Pro',
+  zuri_plus: 'Zuri AI',
+  enterprise: 'Enterprise',
+  basic: 'Basic',
+  advanced: 'Advanced'
+}
+
+export const PLAN_PRICES: Record<PlanId, string> = {
+  free: '₦0',
+  starter: '₦7,500',
+  growth: '₦20,000',
+  pro: '₦40,000',
+  zuri_plus: '₦60,000',
+  enterprise: 'Custom',
+  basic: '₦20,000',
+  advanced: '₦40,000'
+}
+
+export const PLAN_PRICES_YEARLY: Record<PlanId, string> = {
+  free: '₦0',
+  starter: '₦81,000',
+  growth: '₦216,000',
+  pro: '₦432,000',
+  zuri_plus: '₦648,000',
+  enterprise: 'Custom',
+  basic: '₦216,000',
+  advanced: '₦432,000'
+}
+
+export const YEARLY_DISCOUNT_PCT = 10
 
 // Menu Types
 export interface MenuItem {
@@ -100,6 +147,12 @@ export interface QRCodeData {
 }
 
 // Form Types
+export interface SavedCard {
+  id: string
+  last4: string
+  card_type: string
+  created_at?: string
+}
 export interface CustomerInfo {
   name: string
   phone: string

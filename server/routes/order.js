@@ -2,11 +2,15 @@ const express = require('express');
 const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../database');
+const { agentLog } = require('../debug-log');
 
 const supabase = getDb();
 
 // Create order
 router.post('/', async (req, res) => {
+  // #region agent log
+  agentLog({ location: 'order.js:POST', message: 'Order POST received', data: { businessId: req.body?.businessId, itemCount: req.body?.items?.length }, hypothesisId: 'H1' });
+  // #endregion
   try {
     const { businessId, customerName, customerPhone, customerEmail, items, estimatedPrepTime } = req.body;
 
@@ -39,6 +43,10 @@ router.post('/', async (req, res) => {
       .select()
       .single();
 
+    // #region agent log
+    agentLog({ location: 'order.js:orderInsert', message: 'Order insert result', data: { orderError: orderError?.message || null, orderId }, hypothesisId: 'H2' });
+    // #endregion
+
     if (orderError) {
       console.error('Create order error:', orderError);
       return res.status(500).json({ error: 'Failed to create order' });
@@ -57,6 +65,10 @@ router.post('/', async (req, res) => {
     const { error: itemsError } = await supabase
       .from('order_items')
       .insert(orderItems);
+
+    // #region agent log
+    agentLog({ location: 'order.js:orderItemsInsert', message: 'Order items insert result', data: { itemsError: itemsError?.message || null }, hypothesisId: 'H2' });
+    // #endregion
 
     if (itemsError) {
       console.error('Create order items error:', itemsError);

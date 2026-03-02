@@ -1,10 +1,22 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
+const multer = require('multer');
+const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../database');
+const { getBusinessPlan, canAddBusinessLogo } = require('../lib/plans');
 
 const supabase = getDb();
+const BUCKET = 'menu-items';
+const logoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ok = /^image\/(jpeg|jpg|png|gif|webp)$/i.test(file.mimetype);
+    cb(ok ? null : new Error('Only images allowed'), ok);
+  }
+});
 
 // Register business
 router.post('/register', async (req, res) => {
@@ -101,7 +113,7 @@ router.get('/:id', async (req, res) => {
 
     const { data: business, error } = await supabase
       .from('businesses')
-      .select('id, name, email, phone, address, created_at')
+      .select('id, name, email, phone, address, created_at, plan, paystack_public_key, bank_code, bank_name, account_number, account_name, logo_url')
       .eq('id', id)
       .single();
 
@@ -109,17 +121,104 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Business not found' });
     }
 
-    res.json({
+    const paystackPublicKey = process.env.PAYSTACK_PUBLIC_KEY || business.paystack_public_key || null;
+    const payload = {
       id: business.id,
       name: business.name,
       email: business.email,
       phone: business.phone,
       address: business.address,
-      createdAt: business.created_at
-    });
+      createdAt: business.created_at,
+      plan: business.plan || 'free',
+      paystackPublicKey,
+      logoUrl: business.logo_url || null
+    };
+    if (business.bank_name || business.account_name) {
+      payload.bankAccount = {
+        bankName: business.bank_name || null,
+        accountNumberMasked: business.account_number ? `****${business.account_number.slice(-4)}` : null,
+        accountName: business.account_name || null
+      };
+    }
+    res.json(payload);
   } catch (error) {
     console.error('Get business error:', error);
     res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// Update business (bank details, logo; no auth for MVP)
+router.patch('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { bank_code, bank_name, account_number, account_name, logo_url } = req.body;
+    const updates = {};
+    if (bank_code !== undefined) updates.bank_code = bank_code || null;
+    if (bank_name !== undefined) updates.bank_name = bank_name || null;
+    if (account_number !== undefined) updates.account_number = account_number ? String(account_number).trim() : null;
+    if (account_name !== undefined) updates.account_name = account_name || null;
+    // Validate account number format if provided (8–16 digits)
+    if (updates.account_number) {
+      const digits = updates.account_number.replace(/\D/g, '');
+      if (digits.length < 8 || digits.length > 16) {
+        return res.status(400).json({ error: 'Account number must be 8–16 digits' });
+      }
+      updates.account_number = digits;
+    }
+    if (logo_url !== undefined) {
+      const plan = await getBusinessPlan(id);
+      if (!canAddBusinessLogo(plan)) return res.status(403).json({ error: 'Business logo is available on Starter plan and above.' });
+      updates.logo_url = logo_url || null;
+    }
+    if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No fields to update' });
+
+    const { data, error } = await supabase.from('businesses').update(updates).eq('id', id).select('id, bank_name, bank_code, account_number, account_name, logo_url').single();
+    if (error) return res.status(500).json({ error: 'Update failed' });
+    res.json({
+      id: data.id,
+      bankAccount: data.account_number ? {
+        bankName: data.bank_name,
+        accountNumberMasked: `****${String(data.account_number).slice(-4)}`,
+        accountName: data.account_name
+      } : null,
+      logoUrl: data.logo_url || null
+    });
+  } catch (error) {
+    console.error('Update business error:', error);
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// Upload business logo (Starter+)
+router.post('/:id/upload-logo', logoUpload.single('logo'), async (req, res) => {
+  try {
+    const { id: businessId } = req.params;
+    const plan = await getBusinessPlan(businessId);
+    if (!canAddBusinessLogo(plan)) return res.status(403).json({ error: 'Business logo is available on Starter plan and above.' });
+    if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'No image file provided' });
+
+    const ext = path.extname(req.file.originalname) || '.jpg';
+    const safeExt = /^\.(jpe?g|png|gif|webp)$/i.test(ext) ? ext : '.jpg';
+    const filePath = `business-logos/${businessId}/${uuidv4()}${safeExt}`;
+
+    const { error: uploadError } = await supabase.storage.from(BUCKET).upload(filePath, req.file.buffer, {
+      contentType: req.file.mimetype,
+      upsert: false
+    });
+    if (uploadError) {
+      console.error('Logo upload error:', uploadError);
+      return res.status(500).json({ error: uploadError.message || 'Failed to upload logo' });
+    }
+
+    const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(filePath);
+    const { error: updateError } = await supabase.from('businesses').update({ logo_url: urlData.publicUrl }).eq('id', businessId);
+    if (updateError) return res.status(500).json({ error: 'Failed to save logo' });
+
+    res.json({ logoUrl: urlData.publicUrl });
+  } catch (err) {
+    if (err.message && err.message.includes('Only images')) return res.status(400).json({ error: err.message });
+    console.error('Upload logo error:', err);
+    res.status(500).json({ error: 'Failed to upload logo' });
   }
 });
 

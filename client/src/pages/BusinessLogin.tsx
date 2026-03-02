@@ -20,7 +20,6 @@ function BusinessLogin(): JSX.Element {
     e.preventDefault()
     setError('')
     setLoading(true)
-
     try {
       if (isLogin) {
         const response = await axios.post<Business>('/api/business/login', {
@@ -29,10 +28,16 @@ function BusinessLogin(): JSX.Element {
         })
         navigate(`/business/dashboard/${response.data.id}`)
       } else {
-        await axios.post<Business>('/api/business/register', formData)
+        await axios.post<Business>('/api/business/register', {
+          name: formData.name,
+          email: formData.email,
+          password: formData.password,
+          phone: formData.phone || undefined,
+          address: formData.address || undefined
+        })
         alert('Registration successful! Please login.')
         setIsLogin(true)
-        setFormData({ ...formData, name: '', phone: '', address: '' })
+        setFormData({ name: '', email: '', password: '', phone: '', address: '' })
       }
     } catch (err) {
       if (axios.isAxiosError(err)) {
@@ -46,101 +51,131 @@ function BusinessLogin(): JSX.Element {
   }
 
   return (
-    <div className="min-h-screen bg-zuri-light flex items-center justify-center py-12 px-4">
-      <div className="max-w-md w-full">
-        <div className="bg-white rounded-2xl shadow-xl p-8">
-          <div className="text-center mb-8">
-            <div className="flex items-center justify-center space-x-3 mb-4">
-              <div className="w-12 h-12 bg-zuri-yellow rounded-lg flex items-center justify-center">
-                <svg className="w-7 h-7 text-zuri-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                </svg>
-              </div>
-              <span className="text-3xl font-bold text-zuri-black" style={{ fontFamily: 'brush script, cursive' }}>
-                ZURI
-              </span>
+    <div className="min-h-screen flex items-center justify-center py-8 px-4 bg-black">
+      <div className="w-full max-w-4xl">
+        <div className="bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col md:flex-row min-h-[480px]">
+          {/* Left panel – dark with motivational message and subtle orange shapes */}
+          <div className="md:w-[42%] bg-gradient-to-b from-zuri-black to-gray-900 relative overflow-hidden rounded-t-2xl md:rounded-tr-none md:rounded-l-2xl flex items-center p-6 md:p-8">
+            <div className="absolute inset-0 opacity-90">
+              <div className="absolute bottom-0 left-0 right-0 h-3/4 bg-gradient-to-t from-zuri-orange/20 via-transparent to-transparent" />
+              <div className="absolute inset-0 bg-[length:32px_100%] bg-[linear-gradient(90deg,rgba(249,115,22,0.04)_1px,transparent_1px)]" />
             </div>
-            <h1 className="text-2xl font-bold text-zuri-black">
-              {isLogin ? 'Business Login' : 'Business Registration'}
+            {/* Subtle vertical gradient bars */}
+            <div className="absolute bottom-0 left-0 right-0 h-2/3 flex items-end justify-around gap-2 px-6 pb-8 opacity-60">
+              {[40, 56, 72, 48, 64, 52, 36].map((h, i) => (
+                <div
+                  key={i}
+                  className="w-2 rounded-full bg-gradient-to-t from-zuri-orange/80 to-transparent flex-shrink-0"
+                  style={{ height: `${h}%` }}
+                />
+              ))}
+            </div>
+            <p className="relative text-white text-lg md:text-xl font-medium leading-tight max-w-[240px]">
+              Turn your ideas into a successful business.
+            </p>
+          </div>
+
+          {/* Right panel – form */}
+          <div className="md:w-[58%] bg-white p-6 md:p-8 flex flex-col justify-center rounded-b-2xl md:rounded-bl-none md:rounded-r-2xl">
+            <img src="/ZURI.png" alt="ZURI" className="h-10 w-auto object-contain mb-4" />
+            <h1 className="text-xl md:text-2xl font-bold text-zuri-black">
+              {isLogin ? 'Log in' : 'Get started'}
             </h1>
-          </div>
+            <p className="text-gray-500 text-xs mt-0.5 mb-4">
+              {isLogin ? 'Welcome back to ZURI' : "Welcome to ZURI — Let's get started."}
+            </p>
 
-          {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-4">
-              {error}
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {!isLogin && (
-              <input
-                type="text"
-                placeholder="Business Name *"
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                required
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-zuri-yellow"
-              />
+            {error && (
+              <div className="bg-red-50 border border-red-100 text-red-700 px-3 py-2 rounded-lg mb-3 text-xs">
+                {error}
+              </div>
             )}
-            <input
-              type="email"
-              placeholder="Email *"
-              value={formData.email}
-              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-              required
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-zuri-yellow"
-            />
-            <input
-              type="password"
-              placeholder="Password *"
-              value={formData.password}
-              onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-              required
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-zuri-yellow"
-            />
-            {!isLogin && (
-              <>
-                <input
-                  type="tel"
-                  placeholder="Phone Number"
-                  value={formData.phone}
-                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-zuri-yellow"
-                />
-                <input
-                  type="text"
-                  placeholder="Address"
-                  value={formData.address}
-                  onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-zuri-yellow"
-                />
-              </>
-            )}
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full bg-zuri-black text-white py-3 rounded-lg font-semibold hover:bg-gray-800 transition disabled:opacity-50"
-            >
-              {loading ? 'Processing...' : (isLogin ? 'Login' : 'Register')}
-            </button>
-          </form>
 
-          <div className="mt-6 text-center">
-            <button
-              onClick={() => {
-                setIsLogin(!isLogin)
-                setError('')
-                setFormData({ name: '', email: '', password: '', phone: '', address: '' })
-              }}
-              className="text-zuri-black hover:text-zuri-yellow transition"
-            >
-              {isLogin ? "Don't have an account? Register" : 'Already have an account? Login'}
-            </button>
-          </div>
+            <form onSubmit={handleSubmit} className="space-y-3">
+              {!isLogin && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-0.5">Business name</label>
+                  <input
+                    type="text"
+                    placeholder="Your business name"
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    required
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50 focus:border-zuri-orange placeholder:text-gray-400 text-zuri-black"
+                  />
+                </div>
+              )}
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-0.5">
+                  {isLogin ? 'Email' : 'Your email'}
+                </label>
+                <input
+                  type="email"
+                  placeholder="hi@yourbusiness.com"
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  required
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50 focus:border-zuri-orange placeholder:text-gray-400 text-zuri-black"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-0.5">
+                  {isLogin ? 'Password' : 'Create new password'}
+                </label>
+                <input
+                  type="password"
+                  placeholder="••••••••"
+                  value={formData.password}
+                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                  required
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50 focus:border-zuri-orange placeholder:text-gray-400 text-zuri-black"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full bg-zuri-orange text-white py-2 rounded-full font-semibold text-sm hover:bg-zuri-orange-dark transition disabled:opacity-50 mt-1"
+              >
+                {loading ? 'Processing…' : (isLogin ? 'Log in' : 'Create new account')}
+              </button>
+            </form>
 
-          <div className="mt-6 text-center">
-            <a href="/" className="text-gray-600 hover:text-zuri-yellow transition">
-              ← Back to Home
+            <p className="mt-4 text-center text-xs text-gray-500">
+              {isLogin ? (
+                <>
+                  No account?{' '}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsLogin(false)
+                      setError('')
+                      setFormData({ name: '', email: '', password: '', phone: '', address: '' })
+                    }}
+                    className="font-semibold text-zuri-orange hover:underline"
+                  >
+                    Register
+                  </button>
+                </>
+              ) : (
+                <>
+                  Already have an account?{' '}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsLogin(true)
+                      setError('')
+                      setFormData({ name: '', email: '', password: '', phone: '', address: '' })
+                    }}
+                    className="font-semibold text-zuri-orange hover:underline"
+                  >
+                    Log in
+                  </button>
+                </>
+              )}
+            </p>
+
+            <a href="/" className="mt-4 block text-center text-xs text-gray-400 hover:text-zuri-orange transition">
+              ← Back to home
             </a>
           </div>
         </div>
