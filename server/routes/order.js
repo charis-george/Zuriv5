@@ -3,6 +3,8 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../database');
 const { agentLog } = require('../debug-log');
+const { requireBusinessAuth } = require('../middleware/auth');
+const { getOrCreateNetworkCustomer, updateCustomerStats, getStatsByEmail, getStatsForCustomerIds } = require('../lib/zuri-network');
 
 const supabase = getDb();
 
@@ -18,28 +20,75 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Business ID and items are required' });
     }
 
-    const orderId = uuidv4();
+    const menuItemIds = [...new Set(items.map(item => item.menuItemId).filter(Boolean))];
+    if (menuItemIds.length === 0) {
+      return res.status(400).json({ error: 'Valid menu item IDs are required' });
+    }
+
+    const { data: menuItems, error: menuError } = await supabase
+      .from('menu_items')
+      .select('id, name, price')
+      .eq('business_id', businessId)
+      .in('id', menuItemIds);
+
+    if (menuError) {
+      console.error('Menu fetch error:', menuError);
+      return res.status(500).json({ error: 'Failed to load menu' });
+    }
+
+    const menuMap = (menuItems || []).reduce((acc, m) => ({ ...acc, [m.id]: m }), {});
+    const missingIds = menuItemIds.filter(id => !menuMap[id]);
+    if (missingIds.length > 0) {
+      return res.status(400).json({ error: 'One or more items are not on the menu or do not belong to this business' });
+    }
+
     let totalAmount = 0;
+    const orderItems = [];
+    for (const item of items) {
+      const menuItem = menuMap[item.menuItemId];
+      if (!menuItem) continue;
+      const qty = Math.min(99, Math.max(1, parseInt(item.quantity, 10) || 1));
+      const price = Number(menuItem.price) || 0;
+      totalAmount += price * qty;
+      orderItems.push({
+        id: uuidv4(),
+        order_id: null,
+        menu_item_id: item.menuItemId,
+        quantity: qty,
+        price,
+        special_notes: typeof item.specialNotes === 'string' ? item.specialNotes.slice(0, 500) : null
+      });
+    }
 
-    // Calculate total
-    items.forEach(item => {
-      totalAmount += item.price * item.quantity;
-    });
+    if (orderItems.length === 0 || totalAmount <= 0) {
+      return res.status(400).json({ error: 'Order must have at least one item with a valid price' });
+    }
 
-    // Create order
+    const orderId = uuidv4();
+    orderItems.forEach(oi => { oi.order_id = orderId; });
+
+    let zuriCustomerId = null;
+    if (customerEmail && String(customerEmail).trim()) {
+      const resolved = await getOrCreateNetworkCustomer(customerEmail);
+      if (resolved.id) zuriCustomerId = resolved.id;
+    }
+
+    const orderPayload = {
+      id: orderId,
+      business_id: businessId,
+      customer_name: customerName || null,
+      customer_phone: customerPhone || null,
+      customer_email: customerEmail || null,
+      status: 'pending',
+      total_amount: totalAmount,
+      estimated_prep_time: estimatedPrepTime || 15,
+      payment_status: 'pending'
+    };
+    if (zuriCustomerId) orderPayload.zuri_customer_id = zuriCustomerId;
+
     const { data: order, error: orderError } = await supabase
       .from('orders')
-      .insert({
-        id: orderId,
-        business_id: businessId,
-        customer_name: customerName || null,
-        customer_phone: customerPhone || null,
-        customer_email: customerEmail || null,
-        status: 'pending',
-        total_amount: totalAmount,
-        estimated_prep_time: estimatedPrepTime || 15,
-        payment_status: 'pending'
-      })
+      .insert(orderPayload)
       .select()
       .single();
 
@@ -51,16 +100,6 @@ router.post('/', async (req, res) => {
       console.error('Create order error:', orderError);
       return res.status(500).json({ error: 'Failed to create order' });
     }
-
-    // Create order items
-    const orderItems = items.map(item => ({
-      id: uuidv4(),
-      order_id: orderId,
-      menu_item_id: item.menuItemId,
-      quantity: item.quantity,
-      price: item.price,
-      special_notes: item.specialNotes || null
-    }));
 
     const { error: itemsError } = await supabase
       .from('order_items')
@@ -75,30 +114,33 @@ router.post('/', async (req, res) => {
       return res.status(500).json({ error: 'Failed to create order items' });
     }
 
-    // Get menu item names for response
-    const menuItemIds = items.map(item => item.menuItemId);
-    const { data: menuItems } = await supabase
-      .from('menu_items')
-      .select('id, name')
-      .in('id', menuItemIds);
+    if (zuriCustomerId) {
+      await updateCustomerStats(zuriCustomerId);
+      await supabase
+        .from('zuri_network_customers')
+        .update({ last_seen_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+        .eq('id', zuriCustomerId);
+    }
 
-    const menuItemMap = {};
-    menuItems?.forEach(item => {
-      menuItemMap[item.id] = item.name;
-    });
-
-    const orderItemsWithNames = items.map(item => ({
-      menuItemId: item.menuItemId,
-      menuItemName: menuItemMap[item.menuItemId] || 'Unknown Item',
-      quantity: item.quantity,
-      price: item.price,
-      specialNotes: item.specialNotes
+    const orderItemsWithNames = orderItems.map(oi => ({
+      menuItemId: oi.menu_item_id,
+      menuItemName: (menuMap[oi.menu_item_id] && menuMap[oi.menu_item_id].name) || 'Unknown Item',
+      quantity: oi.quantity,
+      price: oi.price,
+      specialNotes: oi.special_notes
     }));
 
     const orderResponse = {
       ...order,
       items: orderItemsWithNames
     };
+    if (zuriCustomerId) {
+      const stats = await getStatsByEmail(customerEmail);
+      if (stats) {
+        orderResponse.zuriCustomerStats = stats;
+        orderResponse.returningZuriCustomer = true;
+      }
+    }
 
     // Emit real-time notification to business
     const io = req.app.get('io');
@@ -113,10 +155,13 @@ router.post('/', async (req, res) => {
   }
 });
 
-// Get orders for a business
-router.get('/business/:businessId', async (req, res) => {
+// Get orders for a business — requires business auth
+router.get('/business/:businessId', requireBusinessAuth, async (req, res) => {
   try {
     const { businessId } = req.params;
+    if (businessId !== req.businessId) {
+      return res.status(403).json({ error: 'You can only view your own business orders' });
+    }
     const { status, limit = 50 } = req.query;
 
     let query = supabase
@@ -136,6 +181,9 @@ router.get('/business/:businessId', async (req, res) => {
       console.error('Get orders error:', error);
       return res.status(500).json({ error: 'Database error' });
     }
+
+    const customerIds = [...new Set((orders || []).map(o => o.zuri_customer_id).filter(Boolean))];
+    const statsMap = await getStatsForCustomerIds(customerIds);
 
     // Get order items for each order
     const ordersWithItems = await Promise.all(
@@ -169,10 +217,19 @@ router.get('/business/:businessId', async (req, res) => {
           specialNotes: item.special_notes
         }));
 
-        return {
-          ...order,
-          items
-        };
+        const out = { ...order, items };
+        if (order.zuri_customer_id) {
+          const stats = statsMap.get(order.zuri_customer_id);
+          if (stats && stats.totalOrders >= 1) {
+            out.returningZuriCustomer = true;
+            out.zuriCustomerStats = {
+              avgOrderValue: stats.avgOrderValue,
+              totalOrders: stats.totalOrders,
+              businessCount: stats.businessCount
+            };
+          }
+        }
+        return out;
       })
     );
 
@@ -228,18 +285,28 @@ router.get('/:id', async (req, res) => {
       specialNotes: item.special_notes
     }));
 
-    res.json({
-      ...order,
-      items
-    });
+    const result = { ...order, items };
+    if (order.zuri_customer_id) {
+      const statsMap = await getStatsForCustomerIds([order.zuri_customer_id]);
+      const stats = statsMap.get(order.zuri_customer_id);
+      if (stats && stats.totalOrders >= 1) {
+        result.returningZuriCustomer = true;
+        result.zuriCustomerStats = {
+          avgOrderValue: stats.avgOrderValue,
+          totalOrders: stats.totalOrders,
+          businessCount: stats.businessCount
+        };
+      }
+    }
+    res.json(result);
   } catch (error) {
     console.error('Get order error:', error);
     res.status(500).json({ error: 'Database error' });
   }
 });
 
-// Update order status
-router.patch('/:id/status', async (req, res) => {
+// Update order status — requires business auth
+router.patch('/:id/status', requireBusinessAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
@@ -257,12 +324,16 @@ router.patch('/:id/status', async (req, res) => {
       .from('orders')
       .update(updateData)
       .eq('id', id)
+      .eq('business_id', req.businessId)
       .select()
       .single();
 
     if (error) {
       console.error('Update order status error:', error);
       return res.status(500).json({ error: 'Failed to update order' });
+    }
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
     }
 
     // Emit real-time update

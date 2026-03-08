@@ -5,6 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const { getDb } = require('../database');
 const { getBusinessPlan, canAddMenuPictures } = require('../lib/plans');
+const { requireBusinessAuth } = require('../middleware/auth');
 
 const supabase = getDb();
 
@@ -20,11 +21,13 @@ const upload = multer({
   }
 });
 
-// Upload menu item image (returns public URL)
-router.post('/upload-image', upload.single('image'), async (req, res) => {
+// Upload menu item image (returns public URL) — requires business auth
+router.post('/upload-image', requireBusinessAuth, upload.single('image'), async (req, res) => {
   try {
     const businessId = req.body?.businessId;
-    if (!businessId) return res.status(400).json({ error: 'businessId is required' });
+    if (!businessId || businessId !== req.businessId) {
+      return res.status(400).json({ error: 'businessId is required and must match your business' });
+    }
     const plan = await getBusinessPlan(businessId);
     if (!canAddMenuPictures(plan)) return res.status(403).json({ error: 'Menu pictures are available on Starter plan and above. Upgrade to add images.' });
     if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'No image file provided' });
@@ -157,10 +160,13 @@ router.get('/categories/:businessId', async (req, res) => {
   }
 });
 
-// Create category
-router.post('/category', async (req, res) => {
+// Create category — requires business auth
+router.post('/category', requireBusinessAuth, async (req, res) => {
   try {
     const { businessId, name, displayOrder } = req.body;
+    if (!businessId || businessId !== req.businessId) {
+      return res.status(403).json({ error: 'You can only create categories for your own business' });
+    }
     const categoryId = uuidv4();
 
     const { data, error } = await supabase
@@ -191,10 +197,13 @@ router.post('/category', async (req, res) => {
   }
 });
 
-// Create menu item
-router.post('/item', async (req, res) => {
+// Create menu item — requires business auth
+router.post('/item', requireBusinessAuth, async (req, res) => {
   try {
     const { businessId, categoryId, name, description, price, cost, imageUrl, displayOrder } = req.body;
+    if (!businessId || businessId !== req.businessId) {
+      return res.status(403).json({ error: 'You can only create menu items for your own business' });
+    }
     const plan = await getBusinessPlan(businessId);
     const allowImage = canAddMenuPictures(plan);
     const itemId = uuidv4();
@@ -238,14 +247,17 @@ router.post('/item', async (req, res) => {
   }
 });
 
-// Update menu item
-router.put('/item/:id', async (req, res) => {
+// Update menu item — requires business auth
+router.put('/item/:id', requireBusinessAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { name, description, price, cost, imageUrl, available, displayOrder, categoryId } = req.body;
 
     const { data: existing } = await supabase.from('menu_items').select('business_id').eq('id', id).single();
-    const plan = existing ? await getBusinessPlan(existing.business_id) : 'free';
+    if (!existing || existing.business_id !== req.businessId) {
+      return res.status(404).json({ error: 'Menu item not found' });
+    }
+    const plan = await getBusinessPlan(existing.business_id);
     const allowImage = canAddMenuPictures(plan);
 
     const updateData = {};
@@ -279,10 +291,15 @@ router.put('/item/:id', async (req, res) => {
   }
 });
 
-// Delete menu item
-router.delete('/item/:id', async (req, res) => {
+// Delete menu item — requires business auth
+router.delete('/item/:id', requireBusinessAuth, async (req, res) => {
   try {
     const { id } = req.params;
+
+    const { data: existing } = await supabase.from('menu_items').select('business_id').eq('id', id).single();
+    if (!existing || existing.business_id !== req.businessId) {
+      return res.status(404).json({ error: 'Menu item not found' });
+    }
 
     const { error } = await supabase
       .from('menu_items')

@@ -209,6 +209,14 @@ function OrderPage(): JSX.Element {
             <p className="text-gray-500 text-sm text-center mb-8">We’ll notify you when it’s ready.</p>
 
             <div className="space-y-4 mb-8">
+              {orderDetails.returningZuriCustomer && orderDetails.zuriCustomerStats && (
+                <div className="mb-6 p-3 rounded-xl bg-zuri-orange/10 border border-zuri-orange/20">
+                  <p className="text-sm font-medium text-zuri-black">
+                    Returning Zuri customer – average spend ₦{orderDetails.zuriCustomerStats.avgOrderValue.toFixed(0)}
+                  </p>
+                  <p className="text-xs text-gray-600 mt-0.5">Save your card below for one-tap payment next time.</p>
+                </div>
+              )}
               <div className="flex justify-between text-sm">
                 <span className="text-gray-500">Order ID</span>
                 <span className="font-semibold text-zuri-black">{orderIdShort}</span>

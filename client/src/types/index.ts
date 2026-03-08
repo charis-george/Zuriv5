@@ -53,6 +53,18 @@ export const PLAN_PRICES_YEARLY: Record<PlanId, string> = {
   advanced: '₦432,000'
 }
 
+/** When billing yearly, show this monthly equivalent on pricing cards (total/12). Full total shown at checkout. */
+export const PLAN_PRICES_YEARLY_AS_MONTHLY: Record<PlanId, string> = {
+  free: '₦0',
+  starter: '₦6,750',
+  growth: '₦18,000',
+  pro: '₦36,000',
+  zuri_plus: '₦54,000',
+  enterprise: 'Custom',
+  basic: '₦18,000',
+  advanced: '₦36,000'
+}
+
 export const YEARLY_DISCOUNT_PCT = 10
 
 // Menu Types
@@ -94,7 +106,15 @@ export interface Order {
   estimatedPrepTime: number
   createdAt: string
   completedAt?: string
+  payment_status?: string
   items?: OrderItem[]
+  /** Zuri Network: returning customer across Zuri businesses */
+  returningZuriCustomer?: boolean
+  zuriCustomerStats?: {
+    avgOrderValue: number
+    totalOrders: number
+    businessCount: number
+  }
 }
 
 // Analytics Types
@@ -137,6 +157,36 @@ export interface ProfitMargin {
   totalCost: number
   profit: number
   marginPercentage: number
+}
+
+export interface CustomerIntelligence {
+  uniqueCustomers: number
+  repeatCustomers: number
+  repeatRatePct: number
+  totalOrders: number
+  totalRevenue: number
+  avgSpendPerOrder: number
+  ordersPerCustomer: number
+  returnWithin10DaysPct: number
+}
+
+/** Business Graph (Phase 3): anonymous platform market insights – Pro+ only */
+export interface MarketInsights {
+  platform: {
+    totalOrders: number
+    totalRevenue: number
+    avgOrderValue: number
+    orderCountTrendPct: number
+    peakHours: { hour: number; orderCount: number }[]
+    topItemNames: { name: string; orderCount: number }[]
+    periodDays: number
+  }
+  yourBusiness?: {
+    totalOrders: number
+    totalRevenue: number
+    avgOrderValue: number
+  }
+  insights: string[]
 }
 
 // QR Code Types

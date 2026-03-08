@@ -38,6 +38,7 @@ async function getAIContext(businessId, plan) {
   let popularItems = [];
   let peakHours = [];
   let profitMargins = [];
+  let customerIntelligence = null;
 
   if (hasAnalytics) {
     const now = new Date();
@@ -129,6 +130,54 @@ async function getAIContext(businessId, plan) {
         .sort((a, b) => b.profit - a.profit)
         .slice(0, 10);
     }
+
+    // Customer intelligence (by customer_email): repeat rate, avg spend, visit frequency
+    const { data: ordersForCustomers } = await supabase
+      .from('orders')
+      .select('id, customer_email, total_amount, created_at')
+      .eq('business_id', businessId)
+      .neq('status', 'cancelled')
+      .gte('created_at', monthStart.toISOString());
+    const ordersWithEmail = (ordersForCustomers || []).filter(o => o.customer_email && String(o.customer_email).trim());
+    if (ordersWithEmail.length > 0) {
+      const byEmail = {};
+      ordersWithEmail.forEach(o => {
+        const e = String(o.customer_email).trim().toLowerCase();
+        if (!byEmail[e]) byEmail[e] = { orders: [], totalSpend: 0 };
+        byEmail[e].orders.push(new Date(o.created_at));
+        byEmail[e].totalSpend += Number(o.total_amount) || 0;
+      });
+      const customers = Object.values(byEmail);
+      const uniqueCustomers = customers.length;
+      const repeatCustomers = customers.filter(c => c.orders.length >= 2).length;
+      const totalOrdersCI = ordersWithEmail.length;
+      const totalRevenueCI = ordersWithEmail.reduce((s, o) => s + (Number(o.total_amount) || 0), 0);
+      const avgSpend = uniqueCustomers > 0 ? totalRevenueCI / totalOrdersCI : 0;
+      const ordersPerCustomer = uniqueCustomers > 0 ? totalOrdersCI / uniqueCustomers : 0;
+      const repeatRatePct = uniqueCustomers > 0 ? (repeatCustomers / uniqueCustomers) * 100 : 0;
+      const tenDaysMs = 10 * 24 * 60 * 60 * 1000;
+      let returnWithin10Days = 0;
+      customers.forEach(c => {
+        const sorted = c.orders.sort((a, b) => a - b);
+        for (let i = 1; i < sorted.length; i++) {
+          if (sorted[i] - sorted[i - 1] <= tenDaysMs) {
+            returnWithin10Days++;
+            break;
+          }
+        }
+      });
+      const returnWithin10DaysPct = uniqueCustomers > 0 ? (returnWithin10Days / uniqueCustomers) * 100 : 0;
+      customerIntelligence = {
+        uniqueCustomers,
+        repeatCustomers,
+        repeatRatePct,
+        totalOrders: totalOrdersCI,
+        totalRevenue: totalRevenueCI,
+        avgSpendPerOrder: avgSpend,
+        ordersPerCustomer,
+        returnWithin10DaysPct
+      };
+    }
   }
 
   return {
@@ -139,6 +188,7 @@ async function getAIContext(businessId, plan) {
     popularItems,
     peakHours,
     profitMargins,
+    customerIntelligence,
     hasAnalytics
   };
 }
@@ -156,6 +206,9 @@ function formatContextForPrompt(ctx) {
     parts.push('', 'Popular items (last 30 days):', JSON.stringify(ctx.popularItems, null, 2));
     parts.push('', 'Peak hours (order count by hour, last 30 days):', JSON.stringify(ctx.peakHours, null, 2));
     parts.push('', 'Profit margins by item (last 30 days):', JSON.stringify(ctx.profitMargins, null, 2));
+    if (ctx.customerIntelligence) {
+      parts.push('', 'Customer intelligence (last 30 days, by customer email):', JSON.stringify(ctx.customerIntelligence, null, 2));
+    }
   } else {
     parts.push('', '(No sales/analytics data available for this business.)');
   }

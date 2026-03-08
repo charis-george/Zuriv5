@@ -5,6 +5,7 @@ import axios from 'axios'
 function PaymentDone(): JSX.Element {
   const [searchParams] = useSearchParams()
   const reference = searchParams.get('reference')
+  const tap = searchParams.get('tap') === '1'
   const [status, setStatus] = useState<'loading' | 'success' | 'failed'>('loading')
   const [message, setMessage] = useState<string>('')
 
@@ -51,10 +52,10 @@ function PaymentDone(): JSX.Element {
             </svg>
           </div>
           <h1 className="text-xl font-bold text-zuri-black text-center mb-2">
-            Your payment was successful
+            {tap ? 'Your Zuri Tap payment was successful' : 'Your payment was successful'}
           </h1>
           <p className="text-gray-500 text-sm text-center mb-8">
-            Your order has been paid. Thank you.
+            {tap ? 'Your card has been saved for faster Zuri Tap payments next time.' : 'Your order has been paid. Thank you.'}
           </p>
           <div className="space-y-3 mb-8">
             <div className="flex justify-between text-sm">
@@ -63,10 +64,10 @@ function PaymentDone(): JSX.Element {
             </div>
           </div>
           <Link
-            to="/"
+            to={tap ? '/tap' : '/'}
             className="block w-full bg-zuri-orange text-white py-2.5 rounded-xl font-semibold text-sm text-center hover:bg-zuri-orange-dark transition"
           >
-            Back to home
+            {tap ? 'Back to Zuri Tap' : 'Back to home'}
           </Link>
         </div>
       </div>
@@ -84,10 +85,10 @@ function PaymentDone(): JSX.Element {
         <h1 className="text-xl font-bold text-zuri-black text-center mb-2">Payment failed</h1>
         <p className="text-gray-500 text-sm text-center mb-8">{message}</p>
         <Link
-          to="/"
+          to={tap ? '/tap' : '/'}
           className="block w-full bg-zuri-black text-white py-2.5 rounded-xl font-semibold text-sm text-center hover:bg-gray-800 transition"
         >
-          Back to home
+          {tap ? 'Back to Zuri Tap' : 'Back to home'}
         </Link>
       </div>
     </div>

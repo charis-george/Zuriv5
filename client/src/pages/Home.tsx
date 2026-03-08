@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { useState, FormEvent } from 'react'
-import { PLAN_PRICES, PLAN_PRICES_YEARLY, YEARLY_DISCOUNT_PCT, type BillingInterval } from '../types'
+import { PLAN_PRICES, PLAN_PRICES_YEARLY_AS_MONTHLY, YEARLY_DISCOUNT_PCT, type BillingInterval } from '../types'
 
 const CONTACT_EMAIL = 'info@zuriqo.com'
 
@@ -70,6 +70,9 @@ function Home(): JSX.Element {
               <Link to="/scan" className="text-sm font-medium text-gray-600 hover:text-zuri-orange transition-colors">
                 How it works
               </Link>
+              <Link to="/zuri-tap" className="text-sm font-medium text-gray-600 hover:text-zuri-orange transition-colors">
+                Zuri Tap
+              </Link>
               <Link to="/business/login" className="text-sm font-medium text-gray-600 hover:text-zuri-orange transition-colors">
                 For Businesses
               </Link>
@@ -110,12 +113,12 @@ function Home(): JSX.Element {
               Open a free account in minutes. Let guests scan, order, and pay from their phone—you get paid straight to your bank.
             </p>
             <div className="flex flex-wrap justify-center gap-3">
-              <button
-                onClick={() => openBetaForm('beta')}
+              <Link
+                to="/business/login"
                 className="bg-zuri-orange text-white font-semibold text-sm rounded-full px-5 py-2 hover:bg-zuri-orange-dark transition-all shadow-lg shadow-orange-200/50 hover:shadow-orange-300/50"
               >
                 Get started
-              </button>
+              </Link>
               <a
                 href="#pricing"
                 className="inline-flex items-center gap-1.5 font-semibold text-sm rounded-full px-5 py-2 bg-white text-zuri-black border-2 border-zuri-orange hover:bg-zuri-orange hover:text-white transition-all"
@@ -245,6 +248,12 @@ function Home(): JSX.Element {
               </a>
             </div>
           </div>
+          <div className="mt-6 bg-gradient-to-r from-zuri-orange/10 to-zuri-yellow/10 rounded-2xl p-6 md:p-8 border-2 border-orange-100">
+            <h3 className="text-lg font-bold text-zuri-black mb-2">No POS. No fintech devices. No physical menus.</h3>
+            <p className="text-gray-700 text-sm">
+              We've solved all that. One QR code gives you a digital menu, orders, and payments. Your guests use their phones—you get paid to your bank. No extra hardware, no printed menus to reorder.
+            </p>
+          </div>
         </div>
       </section>
 
@@ -373,6 +382,10 @@ function Home(): JSX.Element {
                   <span className="mr-2">✗</span>
                   No menu images
                 </li>
+                <li className="flex items-start text-gray-400">
+                  <span className="mr-2">✗</span>
+                  No Zuri Tap
+                </li>
               </ul>
               <Link to="/business/login" className="mt-6 flex justify-center">
                 <span className="bg-gray-100 text-zuri-black py-2.5 rounded-full font-semibold text-sm hover:bg-gray-200 transition px-6 inline-block">Get Started</span>
@@ -385,9 +398,9 @@ function Home(): JSX.Element {
                 <span className="inline-block w-3 h-3 rounded-full bg-green-500 mb-2" aria-hidden />
                 <h3 className="text-xl font-bold text-zuri-black">Starter</h3>
                 <p className="text-2xl font-bold text-zuri-black mt-2">
-                  {billingInterval === 'monthly' ? PLAN_PRICES.starter : PLAN_PRICES_YEARLY.starter}
+                  {billingInterval === 'monthly' ? PLAN_PRICES.starter : PLAN_PRICES_YEARLY_AS_MONTHLY.starter}
                 </p>
-                <p className="text-sm text-gray-500 mt-1">{billingInterval === 'monthly' ? '/month' : '/year'}</p>
+                <p className="text-sm text-gray-500 mt-1">/month</p>
               </div>
               <ul className="space-y-3 text-sm text-gray-700 flex-1">
                 <li className="flex items-start">
@@ -406,8 +419,19 @@ function Home(): JSX.Element {
                   <span className="mr-2">✗</span>
                   Limited uploads
                 </li>
+                <li className="flex items-start text-gray-400">
+                  <span className="mr-2">✗</span>
+                  No Zuri Tap
+                </li>
               </ul>
-              <div className="mt-4 flex justify-center"><button onClick={() => openBetaForm('beta')} className="bg-green-600 text-white py-2.5 rounded-full font-semibold text-sm hover:bg-green-700 transition px-6">Get Starter</button></div>
+              <div className="mt-4 flex justify-center">
+                <Link
+                  to={`/subscribe/starter?interval=${billingInterval}`}
+                  className="bg-green-600 text-white py-2.5 rounded-full font-semibold text-sm hover:bg-green-700 transition px-6"
+                >
+                  Get Starter
+                </Link>
+              </div>
             </div>
 
             {/* Growth – blue */}
@@ -416,9 +440,9 @@ function Home(): JSX.Element {
                 <span className="inline-block w-3 h-3 rounded-full bg-blue-500 mb-2" aria-hidden />
                 <h3 className="text-xl font-bold text-zuri-black">Growth</h3>
                 <p className="text-2xl font-bold text-zuri-black mt-2">
-                  {billingInterval === 'monthly' ? PLAN_PRICES.growth : PLAN_PRICES_YEARLY.growth}
+                  {billingInterval === 'monthly' ? PLAN_PRICES.growth : PLAN_PRICES_YEARLY_AS_MONTHLY.growth}
                 </p>
-                <p className="text-sm text-gray-500 mt-1">{billingInterval === 'monthly' ? '/month' : '/year'}</p>
+                <p className="text-sm text-gray-500 mt-1">/month</p>
               </div>
               <ul className="space-y-3 text-sm text-gray-700 flex-1">
                 <li className="flex items-start">
@@ -433,8 +457,19 @@ function Home(): JSX.Element {
                   <span className="text-blue-500 mr-2">✓</span>
                   Order management
                 </li>
+                <li className="flex items-start">
+                  <span className="text-blue-500 mr-2">✓</span>
+                  Zuri Tap
+                </li>
               </ul>
-              <div className="mt-4 flex justify-center"><button onClick={() => openBetaForm('beta')} className="bg-blue-600 text-white py-2.5 rounded-full font-semibold text-sm hover:bg-blue-700 transition px-6">Get Growth</button></div>
+              <div className="mt-4 flex justify-center">
+                <Link
+                  to={`/subscribe/growth?interval=${billingInterval}`}
+                  className="bg-blue-600 text-white py-2.5 rounded-full font-semibold text-sm hover:bg-blue-700 transition px-6"
+                >
+                  Get Growth
+                </Link>
+              </div>
             </div>
 
             {/* Pro – purple, Recommended */}
@@ -446,9 +481,9 @@ function Home(): JSX.Element {
                 <span className="inline-block w-3 h-3 rounded-full bg-purple-400 mb-2" aria-hidden />
                 <h3 className="text-xl font-bold">Pro</h3>
                 <p className="text-2xl font-bold text-zuri-yellow mt-2">
-                  {billingInterval === 'monthly' ? PLAN_PRICES.pro : PLAN_PRICES_YEARLY.pro}
+                  {billingInterval === 'monthly' ? PLAN_PRICES.pro : PLAN_PRICES_YEARLY_AS_MONTHLY.pro}
                 </p>
-                <p className="text-sm text-gray-400 mt-1">{billingInterval === 'monthly' ? '/month' : '/year'}</p>
+                <p className="text-sm text-gray-400 mt-1">/month</p>
               </div>
               <ul className="space-y-3 text-sm text-gray-300 flex-1">
                 <li className="flex items-start">
@@ -463,8 +498,19 @@ function Home(): JSX.Element {
                   <span className="text-purple-300 mr-2">✓</span>
                   Advanced reporting
                 </li>
+                <li className="flex items-start">
+                  <span className="text-purple-300 mr-2">✓</span>
+                  Zuri Tap
+                </li>
               </ul>
-              <div className="mt-4 flex justify-center"><button onClick={() => openBetaForm('beta')} className="bg-zuri-yellow text-zuri-black py-2.5 rounded-full font-semibold text-sm hover:bg-yellow-400 transition px-6">Get Pro</button></div>
+              <div className="mt-4 flex justify-center">
+                <Link
+                  to={`/subscribe/pro?interval=${billingInterval}`}
+                  className="bg-zuri-yellow text-zuri-black py-2.5 rounded-full font-semibold text-sm hover:bg-yellow-400 transition px-6"
+                >
+                  Get Pro
+                </Link>
+              </div>
             </div>
 
             {/* Zuri AI – red */}
@@ -473,9 +519,9 @@ function Home(): JSX.Element {
                 <span className="inline-block w-3 h-3 rounded-full bg-red-500 mb-2" aria-hidden />
                 <h3 className="text-xl font-bold text-zuri-black">Zuri AI</h3>
                 <p className="text-2xl font-bold text-zuri-black mt-2">
-                  {billingInterval === 'monthly' ? PLAN_PRICES.zuri_plus : PLAN_PRICES_YEARLY.zuri_plus}
+                  {billingInterval === 'monthly' ? PLAN_PRICES.zuri_plus : PLAN_PRICES_YEARLY_AS_MONTHLY.zuri_plus}
                 </p>
-                <p className="text-sm text-gray-500 mt-1">{billingInterval === 'monthly' ? '/month' : '/year'}</p>
+                <p className="text-sm text-gray-500 mt-1">/month</p>
               </div>
               <ul className="space-y-3 text-sm text-gray-700 flex-1">
                 <li className="flex items-start">
@@ -494,8 +540,19 @@ function Home(): JSX.Element {
                   <span className="text-red-500 mr-2">✓</span>
                   Storefront intelligence
                 </li>
+                <li className="flex items-start">
+                  <span className="text-red-500 mr-2">✓</span>
+                  Zuri Tap
+                </li>
               </ul>
-              <div className="mt-4 flex justify-center"><button onClick={() => openBetaForm('beta')} className="bg-red-600 text-white py-2.5 rounded-full font-semibold text-sm hover:bg-red-700 transition px-6">Get Zuri AI</button></div>
+              <div className="mt-4 flex justify-center">
+                <Link
+                  to={`/subscribe/zuri_plus?interval=${billingInterval}`}
+                  className="bg-red-600 text-white py-2.5 rounded-full font-semibold text-sm hover:bg-red-700 transition px-6"
+                >
+                  Get Zuri AI
+                </Link>
+              </div>
             </div>
 
             {/* Enterprise */}
@@ -517,6 +574,10 @@ function Home(): JSX.Element {
                 <li className="flex items-start">
                   <span className="text-zuri-yellow mr-2">✓</span>
                   Custom integrations
+                </li>
+                <li className="flex items-start">
+                  <span className="text-zuri-yellow mr-2">✓</span>
+                  Zuri Tap
                 </li>
               </ul>
               <div className="mt-6 flex justify-center"><button onClick={() => openBetaForm('enterprise')} className="bg-zuri-black text-white py-2.5 rounded-full font-semibold text-sm hover:bg-gray-800 transition px-6">Get in touch</button></div>
@@ -580,12 +641,12 @@ function Home(): JSX.Element {
           <p className="text-white/90 mb-8">
             Join businesses already using ZURI for orders and payments.
           </p>
-          <button
-            onClick={() => openBetaForm('beta')}
-            className="bg-white text-zuri-orange font-semibold text-sm rounded-full px-6 py-2.5 hover:bg-zuri-light transition-all shadow-lg"
+          <Link
+            to="/business/login"
+            className="inline-block bg-white text-zuri-orange font-semibold text-sm rounded-full px-6 py-2.5 hover:bg-zuri-light transition-all shadow-lg"
           >
             Get started
-          </button>
+          </Link>
         </div>
       </section>
 
