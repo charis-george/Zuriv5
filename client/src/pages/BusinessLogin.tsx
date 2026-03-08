@@ -22,10 +22,13 @@ function BusinessLogin(): JSX.Element {
     setLoading(true)
     try {
       if (isLogin) {
-        const response = await axios.post<Business>('/api/business/login', {
+        const response = await axios.post<Business & { token?: string }>('/api/business/login', {
           email: formData.email,
           password: formData.password
         })
+        const token = response.data.token
+        if (token) localStorage.setItem('zuri_business_token', token)
+        if (response.data.id) localStorage.setItem('zuri_business_id', response.data.id)
         navigate(`/business/dashboard/${response.data.id}`)
       } else {
         await axios.post<Business>('/api/business/register', {

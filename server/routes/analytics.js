@@ -1,14 +1,18 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../database');
-const { getBusinessPlan, canAccessAnalytics } = require('../lib/plans');
+const { getBusinessPlan, canAccessAnalytics, canAccessProFeatures } = require('../lib/plans');
+const { requireBusinessAuth } = require('../middleware/auth');
 
 const supabase = getDb();
 
-// Get sales summary
-router.get('/sales/:businessId', async (req, res) => {
+// Get sales summary — requires business auth
+router.get('/sales/:businessId', requireBusinessAuth, async (req, res) => {
   try {
     const { businessId } = req.params;
+    if (businessId !== req.businessId) {
+      return res.status(403).json({ error: 'You can only view your own analytics' });
+    }
     const plan = await getBusinessPlan(businessId);
     if (!canAccessAnalytics(plan)) {
       return res.status(403).json({ error: 'Analytics available on Basic plan and above. Upgrade to unlock.' });
@@ -63,10 +67,13 @@ router.get('/sales/:businessId', async (req, res) => {
   }
 });
 
-// Get sales by date
-router.get('/sales-by-date/:businessId', async (req, res) => {
+// Get sales by date — requires business auth
+router.get('/sales-by-date/:businessId', requireBusinessAuth, async (req, res) => {
   try {
     const { businessId } = req.params;
+    if (businessId !== req.businessId) {
+      return res.status(403).json({ error: 'You can only view your own analytics' });
+    }
     const plan = await getBusinessPlan(businessId);
     if (!canAccessAnalytics(plan)) {
       return res.status(403).json({ error: 'Analytics available on Basic plan and above. Upgrade to unlock.' });
@@ -117,10 +124,13 @@ router.get('/sales-by-date/:businessId', async (req, res) => {
   }
 });
 
-// Get most ordered items
-router.get('/popular-items/:businessId', async (req, res) => {
+// Get most ordered items — requires business auth
+router.get('/popular-items/:businessId', requireBusinessAuth, async (req, res) => {
   try {
     const { businessId } = req.params;
+    if (businessId !== req.businessId) {
+      return res.status(403).json({ error: 'You can only view your own analytics' });
+    }
     const plan = await getBusinessPlan(businessId);
     if (!canAccessAnalytics(plan)) {
       return res.status(403).json({ error: 'Analytics available on Basic plan and above. Upgrade to unlock.' });
@@ -214,10 +224,13 @@ router.get('/popular-items/:businessId', async (req, res) => {
   }
 });
 
-// Get peak hours
-router.get('/peak-hours/:businessId', async (req, res) => {
+// Get peak hours — requires business auth
+router.get('/peak-hours/:businessId', requireBusinessAuth, async (req, res) => {
   try {
     const { businessId } = req.params;
+    if (businessId !== req.businessId) {
+      return res.status(403).json({ error: 'You can only view your own analytics' });
+    }
     const plan = await getBusinessPlan(businessId);
     if (!canAccessAnalytics(plan)) {
       return res.status(403).json({ error: 'Analytics available on Basic plan and above. Upgrade to unlock.' });
@@ -265,10 +278,13 @@ router.get('/peak-hours/:businessId', async (req, res) => {
   }
 });
 
-// Get profit margins
-router.get('/profit-margins/:businessId', async (req, res) => {
+// Get profit margins — requires business auth
+router.get('/profit-margins/:businessId', requireBusinessAuth, async (req, res) => {
   try {
     const { businessId } = req.params;
+    if (businessId !== req.businessId) {
+      return res.status(403).json({ error: 'You can only view your own analytics' });
+    }
     const plan = await getBusinessPlan(businessId);
     if (!canAccessAnalytics(plan)) {
       return res.status(403).json({ error: 'Analytics available on Basic plan and above. Upgrade to unlock.' });
@@ -370,6 +386,91 @@ router.get('/profit-margins/:businessId', async (req, res) => {
   } catch (error) {
     console.error('Get profit margins error:', error);
     res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// Customer intelligence (Pro+): repeat customers, avg spend, visit frequency
+router.get('/customer-intelligence/:businessId', requireBusinessAuth, async (req, res) => {
+  try {
+    const { businessId } = req.params;
+    if (businessId !== req.businessId) {
+      return res.status(403).json({ error: 'You can only view your own analytics' });
+    }
+    const plan = await getBusinessPlan(businessId);
+    if (!canAccessProFeatures(plan)) {
+      return res.status(403).json({ error: 'Customer intelligence is available on Pro plan and above. Upgrade to unlock.' });
+    }
+    const { days = 30 } = req.query;
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - parseInt(days));
+
+    const { data: orders, error } = await supabase
+      .from('orders')
+      .select('id, customer_email, total_amount, created_at')
+      .eq('business_id', businessId)
+      .neq('status', 'cancelled')
+      .gte('created_at', startDate.toISOString());
+
+    if (error) {
+      console.error('Get customer intelligence error:', error);
+      return res.status(500).json({ error: 'Database error' });
+    }
+
+    const ordersWithEmail = (orders || []).filter(o => o.customer_email && String(o.customer_email).trim());
+    if (ordersWithEmail.length === 0) {
+      return res.json({
+        uniqueCustomers: 0,
+        repeatCustomers: 0,
+        repeatRatePct: 0,
+        totalOrders: 0,
+        totalRevenue: 0,
+        avgSpendPerOrder: 0,
+        ordersPerCustomer: 0,
+        returnWithin10DaysPct: 0
+      });
+    }
+
+    const byEmail = {};
+    ordersWithEmail.forEach(o => {
+      const e = String(o.customer_email).trim().toLowerCase();
+      if (!byEmail[e]) byEmail[e] = { orders: [], totalSpend: 0 };
+      byEmail[e].orders.push(new Date(o.created_at));
+      byEmail[e].totalSpend += Number(o.total_amount) || 0;
+    });
+    const customers = Object.values(byEmail);
+    const uniqueCustomers = customers.length;
+    const repeatCustomers = customers.filter(c => c.orders.length >= 2).length;
+    const totalOrders = ordersWithEmail.length;
+    const totalRevenue = ordersWithEmail.reduce((s, o) => s + (Number(o.total_amount) || 0), 0);
+    const avgSpendPerOrder = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+    const ordersPerCustomer = uniqueCustomers > 0 ? totalOrders / uniqueCustomers : 0;
+    const repeatRatePct = uniqueCustomers > 0 ? (repeatCustomers / uniqueCustomers) * 100 : 0;
+    const tenDaysMs = 10 * 24 * 60 * 60 * 1000;
+    let returnWithin10Days = 0;
+    customers.forEach(c => {
+      const sorted = [...c.orders].sort((a, b) => a.getTime() - b.getTime());
+      for (let i = 1; i < sorted.length; i++) {
+        if (sorted[i].getTime() - sorted[i - 1].getTime() <= tenDaysMs) {
+          returnWithin10Days++;
+          break;
+        }
+      }
+    });
+    const returnWithin10DaysPct = uniqueCustomers > 0 ? (returnWithin10Days / uniqueCustomers) * 100 : 0;
+
+    res.json({
+      uniqueCustomers,
+      repeatCustomers,
+      repeatRatePct,
+      totalOrders,
+      totalRevenue,
+      avgSpendPerOrder,
+      ordersPerCustomer,
+      returnWithin10DaysPct
+    });
+  } catch (err) {
+    console.error('Get customer intelligence error:', err);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 

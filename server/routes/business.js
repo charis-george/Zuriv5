@@ -6,6 +6,7 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../database');
 const { getBusinessPlan, canAddBusinessLogo } = require('../lib/plans');
+const { signBusinessToken, requireBusinessAuth } = require('../middleware/auth');
 
 const supabase = getDb();
 const BUCKET = 'menu-items';
@@ -99,7 +100,8 @@ router.post('/login', async (req, res) => {
 
     // Remove password from response
     const { password: _, ...businessData } = business;
-    res.json(businessData);
+    const token = signBusinessToken(business.id);
+    res.json({ ...businessData, token });
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Database error' });
@@ -147,11 +149,14 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// Update business (bank details, logo; no auth for MVP)
-router.patch('/:id', async (req, res) => {
+// Update business (bank details, logo) — requires business auth
+router.patch('/:id', requireBusinessAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { bank_code, bank_name, account_number, account_name, logo_url } = req.body;
+    if (id !== req.businessId) {
+      return res.status(403).json({ error: 'You can only update your own business' });
+    }
+    const { bank_code, bank_name, account_number, account_name, logo_url, password } = req.body;
     const updates = {};
     if (bank_code !== undefined) updates.bank_code = bank_code || null;
     if (bank_name !== undefined) updates.bank_name = bank_name || null;
@@ -165,6 +170,21 @@ router.patch('/:id', async (req, res) => {
       }
       updates.account_number = digits;
     }
+
+    const isBankUpdate = Object.keys(updates).some(k => ['bank_code', 'bank_name', 'account_number', 'account_name'].includes(k));
+    if (isBankUpdate) {
+      if (!password || typeof password !== 'string' || !password.trim()) {
+        return res.status(400).json({ error: 'Your Zuri business account password is required to save bank details.' });
+      }
+      const { data: biz } = await supabase.from('businesses').select('password').eq('id', id).single();
+      if (!biz || !biz.password) {
+        return res.status(500).json({ error: 'Could not verify account.' });
+      }
+      if (!bcrypt.compareSync(password.trim(), biz.password)) {
+        return res.status(401).json({ error: 'Incorrect password. Enter your Zuri business account password.' });
+      }
+    }
+
     if (logo_url !== undefined) {
       const plan = await getBusinessPlan(id);
       if (!canAddBusinessLogo(plan)) return res.status(403).json({ error: 'Business logo is available on Starter plan and above.' });
@@ -189,10 +209,13 @@ router.patch('/:id', async (req, res) => {
   }
 });
 
-// Upload business logo (Starter+)
-router.post('/:id/upload-logo', logoUpload.single('logo'), async (req, res) => {
+// Upload business logo (Starter+) — requires business auth
+router.post('/:id/upload-logo', requireBusinessAuth, logoUpload.single('logo'), async (req, res) => {
   try {
     const { id: businessId } = req.params;
+    if (businessId !== req.businessId) {
+      return res.status(403).json({ error: 'You can only upload logo for your own business' });
+    }
     const plan = await getBusinessPlan(businessId);
     if (!canAddBusinessLogo(plan)) return res.status(403).json({ error: 'Business logo is available on Starter plan and above.' });
     if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'No image file provided' });

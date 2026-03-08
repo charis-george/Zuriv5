@@ -69,7 +69,11 @@ function canAddBusinessLogo(plan) {
 }
 
 function canAccessAIFeatures(plan) {
-  return plan === PLANS.ZURI_PLUS || plan === PLANS.ENTERPRISE;
+  return plan === PLANS.PRO || plan === PLANS.ZURI_PLUS || plan === PLANS.ENTERPRISE;
+}
+
+function canAccessProFeatures(plan) {
+  return plan === PLANS.PRO || plan === PLANS.ZURI_PLUS || plan === PLANS.ENTERPRISE;
 }
 
 module.exports = {
@@ -82,5 +86,6 @@ module.exports = {
   canAccessAnalytics,
   canAddMenuPictures,
   canAddBusinessLogo,
-  canAccessAIFeatures
+  canAccessAIFeatures,
+  canAccessProFeatures
 };

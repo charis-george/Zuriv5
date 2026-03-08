@@ -16,6 +16,9 @@ const io = socketIo(server, {
 
 const PORT = process.env.PORT || 3000;
 
+// Webhook needs raw body for signature verification (must be before express.json())
+app.use('/api/payment/webhook', express.raw({ type: 'application/json' }));
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -32,6 +35,9 @@ const contactRoutes = require('./routes/contact');
 const subscriptionRoutes = require('./routes/subscription');
 const aiRoutes = require('./routes/ai');
 const banksRoutes = require('./routes/banks');
+const tapRoutes = require('./routes/tap');
+const tapAuthRoutes = require('./routes/tap-auth');
+const networkRoutes = require('./routes/network');
 
 // Routes
 app.use('/api/business', businessRoutes);
@@ -44,14 +50,41 @@ app.use('/api/payment', paymentRoutes);
 app.use('/api/contact', contactRoutes);
 app.use('/api/subscription', subscriptionRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/tap', tapRoutes);
+app.use('/api/tap-auth', tapAuthRoutes);
+app.use('/api/network', networkRoutes);
 
 // Socket.io for real-time updates
+const { verifyBusinessToken } = require('./middleware/auth');
+
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
-  socket.on('join-business', (businessId) => {
+  socket.on('join-business', (data) => {
+    const businessId = typeof data === 'string' ? data : data?.businessId;
+    const token = typeof data === 'object' && data?.token ? data.token : null;
+    if (!businessId) return;
+    const payload = verifyBusinessToken(token);
+    if (!payload || payload.sub !== businessId) {
+      console.log(`Socket ${socket.id} join-business rejected: invalid or missing token`);
+      return;
+    }
     socket.join(`business-${businessId}`);
     console.log(`Socket ${socket.id} joined business-${businessId}`);
+  });
+
+  socket.on('join-tap-room', (code) => {
+    if (code && typeof code === 'string') {
+      const room = `tap-room-${code.toUpperCase()}`;
+      socket.join(room);
+      console.log(`Socket ${socket.id} joined ${room}`);
+    }
+  });
+
+  socket.on('leave-tap-room', (code) => {
+    if (code && typeof code === 'string') {
+      socket.leave(`tap-room-${code.toUpperCase()}`);
+    }
   });
 
   socket.on('disconnect', () => {

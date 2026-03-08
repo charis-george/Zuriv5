@@ -4,14 +4,18 @@ const Paystack = require('@paystack/paystack-sdk');
 const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../database');
 const { getPlanAmountNg } = require('../lib/plans');
+const { requireBusinessAuth } = require('../middleware/auth');
 
 const supabase = getDb();
 const paystack = process.env.PAYSTACK_SECRET_KEY ? new Paystack(process.env.PAYSTACK_SECRET_KEY) : null;
 
-// Initialize tier upgrade payment (money to ZURI)
-router.post('/initialize', async (req, res) => {
+// Initialize tier upgrade payment (money to ZURI) — requires business auth
+router.post('/initialize', requireBusinessAuth, async (req, res) => {
   try {
     const { businessId, plan, email, callbackUrl, interval } = req.body;
+    if (!businessId || businessId !== req.businessId) {
+      return res.status(403).json({ error: 'You can only upgrade your own business' });
+    }
     const billingInterval = interval === 'yearly' ? 'yearly' : 'monthly';
     const amount = getPlanAmountNg(plan, billingInterval);
     if (!businessId || !plan || !amount || !email) {
@@ -69,10 +73,18 @@ router.get('/verify/:reference', async (req, res) => {
 
     const { data: sub } = await supabase
       .from('subscription_payments')
-      .select('id, business_id, plan')
+      .select('id, business_id, plan, status')
       .eq('reference', reference)
       .single();
     if (!sub) return res.json({ success: false, message: 'Payment record not found' });
+
+    if (sub.status === 'success') {
+      return res.json({
+        success: true,
+        plan: sub.plan,
+        data: { reference: response.data.reference, amount: response.data.amount / 100 }
+      });
+    }
 
     await supabase.from('subscription_payments').update({
       status: 'success',

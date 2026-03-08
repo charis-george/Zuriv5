@@ -1,12 +1,14 @@
 import { useState, useEffect, useRef } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import io, { Socket } from 'socket.io-client'
 import {
   LineChart, Line, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts'
-import { Business, Order, SalesSummary, SalesByDate, PopularItem, PeakHour, ProfitMargin, QRCodeData, MenuCategory, MenuItem, PLAN_PRICES, PLAN_PRICES_YEARLY, PLAN_LABELS, YEARLY_DISCOUNT_PCT, type BillingInterval } from '../types'
+import { Business, Order, SalesSummary, SalesByDate, PopularItem, PeakHour, ProfitMargin, QRCodeData, MenuCategory, MenuItem, PLAN_PRICES, PLAN_PRICES_YEARLY_AS_MONTHLY, PLAN_LABELS, YEARLY_DISCOUNT_PCT, type BillingInterval } from '../types'
+import type { CustomerIntelligence } from '../types'
+import type { MarketInsights } from '../types'
 
 type TabType = 'orders' | 'analytics' | 'menu' | 'qr' | 'payment' | 'ai'
 type OrderStatus = 'pending' | 'preparing' | 'ready' | 'completed' | 'cancelled'
@@ -19,6 +21,13 @@ interface Category {
 
 function BusinessDashboard(): JSX.Element {
   const { businessId } = useParams<{ businessId: string }>()
+  const navigate = useNavigate()
+
+  const getAuthHeaders = () => {
+    const t = localStorage.getItem('zuri_business_token')
+    return t ? { Authorization: `Bearer ${t}` } : {}
+  }
+
   const [business, setBusiness] = useState<Business | null>(null)
   const [orders, setOrders] = useState<Order[]>([])
   const [analytics, setAnalytics] = useState<SalesSummary | null>(null)
@@ -26,6 +35,9 @@ function BusinessDashboard(): JSX.Element {
   const [popularItems, setPopularItems] = useState<PopularItem[]>([])
   const [peakHours, setPeakHours] = useState<PeakHour[]>([])
   const [profitMargins, setProfitMargins] = useState<ProfitMargin[]>([])
+  const [customerIntelligence, setCustomerIntelligence] = useState<CustomerIntelligence | null>(null)
+  const [marketInsights, setMarketInsights] = useState<MarketInsights | null>(null)
+  const [marketInsightsLoading, setMarketInsightsLoading] = useState(false)
   const [qrCode, setQrCode] = useState<QRCodeData | null>(null)
   const [menu, setMenu] = useState<MenuCategory[]>([])
   const [categories, setCategories] = useState<Category[]>([])
@@ -51,6 +63,7 @@ function BusinessDashboard(): JSX.Element {
   const [bankForm, setBankForm] = useState({ bankCode: '', bankName: '', accountNumber: '', accountName: '' })
   const [bankResolving, setBankResolving] = useState(false)
   const [bankResolveError, setBankResolveError] = useState<string | null>(null)
+  const [bankPassword, setBankPassword] = useState('')
   const [bankSaving, setBankSaving] = useState(false)
   const [showBankForm, setShowBankForm] = useState(true)
   const [upgradeLoading, setUpgradeLoading] = useState<string | null>(null)
@@ -67,8 +80,23 @@ function BusinessDashboard(): JSX.Element {
   const [logoUrlInput, setLogoUrlInput] = useState('')
   const logoInputRef = useRef<HTMLInputElement>(null)
 
+  const [zuriTapOn, setZuriTapOn] = useState(false)
+  const [tapCode, setTapCode] = useState<string | null>(null)
+  const [tapExpiresAt, setTapExpiresAt] = useState<string | null>(null)
+  const [tapSending, setTapSending] = useState(false)
+  const [tapWaitingOrderId, setTapWaitingOrderId] = useState<string | null>(null)
+  const [tapSelections, setTapSelections] = useState<Record<string, number>>({})
+  const [tapRoomLoading, setTapRoomLoading] = useState(false)
+  const tapWaitingOrderIdRef = useRef<string | null>(null)
+  useEffect(() => { tapWaitingOrderIdRef.current = tapWaitingOrderId }, [tapWaitingOrderId])
+
   useEffect(() => {
     if (!businessId) return
+    const token = localStorage.getItem('zuri_business_token')
+    if (!token) {
+      navigate('/business/login', { replace: true })
+      return
+    }
 
     // Fetch business info (then conditionally fetch analytics based on plan)
     axios.get<Business>(`/api/business/${businessId}`)
@@ -77,6 +105,8 @@ function BusinessDashboard(): JSX.Element {
         if (res.data.plan && res.data.plan !== 'free' && res.data.plan !== 'starter') fetchAnalytics()
         else setLoading(false)
         if (res.data.plan === 'free' || res.data.plan === 'starter') setActiveTab(t => (t === 'analytics' ? 'orders' : t))
+        const proOrAbove = res.data.plan === 'pro' || res.data.plan === 'zuri_plus' || res.data.plan === 'enterprise'
+        if (!proOrAbove) setActiveTab(t => (t === 'ai' ? 'orders' : t))
       })
       .catch(err => { console.error(err); setLoading(false) })
 
@@ -85,6 +115,10 @@ function BusinessDashboard(): JSX.Element {
     axios.get<QRCodeData>(`/api/qr/generate/${businessId}${baseUrl ? `?baseUrl=${baseUrl}` : ''}`)
       .then(res => setQrCode(res.data))
       .catch(err => console.error(err))
+
+    axios.get<{ code: string | null; expiresAt?: string }>(`/api/tap/room?businessId=${businessId}`, { headers: getAuthHeaders() })
+      .then(res => { if (res.data?.code) { setTapCode(res.data.code); setZuriTapOn(true); setTapExpiresAt(res.data.expiresAt || null) } })
+      .catch(() => {})
 
     // Fetch orders
     fetchOrders()
@@ -99,7 +133,7 @@ function BusinessDashboard(): JSX.Element {
 
     // Connect to socket for real-time updates
     const socket: Socket = io('http://localhost:3000')
-    socket.emit('join-business', businessId)
+    socket.emit('join-business', { businessId, token })
 
     socket.on('new-order', () => {
       fetchOrders()
@@ -107,6 +141,12 @@ function BusinessDashboard(): JSX.Element {
     })
 
     socket.on('order-updated', () => {
+      fetchOrders()
+      fetchAnalytics()
+    })
+
+    socket.on('tap-payment-success', (data: { orderId: string }) => {
+      if (data.orderId === tapWaitingOrderIdRef.current) setTapWaitingOrderId(null)
       fetchOrders()
       fetchAnalytics()
     })
@@ -120,22 +160,51 @@ function BusinessDashboard(): JSX.Element {
     if (business?.bankAccount?.accountName) setShowBankForm(false)
   }, [business?.bankAccount?.accountName])
 
+  useEffect(() => {
+    if (!businessId) return
+    const interval = setInterval(() => {
+      fetchOrders()
+      if (business?.plan && business.plan !== 'free' && business.plan !== 'starter') fetchAnalytics()
+    }, 2 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, [businessId, business?.plan])
+
+  useEffect(() => {
+    if (activeTab !== 'ai' || !businessId) return
+    const proOrAbove = business?.plan === 'pro' || business?.plan === 'zuri_plus' || business?.plan === 'enterprise'
+    if (!proOrAbove) return
+    axios.get<CustomerIntelligence>(`/api/analytics/customer-intelligence/${businessId}?days=30`, { headers: getAuthHeaders() })
+      .then(res => setCustomerIntelligence(res.data))
+      .catch(() => setCustomerIntelligence(null))
+  }, [activeTab, businessId, business?.plan])
+
+  useEffect(() => {
+    if (activeTab !== 'analytics' || !businessId) return
+    const proOrAbove = business?.plan === 'pro' || business?.plan === 'zuri_plus' || business?.plan === 'enterprise'
+    if (!proOrAbove) return
+    setMarketInsightsLoading(true)
+    axios.get<MarketInsights>('/api/network/market-insights?days=30', { headers: getAuthHeaders() })
+      .then(res => { setMarketInsights(res.data); setMarketInsightsLoading(false) })
+      .catch(() => { setMarketInsights(null); setMarketInsightsLoading(false) })
+  }, [activeTab, businessId, business?.plan])
+
   const fetchOrders = (): void => {
     if (!businessId) return
-    axios.get<Order[]>(`/api/order/business/${businessId}`)
+    axios.get<Order[]>(`/api/order/business/${businessId}`, { headers: getAuthHeaders() })
       .then(res => setOrders(res.data))
-      .catch(err => console.error(err))
+      .catch(err => { if (err.response?.status === 401) { localStorage.removeItem('zuri_business_token'); navigate('/business/login', { replace: true }) } else console.error(err) })
   }
 
   const fetchAnalytics = async (): Promise<void> => {
     if (!businessId) return
+    const headers = getAuthHeaders()
     try {
       const [sales, salesByDate, popular, hours, margins] = await Promise.all([
-        axios.get<SalesSummary>(`/api/analytics/sales/${businessId}?period=month`),
-        axios.get<SalesByDate[]>(`/api/analytics/sales-by-date/${businessId}?days=30`),
-        axios.get<PopularItem[]>(`/api/analytics/popular-items/${businessId}?limit=10`),
-        axios.get<PeakHour[]>(`/api/analytics/peak-hours/${businessId}?days=30`),
-        axios.get<ProfitMargin[]>(`/api/analytics/profit-margins/${businessId}?days=30`)
+        axios.get<SalesSummary>(`/api/analytics/sales/${businessId}?period=month`, { headers }),
+        axios.get<SalesByDate[]>(`/api/analytics/sales-by-date/${businessId}?days=30`, { headers }),
+        axios.get<PopularItem[]>(`/api/analytics/popular-items/${businessId}?limit=10`, { headers }),
+        axios.get<PeakHour[]>(`/api/analytics/peak-hours/${businessId}?days=30`, { headers }),
+        axios.get<ProfitMargin[]>(`/api/analytics/profit-margins/${businessId}?days=30`, { headers })
       ])
 
       setAnalytics(sales.data)
@@ -183,7 +252,7 @@ function BusinessDashboard(): JSX.Element {
       axios.put(`/api/menu/item/${editingItem.id}`, {
         ...itemData,
         categoryId: itemForm.categoryId || null
-      })
+      }, { headers: getAuthHeaders() })
         .then(() => {
           fetchMenu()
           setShowItemForm(false)
@@ -198,7 +267,7 @@ function BusinessDashboard(): JSX.Element {
         })
     } else {
       // Create new item
-      axios.post('/api/menu/item', itemData)
+      axios.post('/api/menu/item', itemData, { headers: getAuthHeaders() })
         .then(() => {
           fetchMenu()
           setShowItemForm(false)
@@ -216,7 +285,7 @@ function BusinessDashboard(): JSX.Element {
   const handleDeleteItem = (itemId: string): void => {
     if (!confirm('Are you sure you want to delete this menu item?')) return
 
-    axios.delete(`/api/menu/item/${itemId}`)
+    axios.delete(`/api/menu/item/${itemId}`, { headers: getAuthHeaders() })
       .then(() => {
         fetchMenu()
       })
@@ -256,7 +325,7 @@ function BusinessDashboard(): JSX.Element {
       businessId,
       name: categoryForm.name,
       displayOrder: categoryForm.displayOrder
-    })
+    }, { headers: getAuthHeaders() })
       .then(() => {
         fetchMenu()
         setShowCategoryForm(false)
@@ -269,7 +338,7 @@ function BusinessDashboard(): JSX.Element {
   }
 
   const updateOrderStatus = (orderId: string, status: OrderStatus): void => {
-    axios.patch(`/api/order/${orderId}/status`, { status })
+    axios.patch(`/api/order/${orderId}/status`, { status }, { headers: getAuthHeaders() })
       .then(() => {
         fetchOrders()
         fetchAnalytics()
@@ -368,12 +437,137 @@ function BusinessDashboard(): JSX.Element {
                 <span className="text-xs text-gray-500">Upgrade to Starter to add a logo</span>
               )}
             </div>
-            <a href="/" className="text-sm font-medium text-gray-600 hover:text-zuri-orange transition">
-              Home
-            </a>
+            <div className="flex items-center gap-4">
+              {(business?.plan === 'growth' || business?.plan === 'pro' || business?.plan === 'zuri_plus' || business?.plan === 'enterprise' || business?.plan === 'basic' || business?.plan === 'advanced') && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-zuri-black">Zuri Tap</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={!!tapCode}
+                  onClick={async () => {
+                    if (!businessId) return
+                    setTapRoomLoading(true)
+                    try {
+                      if (tapCode) {
+                        await axios.post('/api/tap/room/off', { businessId }, { headers: getAuthHeaders() })
+                        setTapCode(null)
+                        setTapExpiresAt(null)
+                        setZuriTapOn(false)
+                        setTapWaitingOrderId(null)
+                      } else {
+                        const { data } = await axios.post<{ code: string; expiresAt: string }>('/api/tap/room/on', { businessId }, { headers: getAuthHeaders() })
+                        setTapCode(data.code)
+                        setTapExpiresAt(data.expiresAt)
+                        setZuriTapOn(true)
+                        setTapSelections({})
+                      }
+                    } catch (e) {
+                      console.error(e)
+                    } finally {
+                      setTapRoomLoading(false)
+                    }
+                  }}
+                  disabled={tapRoomLoading}
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-zuri-orange focus:ring-offset-2 disabled:opacity-50 ${tapCode ? 'bg-zuri-orange' : 'bg-gray-200'}`}
+                >
+                  <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition ${tapCode ? 'translate-x-5' : 'translate-x-1'}`} />
+                </button>
+              </div>
+              )}
+              {(business?.plan === 'free' || business?.plan === 'starter') && (
+                <a href="/#pricing" className="text-sm text-gray-500 hover:text-zuri-orange transition">
+                  Upgrade to Growth for Zuri Tap
+                </a>
+              )}
+              <a href="/" className="text-sm font-medium text-gray-600 hover:text-zuri-orange transition">
+                Home
+              </a>
+            </div>
           </div>
         </div>
       </header>
+
+      {/* Zuri Tap hotspot panel - when Tap is on */}
+      {tapCode && (
+        <div className="bg-zuri-black text-white border-b border-gray-800">
+          <div className="max-w-6xl mx-auto px-4 py-6">
+            <h2 className="text-lg font-bold mb-2">Zuri Tap – Send to nearby</h2>
+            <p className="text-sm text-gray-300 mb-4">Customer enters this code on their device to receive your payment request.</p>
+            <p className="text-3xl font-mono font-bold tracking-widest mb-6">{tapCode}</p>
+            <p className="text-xs text-gray-400 mb-4">Select items from your menu, then tap Send. When the customer is ready, they’ll see the request and pay with their Zuri Tap password.</p>
+            <div className="grid md:grid-cols-2 gap-6">
+              <div>
+                <p className="text-sm font-semibold text-gray-300 mb-2">Select menu items</p>
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {menu.flatMap(c => c.items).filter(i => i.available).map(item => (
+                    <div key={item.id} className="flex items-center justify-between gap-2 bg-white/10 rounded-lg px-3 py-2">
+                      <span className="text-sm truncate">{item.name}</span>
+                      <span className="text-sm text-gray-300">₦{item.price.toFixed(2)}</span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setTapSelections(s => ({ ...s, [item.id]: Math.max(0, (s[item.id] || 0) - 1) }))}
+                          className="w-7 h-7 rounded bg-white/20 flex items-center justify-center text-sm font-bold"
+                        >
+                          −
+                        </button>
+                        <span className="w-6 text-center text-sm">{tapSelections[item.id] || 0}</span>
+                        <button
+                          type="button"
+                          onClick={() => setTapSelections(s => ({ ...s, [item.id]: (s[item.id] || 0) + 1 }))}
+                          className="w-7 h-7 rounded bg-white/20 flex items-center justify-center text-sm font-bold"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  {menu.flatMap(c => c.items).filter(i => i.available).length === 0 && (
+                    <p className="text-sm text-gray-400">No menu items. Add items in the Menu tab.</p>
+                  )}
+                </div>
+                {(() => {
+                  const selected = menu.flatMap(c => c.items).filter(i => (tapSelections[i.id] || 0) > 0)
+                  const total = selected.reduce((sum, i) => sum + i.price * (tapSelections[i.id] || 0), 0)
+                  return (
+                    <div className="mt-4 flex items-center justify-between">
+                      <span className="text-sm font-semibold">Total: ₦{total.toFixed(2)}</span>
+                      <button
+                        type="button"
+                        disabled={tapSending || selected.length === 0 || !!tapWaitingOrderId}
+                        onClick={async () => {
+                          if (!businessId || selected.length === 0) return
+                          setTapSending(true)
+                          try {
+                            const items = selected.map(i => ({
+                              menuItemId: i.id,
+                              name: i.name,
+                              price: i.price,
+                              quantity: tapSelections[i.id] || 1
+                            }))
+                            const { data } = await axios.post<{ orderId: string }>('/api/tap/send', { businessId, code: tapCode, items }, { headers: getAuthHeaders() })
+                            setTapWaitingOrderId(data.orderId)
+                            tapWaitingOrderIdRef.current = data.orderId
+                          } catch (e) {
+                            console.error(e)
+                            alert('Failed to send request')
+                          } finally {
+                            setTapSending(false)
+                          }
+                        }}
+                        className="px-4 py-2 bg-zuri-orange text-white rounded-xl text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {tapWaitingOrderId ? 'Waiting for customer to pay…' : tapSending ? 'Sending…' : 'Send to nearby'}
+                      </button>
+                    </div>
+                  )
+                })()}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Logo modal (Starter+) */}
       {showLogoModal && businessId && business?.plan && business.plan !== 'free' && (
@@ -405,7 +599,7 @@ function BusinessDashboard(): JSX.Element {
                     try {
                       const formData = new FormData()
                       formData.append('logo', file)
-                      const { data } = await axios.post<{ logoUrl: string }>(`/api/business/${businessId}/upload-logo`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+                      const { data } = await axios.post<{ logoUrl: string }>(`/api/business/${businessId}/upload-logo`, formData, { headers: { ...getAuthHeaders(), 'Content-Type': 'multipart/form-data' } })
                       setBusiness(prev => prev ? { ...prev, logoUrl: data.logoUrl } : null)
                       setLogoUrlInput(data.logoUrl)
                       if (logoInputRef.current) logoInputRef.current.value = ''
@@ -441,7 +635,7 @@ function BusinessDashboard(): JSX.Element {
                     if (!logoUrlInput.trim()) return
                     setLogoUploadError(null)
                     try {
-                      await axios.patch(`/api/business/${businessId}`, { logo_url: logoUrlInput.trim() })
+                      await axios.patch(`/api/business/${businessId}`, { logo_url: logoUrlInput.trim() }, { headers: getAuthHeaders() })
                       setBusiness(prev => prev ? { ...prev, logoUrl: logoUrlInput.trim() } : null)
                       setShowLogoModal(false)
                     } catch (err: unknown) {
@@ -520,7 +714,7 @@ function BusinessDashboard(): JSX.Element {
             >
               Payment
             </button>
-            {(business?.plan === 'zuri_plus' || business?.plan === 'enterprise') && (
+            {(business?.plan === 'pro' || business?.plan === 'zuri_plus' || business?.plan === 'enterprise') && (
               <button
                 onClick={() => setActiveTab('ai')}
                 className={`flex-1 min-w-0 px-4 py-3 text-sm font-semibold transition ${
@@ -529,7 +723,7 @@ function BusinessDashboard(): JSX.Element {
                     : 'text-gray-600 hover:text-zuri-black'
                 }`}
               >
-                AI
+                Zuri AI
               </button>
             )}
           </div>
@@ -551,6 +745,11 @@ function BusinessDashboard(): JSX.Element {
                             <p className="text-xs text-gray-500 mt-0.5">
                               {orderCustomerName(order) || 'Guest'} · {orderCustomerPhone(order) || '—'}
                             </p>
+                            {order.returningZuriCustomer && order.zuriCustomerStats && (
+                              <p className="text-xs text-zuri-orange font-medium mt-1">
+                                Returning Zuri customer – avg spend ₦{order.zuriCustomerStats.avgOrderValue.toFixed(0)} ({order.zuriCustomerStats.totalOrders} orders across {order.zuriCustomerStats.businessCount} Zuri businesses)
+                              </p>
+                            )}
                             <p className="text-xs text-gray-500">
                               {new Date(orderCreatedAt(order) || 0).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}
                             </p>
@@ -711,6 +910,67 @@ function BusinessDashboard(): JSX.Element {
                     </table>
                   </div>
                 </div>
+
+                {/* Market intelligence (Pro+) – Business Graph */}
+                {(business?.plan === 'pro' || business?.plan === 'zuri_plus' || business?.plan === 'enterprise') && (
+                  <div className="bg-gradient-to-br from-zuri-black to-gray-900 rounded-xl p-6 border border-zuri-orange/20 text-white">
+                    <h3 className="text-lg font-bold mb-1 flex items-center gap-2">
+                      <span className="text-zuri-yellow">Market intelligence</span>
+                      <span className="text-xs font-normal text-gray-400">(Zuri Network)</span>
+                    </h3>
+                    <p className="text-sm text-gray-400 mb-4">Anonymous platform insights. No other business data is shared.</p>
+                    {marketInsightsLoading ? (
+                      <div className="flex items-center justify-center py-8">
+                        <div className="animate-spin rounded-full h-8 w-8 border-2 border-zuri-yellow border-t-transparent" />
+                      </div>
+                    ) : marketInsights ? (
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                          <div>
+                            <p className="text-xs text-gray-400">Platform orders (last {marketInsights.platform.periodDays} days)</p>
+                            <p className="text-xl font-bold">{marketInsights.platform.totalOrders.toLocaleString()}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-gray-400">Platform avg order</p>
+                            <p className="text-xl font-bold text-zuri-yellow">₦{Math.round(marketInsights.platform.avgOrderValue).toLocaleString()}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-gray-400">Order trend</p>
+                            <p className={`text-xl font-bold ${marketInsights.platform.orderCountTrendPct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                              {marketInsights.platform.orderCountTrendPct >= 0 ? '+' : ''}{marketInsights.platform.orderCountTrendPct}%
+                            </p>
+                          </div>
+                          {marketInsights.yourBusiness != null && (
+                            <div>
+                              <p className="text-xs text-gray-400">Your avg order</p>
+                              <p className="text-xl font-bold">₦{Math.round(marketInsights.yourBusiness.avgOrderValue).toLocaleString()}</p>
+                            </div>
+                          )}
+                        </div>
+                        {marketInsights.insights.length > 0 && (
+                          <ul className="space-y-2 border-t border-white/10 pt-4">
+                            {marketInsights.insights.map((line, i) => (
+                              <li key={i} className="text-sm text-gray-300 flex items-start gap-2">
+                                <span className="text-zuri-yellow shrink-0">•</span>
+                                <span>{line}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-500">Unable to load market insights. Upgrade to Pro if you don’t see this.</p>
+                    )}
+                  </div>
+                )}
+
+                {business?.plan && business.plan !== 'free' && business.plan !== 'starter' && (business.plan !== 'pro' && business.plan !== 'zuri_plus' && business.plan !== 'enterprise') && (
+                  <div className="bg-zuri-orange/10 rounded-xl p-6 border border-orange-200">
+                    <h3 className="text-lg font-bold text-zuri-black mb-2">Market intelligence</h3>
+                    <p className="text-sm text-gray-600 mb-4">See anonymous platform trends, peak times, and how you compare. Available on Pro and above.</p>
+                    <a href="/#pricing" className="inline-block bg-zuri-orange text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-zuri-orange-dark transition">Upgrade to Pro</a>
+                  </div>
+                )}
               </div>
             )}
 
@@ -790,7 +1050,7 @@ function BusinessDashboard(): JSX.Element {
                               <div className="flex gap-2">
                                 <button
                                   onClick={() => {
-                                    axios.put(`/api/menu/item/${item.id}`, { available: !item.available })
+                                    axios.put(`/api/menu/item/${item.id}`, { available: !item.available }, { headers: getAuthHeaders() })
                                       .then(() => fetchMenu())
                                       .catch(err => {
                                         alert('Failed to update availability')
@@ -930,7 +1190,7 @@ function BusinessDashboard(): JSX.Element {
                                       formData.append('image', file)
                                       formData.append('businessId', businessId)
                                       const { data } = await axios.post<{ imageUrl: string }>('/api/menu/upload-image', formData, {
-                                        headers: { 'Content-Type': 'multipart/form-data' }
+                                        headers: { ...getAuthHeaders(), 'Content-Type': 'multipart/form-data' }
                                       })
                                       setItemForm(prev => ({ ...prev, imageUrl: data.imageUrl }))
                                       if (imageInputRef.current) imageInputRef.current.value = ''
@@ -1132,7 +1392,7 @@ function BusinessDashboard(): JSX.Element {
                     <p className="text-gray-600 text-sm">{business.bankAccount.accountName}</p>
                     <button
                       type="button"
-                      onClick={() => { setShowBankForm(true); setBankForm({ bankCode: '', bankName: '', accountNumber: '', accountName: '' }); setBankResolveError(null) }}
+                      onClick={() => { setShowBankForm(true); setBankForm({ bankCode: '', bankName: '', accountNumber: '', accountName: '' }); setBankResolveError(null); setBankPassword('') }}
                       className="mt-3 text-sm font-semibold text-zuri-orange hover:underline"
                     >
                       Change bank details
@@ -1147,21 +1407,31 @@ function BusinessDashboard(): JSX.Element {
                       alert('Select bank, enter account number, and verify to show account name before saving.')
                       return
                     }
+                    if (!bankPassword.trim()) {
+                      alert('Enter your Zuri business account password to save bank details.')
+                      return
+                    }
                     setBankSaving(true)
                     try {
                       await axios.patch(`/api/business/${businessId}`, {
                         bank_code: bankForm.bankCode,
                         bank_name: bankForm.bankName,
                         account_number: bankForm.accountNumber.trim(),
-                        account_name: bankForm.accountName.trim()
-                      })
+                        account_name: bankForm.accountName.trim(),
+                        password: bankPassword.trim()
+                      }, { headers: getAuthHeaders() })
                       const { data } = await axios.get<Business>(`/api/business/${businessId}`)
                       setBusiness(data)
                       setBankForm({ bankCode: '', bankName: '', accountNumber: '', accountName: '' })
+                      setBankPassword('')
                       setShowBankForm(false)
                       alert('Bank details saved.')
                     } catch (err) {
-                      alert('Failed to save. Try again.')
+                      if (axios.isAxiosError(err) && err.response?.status === 401) {
+                        alert(err.response?.data?.error || 'Incorrect password. Enter your Zuri business account password.')
+                      } else {
+                        alert('Failed to save. Try again.')
+                      }
                     } finally {
                       setBankSaving(false)
                     }
@@ -1236,9 +1506,23 @@ function BusinessDashboard(): JSX.Element {
                       <p className="text-sm font-semibold text-green-800">Account name: {bankForm.accountName}</p>
                     </div>
                   ) : null}
+                  {bankForm.accountName ? (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-600 mb-1">Confirm with your Zuri business account password</label>
+                      <input
+                        type="password"
+                        value={bankPassword}
+                        onChange={(e) => setBankPassword(e.target.value)}
+                        placeholder="Enter your account password"
+                        className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50 focus:border-zuri-orange"
+                        autoComplete="current-password"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">Required to save payout bank account.</p>
+                    </div>
+                  ) : null}
                   <button
                     type="submit"
-                    disabled={bankSaving || !bankForm.accountName}
+                    disabled={bankSaving || !bankForm.accountName || !bankPassword.trim()}
                     className="bg-zuri-orange text-white px-5 py-2.5 rounded-xl text-sm font-semibold hover:bg-zuri-orange-dark transition disabled:opacity-50"
                   >
                     {bankSaving ? 'Saving…' : 'Save bank details'}
@@ -1280,7 +1564,7 @@ function BusinessDashboard(): JSX.Element {
                             email: business.email,
                             callbackUrl: `${window.location.origin}/upgrade-done`,
                             interval: upgradeBillingInterval
-                          })
+                          }, { headers: getAuthHeaders() })
                           if (data?.authorizationUrl) window.location.href = data.authorizationUrl
                           else alert('Failed to start payment')
                         } catch {
@@ -1291,7 +1575,7 @@ function BusinessDashboard(): JSX.Element {
                       }}
                       className="bg-zuri-orange text-zuri-black px-4 py-2 rounded-xl text-sm font-semibold hover:bg-zuri-orange-dark hover:text-white transition disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {upgradeLoading === plan ? 'Redirecting…' : `Upgrade to ${PLAN_LABELS[plan]} — ${upgradeBillingInterval === 'monthly' ? PLAN_PRICES[plan] + '/mo' : PLAN_PRICES_YEARLY[plan] + '/yr'}`}
+                      {upgradeLoading === plan ? 'Redirecting…' : `Upgrade to ${PLAN_LABELS[plan]} — ${upgradeBillingInterval === 'monthly' ? PLAN_PRICES[plan] + '/mo' : PLAN_PRICES_YEARLY_AS_MONTHLY[plan] + '/mo'}`}
                     </button>
                   ))}
                 </div>
@@ -1299,15 +1583,46 @@ function BusinessDashboard(): JSX.Element {
               </div>
             )}
 
-            {/* AI Insights Tab (Zuri Plus / Enterprise) */}
-            {activeTab === 'ai' && (business?.plan === 'zuri_plus' || business?.plan === 'enterprise') && (
-              <div className="max-w-3xl space-y-6">
-                <h2 className="text-2xl font-bold text-zuri-black">AI Insights</h2>
+            {/* Zuri AI Dashboard (Pro and above) */}
+            {activeTab === 'ai' && (business?.plan === 'pro' || business?.plan === 'zuri_plus' || business?.plan === 'enterprise') && (
+              <div className="max-w-4xl space-y-6">
+                <h2 className="text-2xl font-bold text-zuri-black">Zuri AI Dashboard</h2>
                 <p className="text-gray-600">
-                  Get actionable advice from Claude based on your menu and sales data. Choose a quick insight or ask your own question.
+                  AI-powered revenue insights, sales forecasting, menu optimization, and customer intelligence. Choose an insight or ask your own question.
                 </p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+
+                {/* Customer Intelligence metrics (Pro+) */}
+                {customerIntelligence && customerIntelligence.uniqueCustomers > 0 && (
+                  <div className="rounded-xl border-2 border-zuri-yellow bg-zuri-light p-4">
+                    <h3 className="font-bold text-zuri-black mb-3">Customer Intelligence</h3>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                      <div>
+                        <p className="text-gray-500">Unique customers</p>
+                        <p className="font-semibold text-zuri-black">{customerIntelligence.uniqueCustomers}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">Repeat rate</p>
+                        <p className="font-semibold text-zuri-black">{customerIntelligence.repeatRatePct.toFixed(1)}%</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">Avg order value</p>
+                        <p className="font-semibold text-zuri-black">₦{customerIntelligence.avgSpendPerOrder.toFixed(2)}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">Return within 10 days</p>
+                        <p className="font-semibold text-zuri-black">{customerIntelligence.returnWithin10DaysPct.toFixed(1)}%</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {[
+                    { type: 'revenue_insights', label: 'AI Revenue Insights', desc: 'Best sellers, slow movers, price & bundle ideas' },
+                    { type: 'sales_forecasting', label: 'AI Sales Forecasting', desc: 'Next week demand, peak hours, staffing' },
+                    { type: 'storefront_optimization', label: 'Smart Menu Optimization', desc: 'Highlight profitable items, suggest bundles' },
+                    { type: 'customer_intelligence', label: 'Customer Intelligence', desc: 'Who your customers are, repeat & LTV' },
+                    { type: 'promotions_suggestions', label: 'Promotions Engine', desc: 'Happy hour, slow-day deals, combos' },
                     { type: 'sales_summary', label: 'Sales summary', desc: 'Last 7 & 30 days' },
                     { type: 'menu_optimization', label: 'Menu optimization', desc: 'Ordering & pricing tips' },
                     { type: 'opportunities', label: 'Opportunities', desc: 'Ways to grow sales' },
@@ -1321,7 +1636,7 @@ function BusinessDashboard(): JSX.Element {
                         setAiInsight(null)
                         setAiInsightLoading(true)
                         try {
-                          const { data } = await axios.post<{ insight: string }>('/api/ai/insights', { businessId, type })
+                          const { data } = await axios.post<{ insight: string }>('/api/ai/insights', { businessId, type }, { headers: getAuthHeaders() })
                           setAiInsight(data.insight || 'No response.')
                         } catch (err: unknown) {
                           const ax = err as { response?: { data?: { error?: string }; status?: number } }
@@ -1359,7 +1674,7 @@ function BusinessDashboard(): JSX.Element {
                           businessId,
                           type: 'custom',
                           query: aiCustomQuery.trim()
-                        })
+                        }, { headers: getAuthHeaders() })
                         setAiInsight(data.insight || 'No response.')
                       } catch (err: unknown) {
                         const ax = err as { response?: { data?: { error?: string } } }
