@@ -3,8 +3,13 @@ import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import io, { Socket } from 'socket.io-client'
 import { SavedCard } from '../types'
+import { PaperPlaneLoader } from '../components/PaperPlaneLoader'
 
-const WS_URL = (import.meta.env.VITE_WS_URL as string) || 'http://localhost:3000'
+const WS_URL =
+  (import.meta.env.VITE_WS_URL as string) ||
+  (typeof window !== 'undefined' && window.location.hostname === 'localhost'
+    ? 'http://localhost:3000'
+    : (typeof window !== 'undefined' ? window.location.origin : ''))
 
 interface TapRequest {
   orderId: string
@@ -138,7 +143,7 @@ function TapWaitPage(): JSX.Element {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#fefbf5]">
-        <div className="animate-spin rounded-full h-10 w-10 border-2 border-zuri-orange border-t-transparent" />
+        <PaperPlaneLoader size="md" />
       </div>
     )
   }
@@ -150,7 +155,7 @@ function TapWaitPage(): JSX.Element {
       <header className="max-w-md mx-auto mb-6">
         <a href="/zuri-tap" className="text-sm text-gray-500 hover:text-zuri-orange">← Zuri Tap</a>
         <h1 className="text-xl font-bold text-zuri-black mt-2">Zuri Tap</h1>
-        <p className="text-sm text-gray-600 mt-1">Hold your device near the business to receive a payment request.</p>
+        <p className="text-sm text-gray-600 mt-1">Join the room with the code from the business. Wherever you are, you&apos;ll see the request.</p>
       </header>
 
       <div className="max-w-md mx-auto space-y-6">

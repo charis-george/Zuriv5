@@ -6,9 +6,10 @@ import {
   LineChart, Line, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts'
-import { Business, Order, SalesSummary, SalesByDate, PopularItem, PeakHour, ProfitMargin, QRCodeData, MenuCategory, MenuItem, PLAN_PRICES, PLAN_PRICES_YEARLY_AS_MONTHLY, PLAN_LABELS, YEARLY_DISCOUNT_PCT, type BillingInterval } from '../types'
+import { Business, Order, SalesSummary, SalesByDate, PopularItem, PeakHour, ProfitMargin, QRCodeData, MenuCategory, MenuItem, PLAN_LABELS } from '../types'
 import type { CustomerIntelligence } from '../types'
 import type { MarketInsights } from '../types'
+import { PaperPlaneLoader } from '../components/PaperPlaneLoader'
 
 type TabType = 'orders' | 'analytics' | 'menu' | 'qr' | 'payment' | 'ai'
 type OrderStatus = 'pending' | 'preparing' | 'ready' | 'completed' | 'cancelled'
@@ -18,6 +19,12 @@ interface Category {
   name: string
   displayOrder: number
 }
+
+const WS_URL =
+  (import.meta.env.VITE_WS_URL as string) ||
+  (typeof window !== 'undefined' && window.location.hostname === 'localhost'
+    ? 'http://localhost:3000'
+    : (typeof window !== 'undefined' ? window.location.origin : ''))
 
 function BusinessDashboard(): JSX.Element {
   const { businessId } = useParams<{ businessId: string }>()
@@ -59,15 +66,6 @@ function BusinessDashboard(): JSX.Element {
     name: '',
     displayOrder: 0
   })
-  const [banks, setBanks] = useState<{ code: string; name: string }[]>([])
-  const [bankForm, setBankForm] = useState({ bankCode: '', bankName: '', accountNumber: '', accountName: '' })
-  const [bankResolving, setBankResolving] = useState(false)
-  const [bankResolveError, setBankResolveError] = useState<string | null>(null)
-  const [bankPassword, setBankPassword] = useState('')
-  const [bankSaving, setBankSaving] = useState(false)
-  const [showBankForm, setShowBankForm] = useState(true)
-  const [upgradeLoading, setUpgradeLoading] = useState<string | null>(null)
-  const [upgradeBillingInterval, setUpgradeBillingInterval] = useState<BillingInterval>('monthly')
   const [aiInsightLoading, setAiInsightLoading] = useState(false)
   const [aiInsight, setAiInsight] = useState<string | null>(null)
   const [aiCustomQuery, setAiCustomQuery] = useState('')
@@ -79,6 +77,15 @@ function BusinessDashboard(): JSX.Element {
   const [logoUploadError, setLogoUploadError] = useState<string | null>(null)
   const [logoUrlInput, setLogoUrlInput] = useState('')
   const logoInputRef = useRef<HTMLInputElement>(null)
+  const [profileOpen, setProfileOpen] = useState(false)
+  const [logoMenuOpen, setLogoMenuOpen] = useState(false)
+  const [showChangePasswordModal, setShowChangePasswordModal] = useState(false)
+  const [changePasswordCurrent, setChangePasswordCurrent] = useState('')
+  const [changePasswordNew, setChangePasswordNew] = useState('')
+  const [changePasswordConfirm, setChangePasswordConfirm] = useState('')
+  const [changePasswordError, setChangePasswordError] = useState<string | null>(null)
+  const [changePasswordLoading, setChangePasswordLoading] = useState(false)
+  const logoMenuRef = useRef<HTMLDivElement>(null)
 
   const [zuriTapOn, setZuriTapOn] = useState(false)
   const [tapCode, setTapCode] = useState<string | null>(null)
@@ -97,8 +104,12 @@ function BusinessDashboard(): JSX.Element {
       navigate('/business/login', { replace: true })
       return
     }
+    if (localStorage.getItem('zuri_onboarding_done_' + businessId) !== '1') {
+      navigate(`/business/onboarding/${businessId}`, { replace: true })
+      return
+    }
 
-    // Fetch business info (then conditionally fetch analytics based on plan)
+    // Fetch business info
     axios.get<Business>(`/api/business/${businessId}`)
       .then(res => {
         setBusiness(res.data)
@@ -126,13 +137,8 @@ function BusinessDashboard(): JSX.Element {
     // Fetch menu
     fetchMenu()
 
-    // Fetch banks list for payment tab
-    axios.get<{ code: string; name: string }[]>('/api/banks')
-      .then(res => setBanks(Array.isArray(res.data) ? res.data : []))
-      .catch(() => {})
-
     // Connect to socket for real-time updates
-    const socket: Socket = io('http://localhost:3000')
+    const socket: Socket = io(WS_URL)
     socket.emit('join-business', { businessId, token })
 
     socket.on('new-order', () => {
@@ -157,8 +163,13 @@ function BusinessDashboard(): JSX.Element {
   }, [businessId])
 
   useEffect(() => {
-    if (business?.bankAccount?.accountName) setShowBankForm(false)
-  }, [business?.bankAccount?.accountName])
+    if (!logoMenuOpen) return
+    const close = (e: MouseEvent) => {
+      if (logoMenuRef.current && !logoMenuRef.current.contains(e.target as Node)) setLogoMenuOpen(false)
+    }
+    document.addEventListener('click', close)
+    return () => document.removeEventListener('click', close)
+  }, [logoMenuOpen])
 
   useEffect(() => {
     if (!businessId) return
@@ -380,18 +391,15 @@ function BusinessDashboard(): JSX.Element {
   if (loading) {
     return (
       <div className="min-h-screen bg-zuri-light flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-zuri-yellow mx-auto mb-4"></div>
-          <p className="text-zuri-black">Loading dashboard...</p>
-        </div>
+        <PaperPlaneLoader size="lg" label="Loading dashboard..." />
       </div>
     )
   }
 
   if (!businessId || businessId === 'undefined') {
     return (
-      <div className="min-h-screen bg-zuri-light flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-8 max-w-md w-full text-center">
+      <div className="min-h-screen bg-white flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-8 max-w-md w-full text-center">
           <h1 className="text-xl font-bold text-zuri-black mb-2">Invalid dashboard</h1>
           <p className="text-gray-500 text-sm mb-6">Please log in again.</p>
           <a href="/business/login" className="inline-block bg-zuri-orange text-white px-5 py-2.5 rounded-xl font-semibold text-sm hover:bg-zuri-orange-dark transition">
@@ -413,87 +421,239 @@ function BusinessDashboard(): JSX.Element {
         <div className="max-w-6xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              {business?.logoUrl && (
-                <img src={business.logoUrl} alt="" className="h-12 w-12 rounded-xl object-cover border border-gray-100" />
-              )}
+              <div className="relative" ref={logoMenuRef}>
+                <button
+                  type="button"
+                  onClick={() => setLogoMenuOpen((open) => !open)}
+                  className="flex items-center justify-center h-12 w-12 rounded-xl border border-gray-100 overflow-hidden bg-gray-50 hover:bg-gray-100 transition focus:outline-none focus:ring-2 focus:ring-zuri-orange/50"
+                >
+                  {business?.logoUrl ? (
+                    <img src={business.logoUrl} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <span className="text-lg font-bold text-gray-500">
+                      {business?.name ? business.name.charAt(0).toUpperCase() : 'B'}
+                    </span>
+                  )}
+                </button>
+                {logoMenuOpen && (
+                  <div className="absolute left-0 top-full mt-1 py-1 min-w-[160px] bg-white rounded-xl shadow-lg border border-gray-200 z-40">
+                    {business?.plan && business.plan !== 'free' ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowLogoModal(true)
+                            setLogoUrlInput(business?.logoUrl || '')
+                            setLogoUploadError(null)
+                            setLogoMenuOpen(false)
+                          }}
+                          className="w-full px-4 py-2 text-sm text-left text-gray-700 hover:bg-gray-50"
+                        >
+                          Change logo
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!businessId) return
+                            setLogoMenuOpen(false)
+                            try {
+                              await axios.patch(`/api/business/${businessId}`, { logo_url: '' }, { headers: getAuthHeaders() })
+                              setBusiness(prev => prev ? { ...prev, logoUrl: null } : null)
+                            } catch (err) {
+                              console.error(err)
+                              alert('Failed to remove logo.')
+                            }
+                          }}
+                          className="w-full px-4 py-2 text-sm text-left text-gray-700 hover:bg-gray-50"
+                        >
+                          Remove logo
+                        </button>
+                      </>
+                    ) : (
+                      <a
+                        href="/#pricing"
+                        onClick={() => setLogoMenuOpen(false)}
+                        className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                      >
+                        Upgrade to Starter to add a logo
+                      </a>
+                    )}
+                  </div>
+                )}
+              </div>
               <div>
                 <h1 className="text-xl font-bold text-zuri-black">{business?.name || 'Dashboard'}</h1>
                 <p className="text-sm text-gray-500">{business?.email}</p>
               </div>
-              {business?.plan && business.plan !== 'free' && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowLogoModal(true)
-                    setLogoUrlInput(business?.logoUrl || '')
-                    setLogoUploadError(null)
-                  }}
-                  className="text-sm font-medium text-zuri-orange hover:text-zuri-orange-dark transition"
-                >
-                  {business?.logoUrl ? 'Change logo' : 'Add logo'}
-                </button>
-              )}
-              {business?.plan === 'free' && (
-                <span className="text-xs text-gray-500">Upgrade to Starter to add a logo</span>
-              )}
             </div>
             <div className="flex items-center gap-4">
-              {(business?.plan === 'growth' || business?.plan === 'pro' || business?.plan === 'zuri_plus' || business?.plan === 'enterprise' || business?.plan === 'basic' || business?.plan === 'advanced') && (
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-zuri-black">Zuri Tap</span>
+              {business?.plan && (
+                <span className="hidden sm:inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-orange-50 text-zuri-orange border border-orange-100">
+                  {PLAN_LABELS[business.plan]} plan
+                </span>
+              )}
+              <div className="relative">
                 <button
                   type="button"
-                  role="switch"
-                  aria-checked={!!tapCode}
-                  onClick={async () => {
-                    if (!businessId) return
-                    setTapRoomLoading(true)
-                    try {
-                      if (tapCode) {
-                        await axios.post('/api/tap/room/off', { businessId }, { headers: getAuthHeaders() })
-                        setTapCode(null)
-                        setTapExpiresAt(null)
-                        setZuriTapOn(false)
-                        setTapWaitingOrderId(null)
-                      } else {
-                        const { data } = await axios.post<{ code: string; expiresAt: string }>('/api/tap/room/on', { businessId }, { headers: getAuthHeaders() })
-                        setTapCode(data.code)
-                        setTapExpiresAt(data.expiresAt)
-                        setZuriTapOn(true)
-                        setTapSelections({})
-                      }
-                    } catch (e) {
-                      console.error(e)
-                    } finally {
-                      setTapRoomLoading(false)
-                    }
-                  }}
-                  disabled={tapRoomLoading}
-                  className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-zuri-orange focus:ring-offset-2 disabled:opacity-50 ${tapCode ? 'bg-zuri-orange' : 'bg-gray-200'}`}
+                  onClick={() => setProfileOpen((open) => !open)}
+                  className="flex items-center justify-center w-10 h-10 rounded-full bg-zuri-black text-white font-semibold text-sm border border-gray-200 hover:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-zuri-orange"
                 >
-                  <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition ${tapCode ? 'translate-x-5' : 'translate-x-1'}`} />
+                  {business?.name ? business.name.charAt(0).toUpperCase() : 'B'}
                 </button>
+                {profileOpen && (
+                  <div className="absolute right-0 mt-3 w-72 bg-white rounded-2xl shadow-xl border border-gray-200 z-40">
+                    <div className="px-4 py-3 border-b border-gray-100">
+                      <p className="text-sm font-semibold text-zuri-black truncate">{business?.name || 'Business'}</p>
+                      <p className="text-xs text-gray-500 truncate">{business?.email}</p>
+                      {business?.plan && (
+                        <span className="inline-flex mt-2 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-orange-50 text-zuri-orange border border-orange-100">
+                          {PLAN_LABELS[business.plan]} account
+                        </span>
+                      )}
+                    </div>
+                    <div className="py-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigate('/')
+                          setProfileOpen(false)
+                        }}
+                        className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 text-left"
+                      >
+                        <span>Home</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (businessId) navigate(`/business/dashboard/${businessId}/payment`)
+                          setProfileOpen(false)
+                        }}
+                        className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 text-left"
+                      >
+                        <span>Payouts & billing</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (businessId) navigate(`/business/dashboard/${businessId}/payment`)
+                          setProfileOpen(false)
+                        }}
+                        className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 text-left"
+                      >
+                        <span>View plans & pricing</span>
+                      </button>
+                      {business?.plan && business.plan !== 'free' && (
+                        <div className="px-4 py-2 text-xs text-gray-500">
+                          Current tier: <span className="font-semibold text-zuri-black">{PLAN_LABELS[business.plan]}</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="border-t border-gray-100 py-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowChangePasswordModal(true)
+                          setChangePasswordCurrent('')
+                          setChangePasswordNew('')
+                          setChangePasswordConfirm('')
+                          setChangePasswordError(null)
+                          setProfileOpen(false)
+                        }}
+                        className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 text-left"
+                      >
+                        <span>Change password</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          localStorage.removeItem('zuri_business_token')
+                          setProfileOpen(false)
+                          navigate('/business/login', { replace: true })
+                        }}
+                        className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 text-left"
+                      >
+                        <span>Log out</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
-              )}
-              {(business?.plan === 'free' || business?.plan === 'starter') && (
-                <a href="/#pricing" className="text-sm text-gray-500 hover:text-zuri-orange transition">
-                  Upgrade to Growth for Zuri Tap
-                </a>
-              )}
-              <a href="/" className="text-sm font-medium text-gray-600 hover:text-zuri-orange transition">
-                Home
-              </a>
             </div>
           </div>
         </div>
       </header>
 
+      {(business?.plan === 'growth' ||
+        business?.plan === 'pro' ||
+        business?.plan === 'zuri_plus' ||
+        business?.plan === 'enterprise' ||
+        business?.plan === 'basic' ||
+        business?.plan === 'advanced') && (
+        <div className="bg-white border-b border-gray-200">
+          <div className="max-w-6xl mx-auto px-4 py-3 flex flex-col items-center gap-2">
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-medium text-zuri-black">Zuri Tap</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={!!tapCode}
+                onClick={async () => {
+                  if (!businessId) return
+                  setTapRoomLoading(true)
+                  try {
+                    if (tapCode) {
+                      await axios.post('/api/tap/room/off', { businessId }, { headers: getAuthHeaders() })
+                      setTapCode(null)
+                      setTapExpiresAt(null)
+                      setZuriTapOn(false)
+                      setTapWaitingOrderId(null)
+                    } else {
+                      const { data } = await axios.post<{ code: string; expiresAt: string }>('/api/tap/room/on', { businessId }, { headers: getAuthHeaders() })
+                      setTapCode(data.code)
+                      setTapExpiresAt(data.expiresAt)
+                      setZuriTapOn(true)
+                      setTapSelections({})
+                    }
+                  } catch (e) {
+                    console.error(e)
+                  } finally {
+                    setTapRoomLoading(false)
+                  }
+                }}
+                disabled={tapRoomLoading}
+                className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-zuri-orange focus:ring-offset-2 disabled:opacity-50 ${
+                  tapCode ? 'bg-zuri-orange' : 'bg-gray-200'
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition ${
+                    tapCode ? 'translate-x-5' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+            <p className="text-xs text-gray-500">
+              Turn Zuri Tap on to send Tap requests from your menu to any customers who have joined this room.
+            </p>
+          </div>
+        </div>
+      )}
+      {(business?.plan === 'free' || business?.plan === 'starter') && (
+        <div className="bg-white border-b border-gray-200">
+          <div className="max-w-6xl mx-auto px-4 py-3 flex justify-center">
+            <a href="/#pricing" className="text-xs sm:text-sm text-gray-500 hover:text-zuri-orange transition">
+              Upgrade to Growth or above to unlock Zuri Tap.
+            </a>
+          </div>
+        </div>
+      )}
+
       {/* Zuri Tap hotspot panel - when Tap is on */}
       {tapCode && (
         <div className="bg-zuri-black text-white border-b border-gray-800">
           <div className="max-w-6xl mx-auto px-4 py-6">
-            <h2 className="text-lg font-bold mb-2">Zuri Tap – Send to nearby</h2>
-            <p className="text-sm text-gray-300 mb-4">Customer enters this code on their device to receive your payment request.</p>
+            <h2 className="text-lg font-bold mb-2">Zuri Tap – Live room</h2>
+            <p className="text-sm text-gray-300 mb-4">Customer enters this code on their Zuri Tap screen to join your room and see payment requests.</p>
             <p className="text-3xl font-mono font-bold tracking-widest mb-6">{tapCode}</p>
             <p className="text-xs text-gray-400 mb-4">Select items from your menu, then tap Send. When the customer is ready, they’ll see the request and pay with their Zuri Tap password.</p>
             <div className="grid md:grid-cols-2 gap-6">
@@ -558,7 +718,7 @@ function BusinessDashboard(): JSX.Element {
                         }}
                         className="px-4 py-2 bg-zuri-orange text-white rounded-xl text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        {tapWaitingOrderId ? 'Waiting for customer to pay…' : tapSending ? 'Sending…' : 'Send to nearby'}
+                        {tapWaitingOrderId ? 'Waiting for customer to pay…' : tapSending ? 'Sending…' : 'Send to room'}
                       </button>
                     </div>
                   )
@@ -659,11 +819,143 @@ function BusinessDashboard(): JSX.Element {
         </div>
       )}
 
+      {/* Change password modal */}
+      {showChangePasswordModal && businessId && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-zuri-black">Change password</h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowChangePasswordModal(false)
+                  setChangePasswordCurrent('')
+                  setChangePasswordNew('')
+                  setChangePasswordConfirm('')
+                  setChangePasswordError(null)
+                }}
+                className="text-gray-400 hover:text-zuri-black transition"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+            <p className="text-sm text-gray-500 mb-4">Enter your current password, then choose a new password.</p>
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault()
+                setChangePasswordError(null)
+                if (!changePasswordCurrent.trim()) {
+                  setChangePasswordError('Current password is required.')
+                  return
+                }
+                if (!changePasswordNew.trim()) {
+                  setChangePasswordError('New password is required.')
+                  return
+                }
+                if (changePasswordNew.length < 6) {
+                  setChangePasswordError('New password must be at least 6 characters.')
+                  return
+                }
+                if (changePasswordNew !== changePasswordConfirm) {
+                  setChangePasswordError('New password and confirmation do not match.')
+                  return
+                }
+                setChangePasswordLoading(true)
+                try {
+                  await axios.patch(
+                    `/api/business/${businessId}/change-password`,
+                    { current_password: changePasswordCurrent, new_password: changePasswordNew },
+                    { headers: getAuthHeaders() }
+                  )
+                  setShowChangePasswordModal(false)
+                  setChangePasswordCurrent('')
+                  setChangePasswordNew('')
+                  setChangePasswordConfirm('')
+                } catch (err) {
+                  const msg = axios.isAxiosError(err) && err.response?.data?.error
+                    ? err.response.data.error
+                    : 'Failed to change password. Try again.'
+                  setChangePasswordError(msg)
+                } finally {
+                  setChangePasswordLoading(false)
+                }
+              }}
+              className="space-y-4"
+            >
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Current password</label>
+                <input
+                  type="password"
+                  value={changePasswordCurrent}
+                  onChange={(e) => setChangePasswordCurrent(e.target.value)}
+                  placeholder="Enter current password"
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50 focus:border-zuri-orange"
+                  autoComplete="current-password"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">New password</label>
+                <input
+                  type="password"
+                  value={changePasswordNew}
+                  onChange={(e) => setChangePasswordNew(e.target.value)}
+                  placeholder="At least 6 characters"
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50 focus:border-zuri-orange"
+                  autoComplete="new-password"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Confirm new password</label>
+                <input
+                  type="password"
+                  value={changePasswordConfirm}
+                  onChange={(e) => setChangePasswordConfirm(e.target.value)}
+                  placeholder="Confirm new password"
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50 focus:border-zuri-orange"
+                  autoComplete="new-password"
+                />
+              </div>
+              {changePasswordError && (
+                <p className="text-sm text-red-600">{changePasswordError}</p>
+              )}
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowChangePasswordModal(false)
+                    setChangePasswordCurrent('')
+                    setChangePasswordNew('')
+                    setChangePasswordConfirm('')
+                    setChangePasswordError(null)
+                  }}
+                  className="flex-1 px-4 py-2.5 border border-gray-200 rounded-xl text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={changePasswordLoading}
+                  className="flex-1 px-4 py-2.5 bg-zuri-orange text-white rounded-xl text-sm font-semibold hover:bg-zuri-orange-dark disabled:opacity-50"
+                >
+                  {changePasswordLoading ? 'Updating…' : 'Update password'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       <div className="max-w-6xl mx-auto px-4 py-8">
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="bg-white rounded-2xl shadow-sm border border-transparent overflow-hidden">
           <div className="flex border-b border-gray-100 overflow-x-auto">
             <button
-              onClick={() => setActiveTab('orders')}
+              onClick={() => {
+                setActiveTab('orders')
+                fetchOrders()
+                if (business?.plan && business.plan !== 'free' && business.plan !== 'starter') {
+                  fetchAnalytics()
+                }
+              }}
               className={`flex-1 min-w-0 px-4 py-3 text-sm font-semibold transition ${
                 activeTab === 'orders'
                   ? 'text-zuri-orange border-b-2 border-zuri-orange bg-orange-50/30'
@@ -703,16 +995,6 @@ function BusinessDashboard(): JSX.Element {
               }`}
             >
               QR Code
-            </button>
-            <button
-              onClick={() => setActiveTab('payment')}
-              className={`flex-1 min-w-0 px-4 py-3 text-sm font-semibold transition ${
-                activeTab === 'payment'
-                  ? 'text-zuri-orange border-b-2 border-zuri-orange bg-orange-50/30'
-                  : 'text-gray-600 hover:text-zuri-black'
-              }`}
-            >
-              Payment
             </button>
             {(business?.plan === 'pro' || business?.plan === 'zuri_plus' || business?.plan === 'enterprise') && (
               <button
@@ -839,7 +1121,7 @@ function BusinessDashboard(): JSX.Element {
                   </div>
                 </div>
 
-                <div className="bg-white rounded-xl p-6 border border-gray-100">
+                <div className="bg-white rounded-xl p-6 border border-gray-200">
                   <h3 className="text-lg font-bold text-zuri-black mb-4">Sales over time</h3>
                   <ResponsiveContainer width="100%" height={300}>
                     <LineChart data={Array.isArray(salesData) ? salesData : []}>
@@ -856,7 +1138,7 @@ function BusinessDashboard(): JSX.Element {
 
                 <div className="grid md:grid-cols-2 gap-6">
                   {/* Popular Items */}
-                  <div className="bg-white rounded-xl p-6 border border-gray-100">
+                  <div className="bg-white rounded-xl p-6 border border-gray-200">
                     <h3 className="text-lg font-bold text-zuri-black mb-4">Most popular items</h3>
                     <ResponsiveContainer width="100%" height={300}>
                       <BarChart data={Array.isArray(popularItems) ? popularItems.slice(0, 5) : []}>
@@ -869,7 +1151,7 @@ function BusinessDashboard(): JSX.Element {
                     </ResponsiveContainer>
                   </div>
 
-                  <div className="bg-white rounded-xl p-6 border border-gray-100">
+                  <div className="bg-white rounded-xl p-6 border border-gray-200">
                     <h3 className="text-lg font-bold text-zuri-black mb-4">Peak hours</h3>
                     <ResponsiveContainer width="100%" height={300}>
                       <BarChart data={Array.isArray(peakHours) ? peakHours : []}>
@@ -883,7 +1165,7 @@ function BusinessDashboard(): JSX.Element {
                   </div>
                 </div>
 
-                <div className="bg-white rounded-xl p-6 border border-gray-100">
+                <div className="bg-white rounded-xl p-6 border border-gray-200">
                   <h3 className="text-lg font-bold text-zuri-black mb-4">Profit margins</h3>
                   <div className="overflow-x-auto">
                     <table className="w-full">
@@ -1022,7 +1304,7 @@ function BusinessDashboard(): JSX.Element {
                         <h3 className="text-lg font-bold text-zuri-black mb-4">{category.name}</h3>
                         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
                           {category.items.map(item => (
-                            <div key={item.id} className="bg-white rounded-xl p-4 border border-gray-100">
+                            <div key={item.id} className="bg-white rounded-xl p-4 border border-gray-200">
                               {item.imageUrl && (
                                 <img
                                   src={item.imageUrl}
@@ -1359,7 +1641,7 @@ function BusinessDashboard(): JSX.Element {
                 <h2 className="text-lg font-bold text-zuri-black mb-6">Your QR code</h2>
                 {qrCode ? (
                   <div>
-                    <div className="bg-white p-6 rounded-xl inline-block mb-6 border border-gray-100">
+                    <div className="bg-white p-6 rounded-xl inline-block mb-6 border border-gray-200">
                       <img src={qrCode.qrCodeDataUrl} alt="QR Code" className="w-56 h-56" />
                     </div>
                     <p className="text-gray-500 text-sm mb-4">Print and place on your tables</p>
@@ -1375,211 +1657,6 @@ function BusinessDashboard(): JSX.Element {
                 ) : (
                   <p className="text-gray-500 text-sm">Loading QR code...</p>
                 )}
-              </div>
-            )}
-
-            {/* Payment Tab */}
-            {activeTab === 'payment' && (
-              <div className="max-w-2xl">
-                <h2 className="text-lg font-bold text-zuri-black mb-6">Get paid</h2>
-                <p className="text-gray-500 text-sm mb-6">
-                  Add your Nigerian bank account to receive payouts. We verify the account name so payments go to the right place.
-                </p>
-                {business?.bankAccount?.accountName ? (
-                  <div className="mb-8 p-5 rounded-xl bg-orange-50/50 border border-orange-100">
-                    <p className="font-semibold text-zuri-black text-sm">Payout account</p>
-                    <p className="text-gray-600 text-sm mt-1">{business.bankAccount.bankName} — {business.bankAccount.accountNumberMasked}</p>
-                    <p className="text-gray-600 text-sm">{business.bankAccount.accountName}</p>
-                    <button
-                      type="button"
-                      onClick={() => { setShowBankForm(true); setBankForm({ bankCode: '', bankName: '', accountNumber: '', accountName: '' }); setBankResolveError(null); setBankPassword('') }}
-                      className="mt-3 text-sm font-semibold text-zuri-orange hover:underline"
-                    >
-                      Change bank details
-                    </button>
-                  </div>
-                ) : null}
-                {showBankForm ? (
-                <form
-                  onSubmit={async (e) => {
-                    e.preventDefault()
-                    if (!businessId || !bankForm.bankCode || !bankForm.bankName || !bankForm.accountNumber.trim() || !bankForm.accountName.trim()) {
-                      alert('Select bank, enter account number, and verify to show account name before saving.')
-                      return
-                    }
-                    if (!bankPassword.trim()) {
-                      alert('Enter your Zuri business account password to save bank details.')
-                      return
-                    }
-                    setBankSaving(true)
-                    try {
-                      await axios.patch(`/api/business/${businessId}`, {
-                        bank_code: bankForm.bankCode,
-                        bank_name: bankForm.bankName,
-                        account_number: bankForm.accountNumber.trim(),
-                        account_name: bankForm.accountName.trim(),
-                        password: bankPassword.trim()
-                      }, { headers: getAuthHeaders() })
-                      const { data } = await axios.get<Business>(`/api/business/${businessId}`)
-                      setBusiness(data)
-                      setBankForm({ bankCode: '', bankName: '', accountNumber: '', accountName: '' })
-                      setBankPassword('')
-                      setShowBankForm(false)
-                      alert('Bank details saved.')
-                    } catch (err) {
-                      if (axios.isAxiosError(err) && err.response?.status === 401) {
-                        alert(err.response?.data?.error || 'Incorrect password. Enter your Zuri business account password.')
-                      } else {
-                        alert('Failed to save. Try again.')
-                      }
-                    } finally {
-                      setBankSaving(false)
-                    }
-                  }}
-                  className="space-y-4 mb-8"
-                >
-                  <div>
-                    <label className="block text-sm font-medium text-gray-600 mb-1">Bank</label>
-                    <select
-                      value={bankForm.bankCode}
-                      onChange={(e) => {
-                        const option = e.target.selectedOptions?.[0]
-                        setBankForm(f => ({ ...f, bankCode: e.target.value, bankName: option?.text ?? '' }))
-                      }}
-                      required
-                      className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50 focus:border-zuri-orange"
-                    >
-                      <option value="">Select bank</option>
-                      {banks.map((b) => (
-                        <option key={b.code} value={b.code}>{b.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-600 mb-1">Account number</label>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      value={bankForm.accountNumber}
-                      onChange={(e) => setBankForm(f => ({ ...f, accountNumber: e.target.value.replace(/\D/g, '').slice(0, 16) }))}
-                      placeholder="8–16 digits (e.g. 10 for Nigerian NUBAN)"
-                      maxLength={16}
-                      className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50 focus:border-zuri-orange"
-                    />
-                  </div>
-                  <div>
-                    <button
-                      type="button"
-                      disabled={!bankForm.bankCode || !bankForm.accountNumber.trim() || bankForm.accountNumber.trim().length < 8 || bankForm.accountNumber.trim().length > 16 || bankResolving}
-                      onClick={async () => {
-                        setBankResolveError(null)
-                        setBankResolving(true)
-                        try {
-                          const { data } = await axios.get<{ account_name: string }>('/api/banks/resolve', {
-                            params: { bank_code: bankForm.bankCode, account_number: bankForm.accountNumber.trim() }
-                          })
-                          setBankForm(f => ({ ...f, accountName: data.account_name || '' }))
-                        } catch (err: unknown) {
-                          const ax = err as { response?: { data?: { error?: string } } }
-                          const msg = ax.response?.data?.error || 'Could not verify account. Check bank and account number.'
-                          setBankResolveError(msg)
-                          alert(msg)
-                        } finally {
-                          setBankResolving(false)
-                        }
-                      }}
-                      className="bg-zuri-black text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-gray-800 transition disabled:opacity-50"
-                    >
-                      {bankResolving ? 'Verifying…' : 'Verify account'}
-                    </button>
-                  </div>
-                  {bankResolveError ? (
-                    <div className="p-3 rounded-xl bg-amber-50 border border-amber-200">
-                      <p className="text-sm text-amber-800">{bankResolveError}</p>
-                      {(bankResolveError.includes('test') || bankResolveError.includes('limit') || bankResolveError.includes('001')) && (
-                        <p className="text-xs text-amber-700 mt-1">Tip: In test mode, use <strong>Zenith Bank</strong> (code 057) with test account number <strong>0000000000</strong> to avoid the 3-per-day live resolve limit. Or switch to live keys for real accounts.</p>
-                      )}
-                    </div>
-                  ) : null}
-                  {bankForm.accountName ? (
-                    <div className="p-3 rounded-xl bg-green-50 border border-green-100">
-                      <p className="text-sm font-semibold text-green-800">Account name: {bankForm.accountName}</p>
-                    </div>
-                  ) : null}
-                  {bankForm.accountName ? (
-                    <div>
-                      <label className="block text-sm font-medium text-gray-600 mb-1">Confirm with your Zuri business account password</label>
-                      <input
-                        type="password"
-                        value={bankPassword}
-                        onChange={(e) => setBankPassword(e.target.value)}
-                        placeholder="Enter your account password"
-                        className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50 focus:border-zuri-orange"
-                        autoComplete="current-password"
-                      />
-                      <p className="text-xs text-gray-500 mt-1">Required to save payout bank account.</p>
-                    </div>
-                  ) : null}
-                  <button
-                    type="submit"
-                    disabled={bankSaving || !bankForm.accountName || !bankPassword.trim()}
-                    className="bg-zuri-orange text-white px-5 py-2.5 rounded-xl text-sm font-semibold hover:bg-zuri-orange-dark transition disabled:opacity-50"
-                  >
-                    {bankSaving ? 'Saving…' : 'Save bank details'}
-                  </button>
-                </form>
-                ) : null}
-                <hr className="border-gray-100 my-8" />
-                <h3 className="text-lg font-bold text-zuri-black mb-4">Upgrade plan</h3>
-                <p className="text-gray-500 text-sm mb-4">You’ll be redirected to Paystack to pay securely.</p>
-                <div className="flex items-center gap-2 mb-4">
-                  <span className="text-sm font-semibold text-zuri-black">Billing:</span>
-                  <button
-                    type="button"
-                    onClick={() => setUpgradeBillingInterval('monthly')}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition ${upgradeBillingInterval === 'monthly' ? 'bg-zuri-orange text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                  >
-                    Monthly
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setUpgradeBillingInterval('yearly')}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition ${upgradeBillingInterval === 'yearly' ? 'bg-zuri-orange text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                  >
-                    Yearly (Save {YEARLY_DISCOUNT_PCT}%)
-                  </button>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {(['starter', 'growth', 'pro', 'zuri_plus'] as const).map((plan) => (
-                    <button
-                      key={plan}
-                      disabled={business?.plan === plan || upgradeLoading !== null}
-                      onClick={async () => {
-                        if (!businessId || !business?.email) return
-                        setUpgradeLoading(plan)
-                        try {
-                          const { data } = await axios.post<{ authorizationUrl: string }>('/api/subscription/initialize', {
-                            businessId,
-                            plan,
-                            email: business.email,
-                            callbackUrl: `${window.location.origin}/upgrade-done`,
-                            interval: upgradeBillingInterval
-                          }, { headers: getAuthHeaders() })
-                          if (data?.authorizationUrl) window.location.href = data.authorizationUrl
-                          else alert('Failed to start payment')
-                        } catch {
-                          alert('Failed to start payment')
-                        } finally {
-                          setUpgradeLoading(null)
-                        }
-                      }}
-                      className="bg-zuri-orange text-zuri-black px-4 py-2 rounded-xl text-sm font-semibold hover:bg-zuri-orange-dark hover:text-white transition disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {upgradeLoading === plan ? 'Redirecting…' : `Upgrade to ${PLAN_LABELS[plan]} — ${upgradeBillingInterval === 'monthly' ? PLAN_PRICES[plan] + '/mo' : PLAN_PRICES_YEARLY_AS_MONTHLY[plan] + '/mo'}`}
-                    </button>
-                  ))}
-                </div>
-                <p className="text-gray-500 text-xs mt-4">A 2.5% transaction fee applies on every customer purchase.</p>
               </div>
             )}
 

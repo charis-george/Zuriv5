@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams, Link } from 'react-router-dom'
 import axios from 'axios'
+import { PaperPlaneLoader } from '../components/PaperPlaneLoader'
 
 function UpgradeDone(): JSX.Element {
   const [searchParams] = useSearchParams()
@@ -35,10 +36,7 @@ function UpgradeDone(): JSX.Element {
   if (status === 'loading') {
     return (
       <div className="min-h-screen bg-[#f5f5f5] flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-10 w-10 border-2 border-zuri-orange border-t-transparent mx-auto mb-4" />
-          <p className="text-zuri-black text-sm">Verifying...</p>
-        </div>
+        <PaperPlaneLoader size="md" label="Verifying..." />
       </div>
     )
   }

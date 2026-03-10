@@ -44,7 +44,7 @@ function ZuriTapPage(): JSX.Element {
             </div>
             <h2 className="text-xl font-bold text-zuri-black mb-3">For Businesses</h2>
             <p className="text-gray-600 text-sm mb-6">
-              Turn on Zuri Tap and show the 6-character code. Select items from your menu and send to nearby. Customers with a Zuri Tap account enter the code and pay with their password.
+              Turn on Zuri Tap and show the 6-character code. Select items from your menu and send requests to any Zuri Tap customers who have joined that room — whether they&apos;re nearby or remote.
             </p>
             <Link
               to="/business/login"

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import { SavedCard } from '../types'
+import { PaperPlaneLoader } from '../components/PaperPlaneLoader'
 
 interface TapSession {
   token: string
@@ -98,7 +99,7 @@ function TapPayPage(): JSX.Element {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#fefbf5]">
-        <div className="animate-spin rounded-full h-10 w-10 border-2 border-zuri-orange border-t-transparent" />
+        <PaperPlaneLoader size="md" />
       </div>
     )
   }

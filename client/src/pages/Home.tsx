@@ -1,8 +1,35 @@
 import { Link } from 'react-router-dom'
-import { useState, FormEvent } from 'react'
+import { useState, FormEvent, useEffect, useRef } from 'react'
 import { PLAN_PRICES, PLAN_PRICES_YEARLY_AS_MONTHLY, YEARLY_DISCOUNT_PCT, type BillingInterval } from '../types'
 
 const CONTACT_EMAIL = 'info@zuriqo.com'
+
+function useScrollReveal(): [React.RefObject<HTMLDivElement>, boolean] {
+  const ref = useRef<HTMLDivElement>(null)
+  const [visible, setVisible] = useState(false)
+
+  useEffect(() => {
+    const node = ref.current
+    if (!node) return
+
+    const observer = new IntersectionObserver(
+      entries => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            setVisible(true)
+            observer.unobserve(entry.target)
+          }
+        })
+      },
+      { threshold: 0.18 }
+    )
+
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
+
+  return [ref, visible]
+}
 
 function Home(): JSX.Element {
   const [showBetaForm, setShowBetaForm] = useState<boolean>(false)
@@ -11,6 +38,13 @@ function Home(): JSX.Element {
   const [email, setEmail] = useState<string>('')
   const [sending, setSending] = useState<boolean>(false)
   const [submitMessage, setSubmitMessage] = useState<string | null>(null)
+
+  const [heroRef, heroVisible] = useScrollReveal()
+  const [featuresRef, featuresVisible] = useScrollReveal()
+  const [howItWorksRef, howItWorksVisible] = useScrollReveal()
+  const [pricingRef, pricingVisible] = useScrollReveal()
+  const [faqRef, faqVisible] = useScrollReveal()
+  const [ctaRef, ctaVisible] = useScrollReveal()
 
   const openBetaForm = (source: 'beta' | 'enterprise') => {
     setFormSource(source)
@@ -99,7 +133,12 @@ function Home(): JSX.Element {
       </header>
 
       {/* Hero - Orange/yellow branded, alive */}
-      <section className="relative pt-16 pb-24 md:pt-20 md:pb-32 overflow-hidden">
+      <section
+        ref={heroRef}
+        className={`relative pt-16 pb-24 md:pt-20 md:pb-32 overflow-hidden transition-all duration-700 ease-out ${
+          heroVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
+        }`}
+      >
         <div className="absolute inset-0 bg-gradient-to-br from-zuri-light via-orange-50/50 to-amber-50/80" />
         <div className="absolute inset-0 bg-[length:64px_64px] bg-[linear-gradient(to_right,rgba(249,115,22,0.06)_1px,transparent_1px),linear-gradient(to_bottom,rgba(249,115,22,0.06)_1px,transparent_1px)]" />
         <div className="absolute top-20 right-0 w-72 h-72 bg-zuri-orange/10 rounded-full blur-3xl -translate-y-1/2" />
@@ -190,7 +229,12 @@ function Home(): JSX.Element {
       </section>
 
       {/* Everyday needs - Orange accent */}
-      <section className="py-16 md:py-20 bg-white">
+      <section
+        ref={featuresRef}
+        className={`py-16 md:py-20 bg-white transition-all duration-700 ease-out ${
+          featuresVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
+        }`}
+      >
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
           <p className="text-sm font-medium text-zuri-orange uppercase tracking-wider text-center mb-3">For your business</p>
           <h2 className="text-3xl md:text-4xl font-bold text-zuri-black text-center mb-4">
@@ -277,8 +321,13 @@ function Home(): JSX.Element {
         </div>
       </section>
 
-      {/* How It Works - Orange/yellow steps */}
-      <section className="py-20 md:py-24 bg-gradient-to-b from-white to-orange-50/30">
+      {/* How It Works - Orange/yellow steps (process-style animation) */}
+      <section
+        ref={howItWorksRef}
+        className={`py-20 md:py-24 bg-gradient-to-b from-white to-orange-50/30 transition-all duration-700 ease-out ${
+          howItWorksVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
+        }`}
+      >
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
           <p className="text-sm font-medium text-zuri-orange uppercase tracking-wider text-center mb-3">Simple flow</p>
           <h2 className="text-3xl md:text-4xl font-bold text-zuri-black text-center mb-4">
@@ -288,7 +337,12 @@ function Home(): JSX.Element {
             Three steps from scan to served.
           </p>
           <div className="grid md:grid-cols-3 gap-10">
-            <div className="text-center">
+            <div
+              className={`text-center transform transition-all duration-700 ${
+                howItWorksVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
+              }`}
+              style={{ transitionDelay: howItWorksVisible ? '40ms' : '0ms' }}
+            >
               <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-zuri-yellow to-zuri-orange flex items-center justify-center mx-auto mb-5 shadow-lg shadow-orange-200/40">
                 <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
@@ -300,7 +354,12 @@ function Home(): JSX.Element {
                 Guests scan your QR code—no app download. Your digital menu opens instantly.
               </p>
             </div>
-            <div className="text-center">
+            <div
+              className={`text-center transform transition-all duration-700 ${
+                howItWorksVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
+              }`}
+              style={{ transitionDelay: howItWorksVisible ? '140ms' : '0ms' }}
+            >
               <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-zuri-yellow to-zuri-orange flex items-center justify-center mx-auto mb-5 shadow-lg shadow-orange-200/40">
                 <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
@@ -312,7 +371,12 @@ function Home(): JSX.Element {
                 Browse menu, add to cart, pay by card or saved card. You get the order in real time.
               </p>
             </div>
-            <div className="text-center">
+            <div
+              className={`text-center transform transition-all duration-700 ${
+                howItWorksVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
+              }`}
+              style={{ transitionDelay: howItWorksVisible ? '240ms' : '0ms' }}
+            >
               <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-zuri-yellow to-zuri-orange flex items-center justify-center mx-auto mb-5 shadow-lg shadow-orange-200/40">
                 <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -328,8 +392,14 @@ function Home(): JSX.Element {
         </div>
       </section>
 
-      {/* Pricing - Orange accent */}
-      <section id="pricing" className="py-20 md:py-24 bg-gradient-to-b from-orange-50/30 to-zuri-light">
+      {/* Pricing - Orange accent with staggered cards */}
+      <section
+        id="pricing"
+        ref={pricingRef}
+        className={`py-20 md:py-24 bg-gradient-to-b from-orange-50/30 to-zuri-light transition-all duration-700 ease-out ${
+          pricingVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
+        }`}
+      >
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center mb-14">
             <p className="text-sm font-medium text-zuri-orange uppercase tracking-wider mb-3">Plans</p>
@@ -359,7 +429,12 @@ function Home(): JSX.Element {
           </div>
           <div className="grid md:grid-cols-2 lg:grid-cols-6 gap-6">
             {/* Free */}
-            <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-200 flex flex-col">
+            <div
+              className={`bg-white rounded-2xl shadow-lg p-6 border border-gray-200 flex flex-col transform transition-all duration-700 ${
+                pricingVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
+              }`}
+              style={{ transitionDelay: pricingVisible ? '40ms' : '0ms' }}
+            >
               <div className="text-center mb-6">
                 <h3 className="text-xl font-bold text-zuri-black">Free</h3>
                 <p className="text-2xl font-bold text-zuri-black mt-2">₦0</p>
@@ -393,7 +468,12 @@ function Home(): JSX.Element {
             </div>
 
             {/* Starter – green */}
-            <div className="bg-white rounded-2xl shadow-lg p-6 border-2 border-green-400 flex flex-col">
+            <div
+              className={`bg-white rounded-2xl shadow-lg p-6 border-2 border-green-400 flex flex-col transform transition-all duration-700 ${
+                pricingVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
+              }`}
+              style={{ transitionDelay: pricingVisible ? '120ms' : '0ms' }}
+            >
               <div className="text-center mb-6">
                 <span className="inline-block w-3 h-3 rounded-full bg-green-500 mb-2" aria-hidden />
                 <h3 className="text-xl font-bold text-zuri-black">Starter</h3>
@@ -435,7 +515,12 @@ function Home(): JSX.Element {
             </div>
 
             {/* Growth – blue */}
-            <div className="bg-white rounded-2xl shadow-lg p-6 border-2 border-blue-400 flex flex-col">
+            <div
+              className={`bg-white rounded-2xl shadow-lg p-6 border-2 border-blue-400 flex flex-col transform transition-all duration-700 ${
+                pricingVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
+              }`}
+              style={{ transitionDelay: pricingVisible ? '200ms' : '0ms' }}
+            >
               <div className="text-center mb-6">
                 <span className="inline-block w-3 h-3 rounded-full bg-blue-500 mb-2" aria-hidden />
                 <h3 className="text-xl font-bold text-zuri-black">Growth</h3>
@@ -473,7 +558,12 @@ function Home(): JSX.Element {
             </div>
 
             {/* Pro – purple, Recommended */}
-            <div className="bg-zuri-black text-white rounded-2xl shadow-xl p-6 border-2 border-purple-400 flex flex-col relative">
+            <div
+              className={`bg-zuri-black text-white rounded-2xl shadow-xl p-6 border-2 border-purple-400 flex flex-col relative transform transition-all duration-700 ${
+                pricingVisible ? 'opacity-100 translate-y-0 scale-[1.02]' : 'opacity-0 translate-y-6 scale-95'
+              }`}
+              style={{ transitionDelay: pricingVisible ? '280ms' : '0ms' }}
+            >
               <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-zuri-yellow text-zuri-black text-xs font-bold px-3 py-1 rounded-full">
                 Recommended
               </div>
@@ -514,7 +604,12 @@ function Home(): JSX.Element {
             </div>
 
             {/* Zuri AI – red */}
-            <div className="bg-white rounded-2xl shadow-lg p-6 border-2 border-red-400 flex flex-col">
+            <div
+              className={`bg-white rounded-2xl shadow-lg p-6 border-2 border-red-400 flex flex-col transform transition-all duration-700 ${
+                pricingVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
+              }`}
+              style={{ transitionDelay: pricingVisible ? '360ms' : '0ms' }}
+            >
               <div className="text-center mb-6">
                 <span className="inline-block w-3 h-3 rounded-full bg-red-500 mb-2" aria-hidden />
                 <h3 className="text-xl font-bold text-zuri-black">Zuri AI</h3>
@@ -556,7 +651,12 @@ function Home(): JSX.Element {
             </div>
 
             {/* Enterprise */}
-            <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-200 flex flex-col">
+            <div
+              className={`bg-white rounded-2xl shadow-lg p-6 border border-gray-200 flex flex-col transform transition-all duration-700 ${
+                pricingVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
+              }`}
+              style={{ transitionDelay: pricingVisible ? '440ms' : '0ms' }}
+            >
               <div className="text-center mb-6">
                 <h3 className="text-xl font-bold text-zuri-black">Enterprise</h3>
                 <p className="text-2xl font-bold text-zuri-black mt-2">Custom</p>
@@ -589,39 +689,69 @@ function Home(): JSX.Element {
         </div>
       </section>
 
-      {/* FAQ - Clean cards */}
-      <section className="py-20 md:py-24 bg-white">
+      {/* FAQ - Clean cards with soft reveal */}
+      <section
+        ref={faqRef}
+        className={`py-20 md:py-24 bg-white transition-all duration-700 ease-out ${
+          faqVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
+        }`}
+      >
         <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
           <p className="text-sm font-medium text-zuri-orange uppercase tracking-wider text-center mb-3">Support</p>
           <h2 className="text-3xl md:text-4xl font-bold text-zuri-black text-center mb-14">
             Frequently asked questions
           </h2>
           <div className="space-y-4">
-            <div className="bg-orange-50/50 rounded-xl p-6 border border-orange-100">
+            <div
+              className={`bg-orange-50/50 rounded-xl p-6 border border-orange-100 transform transition-all duration-700 ${
+                faqVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
+              }`}
+              style={{ transitionDelay: faqVisible ? '40ms' : '0ms' }}
+            >
               <h3 className="text-lg font-bold text-zuri-black mb-2">What is ZURI?</h3>
               <p className="text-gray-600 text-sm leading-relaxed">
                 ZURI is a QR-based ordering and payments platform. Guests scan a code to open your menu, order, and pay from their phone. You get orders in real time and payouts to your bank.
               </p>
             </div>
-            <div className="bg-orange-50/50 rounded-xl p-6 border border-orange-100">
+            <div
+              className={`bg-orange-50/50 rounded-xl p-6 border border-orange-100 transform transition-all duration-700 ${
+                faqVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
+              }`}
+              style={{ transitionDelay: faqVisible ? '120ms' : '0ms' }}
+            >
               <h3 className="text-lg font-bold text-zuri-black mb-2">Do customers need to download an app?</h3>
               <p className="text-gray-600 text-sm leading-relaxed">
                 No. They scan the QR code with their phone camera and the menu opens in the browser. No app required.
               </p>
             </div>
-            <div className="bg-orange-50/50 rounded-xl p-6 border border-orange-100">
+            <div
+              className={`bg-orange-50/50 rounded-xl p-6 border border-orange-100 transform transition-all duration-700 ${
+                faqVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
+              }`}
+              style={{ transitionDelay: faqVisible ? '200ms' : '0ms' }}
+            >
               <h3 className="text-lg font-bold text-zuri-black mb-2">How do I get paid?</h3>
               <p className="text-gray-600 text-sm leading-relaxed">
                 Add your Nigerian bank account in your dashboard. We verify the account name and pay out to you—no Paystack or gateway setup required.
               </p>
             </div>
-            <div className="bg-orange-50/50 rounded-xl p-6 border border-orange-100">
+            <div
+              className={`bg-orange-50/50 rounded-xl p-6 border border-orange-100 transform transition-all duration-700 ${
+                faqVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
+              }`}
+              style={{ transitionDelay: faqVisible ? '280ms' : '0ms' }}
+            >
               <h3 className="text-lg font-bold text-zuri-black mb-2">Can I customize my menu?</h3>
               <p className="text-gray-600 text-sm leading-relaxed">
                 Yes. Update items, prices, photos (on paid plans), and categories anytime from your dashboard.
               </p>
             </div>
-            <div className="bg-orange-50/50 rounded-xl p-6 border border-orange-100">
+            <div
+              className={`bg-orange-50/50 rounded-xl p-6 border border-orange-100 transform transition-all duration-700 ${
+                faqVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
+              }`}
+              style={{ transitionDelay: faqVisible ? '360ms' : '0ms' }}
+            >
               <h3 className="text-lg font-bold text-zuri-black mb-2">Who is ZURI for?</h3>
               <p className="text-gray-600 text-sm leading-relaxed">
                 Restaurants, cafés, bars, hotels, fast food, bakeries—any business that wants simple QR ordering and payments with minimal setup.
@@ -632,7 +762,12 @@ function Home(): JSX.Element {
       </section>
 
       {/* CTA - Orange gradient strip */}
-      <section className="py-20 md:py-24 bg-gradient-to-r from-zuri-orange via-orange-500 to-zuri-orange-dark text-white relative overflow-hidden">
+      <section
+        ref={ctaRef}
+        className={`py-20 md:py-24 bg-gradient-to-r from-zuri-orange via-orange-500 to-zuri-orange-dark text-white relative overflow-hidden transition-all duration-700 ease-out ${
+          ctaVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
+        }`}
+      >
         <div className="absolute inset-0 bg-[length:48px_48px] bg-[linear-gradient(to_right,rgba(255,255,255,0.06)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.06)_1px,transparent_1px)]" />
         <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 text-center relative z-10">
           <h2 className="text-3xl md:text-4xl font-bold mb-4">

@@ -6,7 +6,11 @@
   "framework": null,
   "rewrites": [
     {
-      "source": "/((?!assets/).*)",
+      "source": "/api/:path*",
+      "destination": "/api"
+    },
+    {
+      "source": "/((?!api/)(?!assets/).*)",
       "destination": "/index.html"
     }
   ],
