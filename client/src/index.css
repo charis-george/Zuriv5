@@ -42,3 +42,10 @@ html {
   background: #e6b800;
 }
 
+/* Paper plane loading animation – flies in a circle */
+@keyframes paper-plane-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+

@@ -55,6 +55,7 @@ const aiRoutes = require('../server/routes/ai');
 const banksRoutes = require('../server/routes/banks');
 const tapRoutes = require('../server/routes/tap');
 const tapAuthRoutes = require('../server/routes/tap-auth');
+const networkRoutes = require('../server/routes/network');
 
 // Mount under /api so client calls like /api/business/login work
 app.use('/api/business', businessRoutes);
@@ -69,6 +70,7 @@ app.use('/api/subscription', subscriptionRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/tap', tapRoutes);
 app.use('/api/tap-auth', tapAuthRoutes);
+app.use('/api/network', networkRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

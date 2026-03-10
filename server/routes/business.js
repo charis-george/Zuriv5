@@ -209,6 +209,43 @@ router.patch('/:id', requireBusinessAuth, async (req, res) => {
   }
 });
 
+// Change password — requires business auth
+router.patch('/:id/change-password', requireBusinessAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (id !== req.businessId) {
+      return res.status(403).json({ error: 'You can only change password for your own business' });
+    }
+    const { current_password, new_password } = req.body;
+    if (!current_password || typeof current_password !== 'string' || !current_password.trim()) {
+      return res.status(400).json({ error: 'Current password is required' });
+    }
+    if (!new_password || typeof new_password !== 'string' || !new_password.trim()) {
+      return res.status(400).json({ error: 'New password is required' });
+    }
+    if (new_password.length < 6) {
+      return res.status(400).json({ error: 'New password must be at least 6 characters' });
+    }
+
+    const { data: biz, error: fetchError } = await supabase.from('businesses').select('password').eq('id', id).single();
+    if (fetchError || !biz || !biz.password) {
+      return res.status(500).json({ error: 'Could not verify account.' });
+    }
+    if (!bcrypt.compareSync(current_password.trim(), biz.password)) {
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+
+    const hashedPassword = bcrypt.hashSync(new_password.trim(), 10);
+    const { error: updateError } = await supabase.from('businesses').update({ password: hashedPassword }).eq('id', id);
+    if (updateError) return res.status(500).json({ error: 'Failed to update password' });
+
+    res.json({ success: true, message: 'Password updated successfully' });
+  } catch (error) {
+    console.error('Change password error:', error);
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
 // Upload business logo (Starter+) — requires business auth
 router.post('/:id/upload-logo', requireBusinessAuth, logoUpload.single('logo'), async (req, res) => {
   try {

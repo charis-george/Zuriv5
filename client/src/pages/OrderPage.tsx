@@ -3,6 +3,13 @@ import { useParams } from 'react-router-dom'
 import axios from 'axios'
 import io, { Socket } from 'socket.io-client'
 import { Business, MenuCategory, MenuItem, Order, CustomerInfo, OrderItem, SavedCard } from '../types'
+import { PaperPlaneLoader } from '../components/PaperPlaneLoader'
+
+const WS_URL =
+  (import.meta.env.VITE_WS_URL as string) ||
+  (typeof window !== 'undefined' && window.location.hostname === 'localhost'
+    ? 'http://localhost:3000'
+    : (typeof window !== 'undefined' ? window.location.origin : ''))
 
 interface CartItem extends MenuItem {
   quantity: number
@@ -57,7 +64,7 @@ function OrderPage(): JSX.Element {
       })
 
     // Connect to socket for order updates
-    const socket: Socket = io('http://localhost:3000')
+    const socket: Socket = io(WS_URL)
     
     socket.on('order-ready', (order: Order) => {
       if (orderDetails && order.id === orderDetails.id) {
@@ -170,10 +177,7 @@ function OrderPage(): JSX.Element {
   if (loading) {
     return (
       <div className="min-h-screen bg-[#f5f5f5] flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-10 w-10 border-2 border-zuri-orange border-t-transparent mx-auto mb-4" />
-          <p className="text-zuri-black text-sm">Loading menu...</p>
-        </div>
+        <PaperPlaneLoader size="md" label="Loading menu..." />
       </div>
     )
   }
