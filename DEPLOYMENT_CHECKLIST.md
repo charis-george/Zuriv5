@@ -1,91 +1,71 @@
-# Vercel Deployment Checklist
+# ZURI Deployment Checklist
 
 ## Pre-Deployment
 
 - [ ] Code is pushed to Git repository (GitHub/GitLab/Bitbucket)
-- [ ] All dependencies are in `package.json` files
-- [ ] Environment variables are documented
-- [ ] Database migration plan (SQLite won't persist on Vercel)
+- [ ] All dependencies are in `package.json` files (root, `server/`, `client/`)
+- [ ] Environment variables are set (see **Required environment variables** below)
+- [ ] Supabase project created and migrations run (see [SUPABASE_SETUP.md](./SUPABASE_SETUP.md))
+- [ ] Paystack account created; secret and public keys ready (test keys for staging, live for production)
 
-## Vercel Configuration
+## Required environment variables
+
+Set these in your hosting provider (e.g. Vercel) or in `server/.env` for self-hosted:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `NODE_ENV` | Production | Set to `production` |
+| `FRONTEND_URL` | Production | Frontend origin, e.g. `https://your-app.vercel.app` (used for CORS and password reset links) |
+| `SUPABASE_URL` | Yes | Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase service role key (server-side only) |
+| `BUSINESS_JWT_SECRET` or `JWT_SECRET` | Production | Strong secret for business JWTs (required in production; server will not start without it) |
+| `PAYSTACK_SECRET_KEY` | Payments | Paystack secret key (test key for staging, live for production) |
+| `PAYSTACK_PUBLIC_KEY` | Optional | Paystack public key for client (if not using per-business keys) |
+| `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS` | Optional | For password reset and contact form emails; if missing, reset link is only returned in dev |
+
+## Vercel configuration
 
 - [x] `vercel.json` created
 - [x] `api/index.js` created for serverless functions
 - [x] `.vercelignore` created
-- [x] Database configured to use `/tmp` on Vercel
 
-## Deployment Steps
+### Deployment steps
 
-1. **Connect Repository**
-   - [ ] Go to [vercel.com](https://vercel.com)
-   - [ ] Click "Add New Project"
-   - [ ] Import your Git repository
+1. **Connect repository** at [vercel.com](https://vercel.com) → Add New Project → Import Git repo.
+2. **Configure project**
+   - Framework Preset: **Other**
+   - Root Directory: `./`
+   - Build Command: `cd client && npm install && npm run build`
+   - Output Directory: `client/dist`
+   - Install Command: `npm run install:all`
+3. **Set environment variables** (see table above). Include `VERCEL=1` (set automatically by Vercel).
+4. **Deploy** and wait for build to complete.
+5. **Post-deploy**: Set `FRONTEND_URL` to your actual Vercel URL (e.g. `https://your-app.vercel.app`).
 
-2. **Configure Project**
-   - [ ] Framework Preset: **Other**
-   - [ ] Root Directory: `./` (root)
-   - [ ] Build Command: `cd client && npm install && npm run build`
-   - [ ] Output Directory: `client/dist`
-   - [ ] Install Command: `npm run install:all`
+## Known limitations on Vercel
 
-3. **Environment Variables**
-   - [ ] `NODE_ENV` = `production`
-   - [ ] `FRONTEND_URL` = Your Vercel URL (set after first deploy)
-   - [ ] `PAYSTACK_SECRET_KEY` = Your Paystack key (if using payments)
-   - [ ] `VERCEL` = `1` (automatically set by Vercel)
+- **Socket.io**: Real-time features (live order updates, “order ready” notifications) do not work on Vercel serverless because Socket.io requires a long-lived connection. The API uses a mock Socket.io; order and payment flows still work, but the dashboard and customer will not get real-time updates. For full real-time, run the Express server on a platform that supports WebSockets (e.g. Railway, Render, or a VPS) or consider Supabase Realtime.
+- **File uploads**: Menu item images are stored in Supabase Storage; no local `/tmp` dependency.
 
-4. **Deploy**
-   - [ ] Click "Deploy"
-   - [ ] Wait for build to complete
-   - [ ] Check deployment logs for errors
+## Database
 
-5. **Post-Deployment**
-   - [ ] Update `FRONTEND_URL` with actual Vercel URL
-   - [ ] Test API endpoints: `https://your-app.vercel.app/api/health`
-   - [ ] Test frontend: `https://your-app.vercel.app`
-   - [ ] Test business login
-   - [ ] Test order creation
+- **Supabase (PostgreSQL)** is the database. Run all migrations in `supabase/migrations/` in order against your Supabase project. Data persists in Supabase; nothing is stored on Vercel’s filesystem.
 
-## Known Limitations
+## Testing checklist
 
-- [ ] **SQLite**: Data won't persist between deployments
-- [ ] **Socket.io**: Real-time features may not work
-- [ ] **File uploads**: Limited to `/tmp` directory
-
-## Recommended Next Steps
-
-- [ ] Migrate to cloud database (PostgreSQL, MongoDB, etc.)
-- [ ] Set up separate backend for Socket.io if needed
-- [ ] Configure custom domain (optional)
-- [ ] Set up monitoring and error tracking
-
-## Testing Checklist
-
-- [ ] Homepage loads correctly
-- [ ] QR scanner works
-- [ ] Business login works
-- [ ] Menu displays correctly
-- [ ] Order creation works
-- [ ] Order status updates work
-- [ ] Analytics dashboard loads
-- [ ] QR code generation works
+- [ ] Homepage loads
+- [ ] QR scanner works (`/scan`)
+- [ ] Business login and onboarding
+- [ ] Menu and QR code generation
+- [ ] Place test order and payment (Paystack test mode)
+- [ ] Password reset (with SMTP configured)
+- [ ] Invalid URL shows 404 page
+- [ ] `/api/health` returns `{ "status": "ok" }`
 
 ## Troubleshooting
 
-If deployment fails:
-1. Check build logs in Vercel dashboard
-2. Verify all dependencies are installed
-3. Check Node.js version (should be 18.x)
-4. Verify environment variables are set
-5. Check API route paths
-
-If API routes return 404:
-1. Verify `api/index.js` exists
-2. Check `vercel.json` configuration
-3. Ensure routes are properly exported
-
-If database errors occur:
-1. Remember SQLite is temporary on Vercel
-2. Consider migrating to cloud database
-3. Check `/tmp` directory permissions
-
+- **Build fails**: Check Node version (18.x), run `npm run install:all` locally, fix any missing deps or TypeScript errors.
+- **API 404**: Ensure `api/index.js` exists and routes are mounted under `/api`.
+- **CORS errors**: Set `FRONTEND_URL` to the exact origin of your frontend (no trailing slash).
+- **JWT / auth errors**: In production, `BUSINESS_JWT_SECRET` or `JWT_SECRET` must be set or the server will not start.
+- **Payments fail**: Confirm `PAYSTACK_SECRET_KEY` and (if used) `PAYSTACK_PUBLIC_KEY` are set; configure Paystack webhook to your `/api/payment/webhook` URL.

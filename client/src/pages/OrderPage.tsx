@@ -2,8 +2,11 @@ import { useState, useEffect, FormEvent } from 'react'
 import { useParams } from 'react-router-dom'
 import axios from 'axios'
 import io, { Socket } from 'socket.io-client'
-import { Business, MenuCategory, MenuItem, Order, CustomerInfo, OrderItem, SavedCard } from '../types'
+import { Business, MenuCategory, MenuItem, Order, CustomerInfo, OrderItem, SavedCard, StorefrontDetails } from '../types'
 import { PaperPlaneLoader } from '../components/PaperPlaneLoader'
+import { mergeStorefrontConfig, getStorefrontTheme } from '../lib/storefrontTheme'
+import { StorefrontCustomerLayout } from '../components/storefront/StorefrontCustomerLayout'
+import { StorefrontMenuGrid } from '../components/storefront/StorefrontMenuGrid'
 
 const WS_URL =
   (import.meta.env.VITE_WS_URL as string) ||
@@ -13,6 +16,12 @@ const WS_URL =
 
 interface CartItem extends MenuItem {
   quantity: number
+}
+
+const DEFAULT_STOREFRONT_DETAILS: StorefrontDetails = {
+  name: '',
+  tagline: '',
+  cuisineTags: []
 }
 
 function OrderPage(): JSX.Element {
@@ -29,13 +38,16 @@ function OrderPage(): JSX.Element {
   const [savedCards, setSavedCards] = useState<SavedCard[]>([])
   const [selectedSavedCardId, setSelectedSavedCardId] = useState<string | null>(null)
   const [paymentLoading, setPaymentLoading] = useState<boolean>(false)
+  const storefrontConfig = mergeStorefrontConfig(business?.storefrontConfig ?? undefined)
+  const storefrontDetails: StorefrontDetails = {
+    ...DEFAULT_STOREFRONT_DETAILS,
+    ...(business?.storefrontDetails ?? {})
+  }
+  const theme = getStorefrontTheme(storefrontConfig)
 
   useEffect(() => {
     if (!businessId) return
 
-    // #region agent log
-    fetch('http://127.0.0.1:7885/ingest/27cc0656-b460-497f-bc8e-e093f6629dd3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0133e9'},body:JSON.stringify({sessionId:'0133e9',location:'OrderPage.tsx:useEffect',message:'Fetching business and menu',data:{businessId},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
-    // #endregion
     // Fetch business info
     axios.get<Business>(`/api/qr/business/${businessId}`)
       .then(res => {
@@ -49,33 +61,41 @@ function OrderPage(): JSX.Element {
     // Fetch menu
     axios.get<MenuCategory[]>(`/api/menu/business/${businessId}`)
       .then(res => {
-        // #region agent log
-        fetch('http://127.0.0.1:7885/ingest/27cc0656-b460-497f-bc8e-e093f6629dd3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0133e9'},body:JSON.stringify({sessionId:'0133e9',location:'OrderPage.tsx:menuLoaded',message:'Menu loaded',data:{businessId,menuLength:res.data?.length},timestamp:Date.now(),hypothesisId:'H3'})}).catch(()=>{});
-        // #endregion
         setMenu(res.data)
         setLoading(false)
       })
       .catch(() => {
-        // #region agent log
-        fetch('http://127.0.0.1:7885/ingest/27cc0656-b460-497f-bc8e-e093f6629dd3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0133e9'},body:JSON.stringify({sessionId:'0133e9',location:'OrderPage.tsx:menuError',message:'Menu fetch failed',data:{businessId},timestamp:Date.now(),hypothesisId:'H3'})}).catch(()=>{});
-        // #endregion
         setError('Failed to load menu')
         setLoading(false)
       })
 
-    // Connect to socket for order updates
     const socket: Socket = io(WS_URL)
-    
+    socket.emit('join-storefront', businessId)
+
+    socket.on('storefront-updated', (payload: { config?: unknown; details?: unknown }) => {
+      setBusiness((prev) => {
+        if (!prev) return prev
+        return {
+          ...prev,
+          storefrontConfig: (payload.config as Business['storefrontConfig']) ?? prev.storefrontConfig,
+          storefrontDetails: (payload.details as Business['storefrontDetails']) ?? prev.storefrontDetails
+        }
+      })
+    })
+
     socket.on('order-ready', (order: Order) => {
-      if (orderDetails && order.id === orderDetails.id) {
-        alert('Your order is ready!')
-      }
+      setOrderDetails((current) => {
+        if (current && order.id === current.id) {
+          alert('Your order is ready!')
+        }
+        return current
+      })
     })
 
     return () => {
       socket.disconnect()
     }
-  }, [businessId, orderDetails])
+  }, [businessId])
 
   useEffect(() => {
     if (!orderPlaced || !orderDetails || !businessId) return
@@ -147,9 +167,6 @@ function OrderPage(): JSX.Element {
         price: item.price
       }))
 
-      // #region agent log
-      fetch('http://127.0.0.1:7885/ingest/27cc0656-b460-497f-bc8e-e093f6629dd3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0133e9'},body:JSON.stringify({sessionId:'0133e9',location:'OrderPage.tsx:beforePlaceOrder',message:'Placing order',data:{businessId,itemCount:orderItems.length},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
-      // #endregion
       const response = await axios.post<Order>('/api/order', {
         businessId,
         customerName: customerInfo.name,
@@ -159,16 +176,10 @@ function OrderPage(): JSX.Element {
         estimatedPrepTime: 15
       })
 
-      // #region agent log
-      fetch('http://127.0.0.1:7885/ingest/27cc0656-b460-497f-bc8e-e093f6629dd3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0133e9'},body:JSON.stringify({sessionId:'0133e9',location:'OrderPage.tsx:orderSuccess',message:'Order placed',data:{orderId:response.data?.id},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
-      // #endregion
       setOrderDetails(response.data)
       setOrderPlaced(true)
       setCart([])
     } catch (err) {
-      // #region agent log
-      fetch('http://127.0.0.1:7885/ingest/27cc0656-b460-497f-bc8e-e093f6629dd3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0133e9'},body:JSON.stringify({sessionId:'0133e9',location:'OrderPage.tsx:orderError',message:'Order failed',data:{errMsg:axios.isAxiosError(err)?err.response?.data?.error||err.message:String(err)},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
-      // #endregion
       alert('Failed to place order. Please try again.')
       console.error(err)
     }
@@ -176,8 +187,8 @@ function OrderPage(): JSX.Element {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#f5f5f5] flex items-center justify-center">
-        <PaperPlaneLoader size="md" label="Loading menu..." />
+      <div className="min-h-screen bg-black flex items-center justify-center">
+        <PaperPlaneLoader size="lg" />
       </div>
     )
   }
@@ -185,7 +196,7 @@ function OrderPage(): JSX.Element {
   if (error) {
     return (
       <div className="min-h-screen bg-[#f5f5f5] flex items-center justify-center px-4">
-        <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-8 max-w-md w-full text-center">
+        <div className="bg-white rounded-xl border border-gray-200 p-8 max-w-md w-full text-center">
           <h1 className="text-xl font-bold text-zuri-black mb-4">Error</h1>
           <p className="text-gray-600 text-sm mb-6">{error}</p>
           <a href="/" className="text-zuri-orange font-semibold text-sm hover:underline">Back to home</a>
@@ -203,7 +214,7 @@ function OrderPage(): JSX.Element {
     return (
       <div className="min-h-screen bg-[#f5f5f5] py-8 px-4">
         <div className="max-w-md mx-auto">
-          <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-8">
+          <div className="bg-white rounded-xl border border-gray-200 p-8">
             <div className="w-14 h-14 rounded-xl bg-zuri-orange/15 flex items-center justify-center mx-auto mb-6">
               <svg className="w-8 h-8 text-zuri-orange" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -326,13 +337,13 @@ function OrderPage(): JSX.Element {
                 }
               }}
               disabled={paymentLoading}
-              className="w-full bg-zuri-orange text-white py-2.5 rounded-xl font-semibold text-sm hover:bg-zuri-orange-dark transition disabled:opacity-70 mb-4"
+              className="w-full bg-zuri-orange text-white py-1.5 rounded-lg text-sm hover:bg-zuri-orange-dark transition disabled:opacity-70 mb-4"
             >
               {paymentLoading ? 'Processing…' : `Pay ₦${Number(orderTotal).toFixed(2)}`}
             </button>
             <button
               onClick={() => window.location.reload()}
-              className="w-full bg-white text-zuri-black border border-gray-200 py-2.5 rounded-xl font-semibold text-sm hover:bg-gray-50 transition"
+              className="w-full bg-white text-zuri-black border border-gray-200 py-1.5 rounded-lg text-sm hover:bg-gray-50 transition"
             >
               Place another order
             </button>
@@ -343,172 +354,169 @@ function OrderPage(): JSX.Element {
   }
 
   return (
-    <div className="min-h-screen bg-[#f5f5f5]">
-      <header className="bg-white border-b border-gray-100 sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              {business?.logoUrl && (
-                <img src={business.logoUrl} alt="" className="h-12 w-12 rounded-xl object-cover border border-gray-100" />
-              )}
-              <div>
-                <h1 className="text-xl font-bold text-zuri-black">{business?.name || 'Menu'}</h1>
-                {business?.phone && (
-                  <p className="text-sm text-gray-500">{business.phone}</p>
-                )}
-              </div>
-            </div>
-            <div className="flex items-center gap-4">
-              <div className="text-right">
-                <p className="text-xs text-gray-500">Cart</p>
-                <p className="text-sm font-bold text-zuri-black">{cart.length} items</p>
-              </div>
-              <div className="bg-zuri-orange/10 rounded-xl px-4 py-2 border border-zuri-orange/20">
-                <p className="font-bold text-zuri-orange text-sm">₦{getTotal().toFixed(2)}</p>
-              </div>
-            </div>
+    <StorefrontCustomerLayout
+      config={storefrontConfig}
+      details={storefrontDetails}
+      businessNameFallback={business?.name || 'Menu'}
+      logoUrl={business?.logoUrl}
+      phone={business?.phone}
+      headerRight={
+        <div className="flex items-center gap-3 sm:gap-4 shrink-0">
+          <div className="text-right min-w-[52px]">
+            <p className="text-xs" style={{ color: theme.sub }}>Cart</p>
+            <p className="text-sm font-bold" style={{ color: theme.text }}>{cart.length} items</p>
+          </div>
+          <div
+            className="rounded-xl px-3 sm:px-4 py-2 border"
+            style={{
+              backgroundColor: `${storefrontConfig.brandColor}14`,
+              borderColor: `${storefrontConfig.brandColor}44`
+            }}
+          >
+            <p className="font-bold text-sm" style={{ color: storefrontConfig.brandColor }}>
+              ₦{getTotal().toFixed(2)}
+            </p>
           </div>
         </div>
-      </header>
+      }
+    >
+      <div className="grid lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-2">
+          <StorefrontMenuGrid
+            config={storefrontConfig}
+            categories={menu.map((category) => ({
+              id: category.id,
+              name: category.name,
+              items: category.items.map((item) => ({
+                id: item.id,
+                name: item.name,
+                description: item.description,
+                price: item.price,
+                imageUrl: item.imageUrl,
+                available: item.available
+              }))
+            }))}
+            onItemClick={addToCart}
+          />
+        </div>
 
-      <div className="max-w-6xl mx-auto px-4 py-8">
-        <div className="grid lg:grid-cols-3 gap-8">
-          {/* Menu */}
-          <div className="lg:col-span-2">
-            {menu.length === 0 ? (
-              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 text-center">
-                <p className="text-gray-500 text-sm">No menu items available</p>
-              </div>
+        <div className="lg:col-span-1">
+          <div
+            className="rounded-2xl border p-6 lg:sticky lg:top-24"
+            style={{ background: theme.panel, borderColor: theme.border }}
+          >
+            <div className="flex items-center justify-between gap-3 mb-4">
+              <h2 className="text-lg font-bold" style={{ color: theme.text }}>Order summary</h2>
+              <a
+                href={`/reserve/${businessId}`}
+                className="border border-zuri-orange text-zuri-orange px-3 py-1.5 rounded-xl text-xs font-semibold hover:bg-zuri-orange hover:text-white transition whitespace-nowrap"
+                style={{ background: theme.panel }}
+              >
+                Book a table
+              </a>
+            </div>
+
+            {cart.length === 0 ? (
+              <p className="text-sm text-center py-8" style={{ color: theme.sub }}>Your cart is empty</p>
             ) : (
-              menu.map(category => (
-                <div key={category.id} className="mb-8">
-                  <h2 className="text-lg font-bold text-zuri-black mb-4">{category.name}</h2>
-                  <div className="grid md:grid-cols-2 gap-4">
-                    {category.items.map(item => (
-                      <div
-                        key={item.id}
-                        className={`bg-white rounded-xl border border-gray-100 shadow-sm p-5 ${
-                          !item.available ? 'opacity-50' : 'hover:shadow-md hover:border-zuri-orange/20 transition cursor-pointer'
-                        }`}
-                        onClick={() => addToCart(item)}
-                      >
-                        {item.imageUrl && (
-                          <img
-                            src={item.imageUrl}
-                            alt={item.name}
-                            className="w-full h-40 object-cover rounded-lg mb-3"
-                          />
-                        )}
-                        <div className="flex justify-between items-start mb-1">
-                          <h3 className="font-bold text-zuri-black">{item.name}</h3>
-                          <span className="font-bold text-zuri-orange text-sm">₦{Number(item.price).toFixed(2)}</span>
-                        </div>
-                        {item.description && (
-                          <p className="text-gray-500 text-xs mb-2 line-clamp-2">{item.description}</p>
-                        )}
-                        {!item.available && (
-                          <span className="text-red-600 text-xs font-semibold">Out of stock</span>
-                        )}
+              <>
+                <div className="space-y-3 mb-6 max-h-80 overflow-y-auto" style={{ borderColor: theme.border }}>
+                  {cart.map((item) => (
+                    <div
+                      key={item.id}
+                      className="flex items-center justify-between py-3 border-b"
+                      style={{ borderColor: theme.border }}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-sm truncate" style={{ color: theme.text }}>{item.name}</p>
+                        <p className="text-xs" style={{ color: theme.sub }}>₦{Number(item.price).toFixed(2)} each</p>
                       </div>
-                    ))}
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => updateQuantity(item.id, item.quantity - 1)}
+                          className="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-medium"
+                          style={{ background: theme.page, color: theme.text }}
+                        >
+                          −
+                        </button>
+                        <span className="font-semibold text-sm w-6 text-center" style={{ color: theme.text }}>{item.quantity}</span>
+                        <button
+                          type="button"
+                          onClick={() => updateQuantity(item.id, item.quantity + 1)}
+                          className="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-medium"
+                          style={{ background: theme.page, color: theme.text }}
+                        >
+                          +
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeFromCart(item.id)}
+                          className="ml-1 text-red-500 hover:text-red-700 text-sm"
+                          aria-label="Remove"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="pt-4 mb-6 border-t" style={{ borderColor: theme.border }}>
+                  <div className="flex justify-between items-center mb-4">
+                    <span className="text-sm" style={{ color: theme.sub }}>Subtotal</span>
+                    <span className="font-semibold" style={{ color: theme.text }}>₦{getTotal().toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm font-bold" style={{ color: theme.text }}>Total</span>
+                    <span className="text-lg font-bold" style={{ color: storefrontConfig.priceTextColor || storefrontConfig.brandColor }}>
+                      ₦{getTotal().toFixed(2)}
+                    </span>
                   </div>
                 </div>
-              ))
+
+                <form onSubmit={handlePlaceOrder} className="space-y-3">
+                  <input
+                    type="text"
+                    placeholder="Your name *"
+                    value={customerInfo.name}
+                    onChange={(e) => setCustomerInfo({ ...customerInfo, name: e.target.value })}
+                    required
+                    className="w-full px-4 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50 focus:border-zuri-orange"
+                    style={{ borderColor: theme.border, background: theme.panel, color: theme.text }}
+                  />
+                  <input
+                    type="tel"
+                    placeholder="Phone *"
+                    value={customerInfo.phone}
+                    onChange={(e) => setCustomerInfo({ ...customerInfo, phone: e.target.value })}
+                    required
+                    className="w-full px-4 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50 focus:border-zuri-orange"
+                    style={{ borderColor: theme.border, background: theme.panel, color: theme.text }}
+                  />
+                  <input
+                    type="email"
+                    placeholder="Email *"
+                    required
+                    value={customerInfo.email}
+                    onChange={(e) => setCustomerInfo({ ...customerInfo, email: e.target.value })}
+                    className="w-full px-4 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50 focus:border-zuri-orange"
+                    style={{ borderColor: theme.border, background: theme.panel, color: theme.text }}
+                  />
+                  <button
+                    type="submit"
+                    className="w-full text-white py-1.5 rounded-lg text-sm hover:opacity-95 transition"
+                    style={{ background: storefrontConfig.brandColor }}
+                  >
+                    Place order
+                  </button>
+                </form>
+              </>
             )}
-          </div>
-
-          {/* Order summary card */}
-          <div className="lg:col-span-1">
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 sticky top-24">
-              <h2 className="text-lg font-bold text-zuri-black mb-4">Order summary</h2>
-
-              {cart.length === 0 ? (
-                <p className="text-gray-500 text-sm text-center py-8">Your cart is empty</p>
-              ) : (
-                <>
-                  <div className="space-y-3 mb-6 max-h-80 overflow-y-auto">
-                    {cart.map(item => (
-                      <div key={item.id} className="flex items-center justify-between py-3 border-b border-gray-100">
-                        <div className="flex-1 min-w-0">
-                          <p className="font-semibold text-zuri-black text-sm truncate">{item.name}</p>
-                          <p className="text-xs text-gray-500">₦{Number(item.price).toFixed(2)} each</p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => updateQuantity(item.id, item.quantity - 1)}
-                            className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center hover:bg-gray-200 text-zuri-black text-sm font-medium"
-                          >
-                            −
-                          </button>
-                          <span className="font-semibold text-sm w-6 text-center">{item.quantity}</span>
-                          <button
-                            onClick={() => updateQuantity(item.id, item.quantity + 1)}
-                            className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center hover:bg-gray-200 text-zuri-black text-sm font-medium"
-                          >
-                            +
-                          </button>
-                          <button
-                            onClick={() => removeFromCart(item.id)}
-                            className="ml-1 text-red-500 hover:text-red-700 text-sm"
-                            aria-label="Remove"
-                          >
-                            ×
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="border-t border-gray-100 pt-4 mb-6">
-                    <div className="flex justify-between items-center mb-4">
-                      <span className="text-sm text-gray-500">Subtotal</span>
-                      <span className="font-semibold text-zuri-black">₦{getTotal().toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm font-bold text-zuri-black">Total</span>
-                      <span className="text-lg font-bold text-zuri-orange">₦{getTotal().toFixed(2)}</span>
-                    </div>
-                  </div>
-
-                  <form onSubmit={handlePlaceOrder} className="space-y-3">
-                    <input
-                      type="text"
-                      placeholder="Your name *"
-                      value={customerInfo.name}
-                      onChange={(e) => setCustomerInfo({ ...customerInfo, name: e.target.value })}
-                      required
-                      className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50 focus:border-zuri-orange"
-                    />
-                    <input
-                      type="tel"
-                      placeholder="Phone *"
-                      value={customerInfo.phone}
-                      onChange={(e) => setCustomerInfo({ ...customerInfo, phone: e.target.value })}
-                      required
-                      className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50 focus:border-zuri-orange"
-                    />
-                    <input
-                      type="email"
-                      placeholder="Email *"
-                      required
-                      value={customerInfo.email}
-                      onChange={(e) => setCustomerInfo({ ...customerInfo, email: e.target.value })}
-                      className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50 focus:border-zuri-orange"
-                    />
-                    <button
-                      type="submit"
-                      className="w-full bg-zuri-orange text-white py-2.5 rounded-xl font-semibold text-sm hover:bg-zuri-orange-dark transition"
-                    >
-                      Place order
-                    </button>
-                  </form>
-                </>
-              )}
-            </div>
           </div>
         </div>
       </div>
-    </div>
+    </StorefrontCustomerLayout>
   )
 }
 

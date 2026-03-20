@@ -8,8 +8,8 @@ export default {
     extend: {
       colors: {
         'zuri-yellow': '#ffcd1c',
-        'zuri-orange': '#f97316',
-        'zuri-orange-dark': '#ea580c',
+        'zuri-orange': '#ffbd59',
+        'zuri-orange-dark': '#ffbd59',
         'zuri-light': '#fffdf5',
         'zuri-black': '#000000',
       },

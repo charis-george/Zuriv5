@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, useParams, useSearchParams, Link } from 'react-router-dom'
 import axios from 'axios'
 import { PLAN_LABELS, PLAN_PRICES, PLAN_PRICES_YEARLY, type PlanId, type BillingInterval, type Business } from '../types'
+import { PaperPlaneLoader } from '../components/PaperPlaneLoader'
 
 function parseAmount(plan: PlanId, interval: BillingInterval): { display: string; numeric: number } {
   const table = interval === 'yearly' ? PLAN_PRICES_YEARLY : PLAN_PRICES
@@ -18,6 +19,9 @@ function SubscriptionSummary(): JSX.Element {
   const [error, setError] = useState<string | null>(null)
 
   const interval: BillingInterval = (searchParams.get('interval') === 'yearly' ? 'yearly' : 'monthly')
+  const autopay = searchParams.get('autopay') === '1'
+  const autopayStarted = useRef(false)
+  const loginRedirectRef = useRef(false)
 
   const plan: PlanId | null = useMemo(() => {
     const p = (planParam || '').toLowerCase()
@@ -30,7 +34,7 @@ function SubscriptionSummary(): JSX.Element {
     [plan, interval]
   )
 
-  const handlePay = async (): Promise<void> => {
+  const handlePay = useCallback(async (): Promise<void> => {
     if (!plan) return
     setError(null)
     const token = localStorage.getItem('zuri_business_token')
@@ -79,17 +83,43 @@ function SubscriptionSummary(): JSX.Element {
     } finally {
       setLoading(false)
     }
+  }, [plan, interval])
+
+  useEffect(() => {
+    if (!autopay || !plan || autopayStarted.current) return
+    const token = localStorage.getItem('zuri_business_token')
+    const businessId = localStorage.getItem('zuri_business_id')
+    if (!token || !businessId) {
+      if (loginRedirectRef.current) return
+      loginRedirectRef.current = true
+      const back = `/subscribe/${plan}?interval=${interval}&autopay=1`
+      navigate(`/business/login?redirect=${encodeURIComponent(back)}`, { replace: true })
+      return
+    }
+    autopayStarted.current = true
+    void handlePay()
+  }, [autopay, plan, interval, navigate, handlePay])
+
+  if (autopay && plan) {
+    const tok = typeof localStorage !== 'undefined' ? localStorage.getItem('zuri_business_token') : null
+    if (!tok || loading) {
+      return (
+        <div className="min-h-screen bg-black flex items-center justify-center px-4">
+          <PaperPlaneLoader size="lg" />
+        </div>
+      )
+    }
   }
 
   if (!plan) {
     return (
       <div className="min-h-screen bg-[#f5f5f5] flex items-center justify-center px-4">
-        <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-8 max-w-md w-full text-center">
-          <h1 className="text-xl font-bold text-zuri-black mb-2">Plan not found</h1>
+        <div className="bg-white rounded-xl border border-gray-200 p-8 max-w-md w-full text-center">
+          <h1 className="text-lg font-semibold text-zuri-black mb-2">Plan not found</h1>
           <p className="text-gray-500 text-sm mb-6">Please go back to the pricing section and choose a valid plan.</p>
           <Link
             to="/#pricing"
-            className="inline-block bg-zuri-orange text-white px-5 py-2.5 rounded-xl text-sm font-semibold hover:bg-zuri-orange-dark transition"
+            className="inline-block bg-zuri-orange text-white px-3 py-1.5 rounded-lg text-sm hover:bg-zuri-orange-dark transition"
           >
             Back to pricing
           </Link>
@@ -113,8 +143,8 @@ function SubscriptionSummary(): JSX.Element {
             Back to home
           </Link>
         </div>
-        <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-8">
-          <h1 className="text-xl font-bold text-zuri-black mb-1">Subscription summary</h1>
+        <div className="bg-white rounded-xl border border-gray-200 p-8">
+          <h1 className="text-lg font-semibold text-zuri-black mb-1">Subscription summary</h1>
           <p className="text-gray-500 text-sm mb-6">Review your subscription before continuing to Paystack.</p>
 
           <div className="space-y-4 mb-6">
@@ -146,9 +176,9 @@ function SubscriptionSummary(): JSX.Element {
 
           <button
             type="button"
-            onClick={handlePay}
+            onClick={() => void handlePay()}
             disabled={loading || numeric <= 0}
-            className="w-full bg-zuri-orange text-white py-2.5 rounded-xl font-semibold text-sm hover:bg-zuri-orange-dark transition disabled:opacity-60 mb-3"
+            className="w-full bg-zuri-orange text-white py-1.5 rounded-lg text-sm hover:bg-zuri-orange-dark transition disabled:opacity-60 mb-3"
           >
             {loading ? 'Redirecting…' : `Pay ${display}`}
           </button>

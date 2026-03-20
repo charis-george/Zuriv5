@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import axios from 'axios'
-import { Business, PLAN_PRICES, PLAN_PRICES_YEARLY_AS_MONTHLY, PLAN_LABELS, YEARLY_DISCOUNT_PCT, type BillingInterval } from '../types'
+import { Business, PLAN_PRICES, PLAN_PRICES_YEARLY, PLAN_LABELS, YEARLY_DISCOUNT_PCT, type BillingInterval } from '../types'
 import { PaperPlaneLoader } from '../components/PaperPlaneLoader'
 
 function BusinessPaymentPage(): JSX.Element {
@@ -57,8 +57,8 @@ function BusinessPaymentPage(): JSX.Element {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-white flex items-center justify-center">
-        <PaperPlaneLoader size="lg" label="Loading..." />
+      <div className="min-h-screen bg-black flex items-center justify-center">
+        <PaperPlaneLoader size="lg" />
       </div>
     )
   }
@@ -66,13 +66,13 @@ function BusinessPaymentPage(): JSX.Element {
   if (!businessId || !business) {
     return (
       <div className="min-h-screen bg-white flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-8 max-w-md w-full text-center">
+        <div className="bg-white rounded-xl border border-gray-200 p-8 max-w-md w-full text-center">
           <h1 className="text-xl font-bold text-zuri-black mb-2">Invalid page</h1>
           <p className="text-gray-500 text-sm mb-6">Please log in again.</p>
           <button
             type="button"
             onClick={() => navigate('/business/login')}
-            className="inline-block bg-zuri-orange text-white px-5 py-2.5 rounded-xl font-semibold text-sm hover:bg-zuri-orange-dark transition"
+            className="inline-block bg-zuri-orange text-white px-4 py-1.5 rounded-lg text-sm hover:bg-zuri-orange-dark transition"
           >
             Log in
           </button>
@@ -106,7 +106,7 @@ function BusinessPaymentPage(): JSX.Element {
             Add your Nigerian bank account to receive payouts. We verify the account name so payments go to the right place.
           </p>
           {business.bankAccount?.accountName ? (
-            <div className="mb-8 p-5 rounded-xl bg-orange-50/50 border border-orange-100">
+            <div className="mb-8 p-5 rounded-xl bg-zuri-orange/10 border border-zuri-orange/30">
               <p className="font-semibold text-zuri-black text-sm">Payout account</p>
               <p className="text-gray-600 text-sm mt-1">{business.bankAccount.bankName} — {business.bankAccount.accountNumberMasked}</p>
               <p className="text-gray-600 text-sm">{business.bankAccount.accountName}</p>
@@ -248,7 +248,7 @@ function BusinessPaymentPage(): JSX.Element {
               <button
                 type="submit"
                 disabled={bankSaving || !bankForm.accountName || !bankPassword.trim()}
-                className="bg-zuri-orange text-white px-5 py-2.5 rounded-xl text-sm font-semibold hover:bg-zuri-orange-dark transition disabled:opacity-50"
+                className="bg-zuri-orange text-white px-4 py-1.5 rounded-lg text-sm hover:bg-zuri-orange-dark transition disabled:opacity-50"
               >
                 {bankSaving ? 'Saving…' : 'Save bank details'}
               </button>
@@ -276,7 +276,7 @@ function BusinessPaymentPage(): JSX.Element {
               Yearly (Save {YEARLY_DISCOUNT_PCT}%)
             </button>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             {(['starter', 'growth', 'pro', 'zuri_plus'] as const).map((plan) => (
               <button
                 key={plan}
@@ -300,13 +300,13 @@ function BusinessPaymentPage(): JSX.Element {
                     setUpgradeLoading(null)
                   }
                 }}
-                className="bg-zuri-orange text-zuri-black px-4 py-2 rounded-xl text-sm font-semibold hover:bg-zuri-orange-dark hover:text-white transition disabled:opacity-50 disabled:cursor-not-allowed"
+                className="bg-zuri-orange text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-zuri-orange-dark transition disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {upgradeLoading === plan ? 'Redirecting…' : `Upgrade to ${PLAN_LABELS[plan]} — ${upgradeBillingInterval === 'monthly' ? PLAN_PRICES[plan] + '/mo' : PLAN_PRICES_YEARLY_AS_MONTHLY[plan] + '/mo'}`}
+                {upgradeLoading === plan ? 'Redirecting…' : `Upgrade to ${PLAN_LABELS[plan]} — ${upgradeBillingInterval === 'monthly' ? PLAN_PRICES[plan] + '/mo' : PLAN_PRICES_YEARLY[plan] + '/yr'}`}
               </button>
             ))}
           </div>
-          <p className="text-gray-500 text-xs mt-4">A 2.5% transaction fee applies on every customer purchase.</p>
+          <p className="text-gray-500 text-xs mt-4">A 1.5% transaction fee applies on every customer purchase.</p>
         </div>
       </div>
     </div>

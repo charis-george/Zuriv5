@@ -55,17 +55,28 @@ function TapWaitPage(): JSX.Element {
       alert('Enter the 6-character code from the business')
       return
     }
+    // Ensure we don't accidentally keep multiple sockets/listeners.
+    if (socketRef.current) {
+      socketRef.current.disconnect()
+      socketRef.current = null
+    }
+
     const socket = io(WS_URL)
     socketRef.current = socket
-    socket.emit('join-tap-room', c)
     setJoined(true)
     setRequest(null)
+    // Attach the listener before joining, so we don't miss a fast server emit.
     socket.on('tap-request', (data: TapRequest) => {
       setRequest(data)
       setOpened(false)
       setPassword('')
       setSavedCards([])
     })
+    // Re-join after reconnects (common in production networks).
+    socket.on('connect', () => {
+      socket.emit('join-tap-room', c)
+    })
+    socket.emit('join-tap-room', c)
   }
 
   useEffect(() => {
@@ -142,7 +153,7 @@ function TapWaitPage(): JSX.Element {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#fefbf5]">
+      <div className="min-h-screen flex items-center justify-center bg-black">
         <PaperPlaneLoader size="md" />
       </div>
     )

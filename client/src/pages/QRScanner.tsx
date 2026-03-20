@@ -1,143 +1,301 @@
-import { useEffect, useId, useRef } from 'react'
+import type { MutableRefObject } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Html5QrcodeScanner } from 'html5-qrcode'
+import { Html5Qrcode } from 'html5-qrcode'
 
-const DEBUG_LOG = (message: string, data: Record<string, unknown>, hypothesisId: string) => {
-  // #region agent log
-  fetch('http://127.0.0.1:7885/ingest/27cc0656-b460-497f-bc8e-e093f6629dd3', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '0133e9' },
-    body: JSON.stringify({
-      sessionId: '0133e9',
-      location: 'QRScanner.tsx',
-      message,
-      data: { ...data, hypothesisId },
-      timestamp: Date.now()
-    })
-  }).catch(() => {})
-  // #endregion
+/**
+ * html5-qrcode (mebjas/html5-qrcode): only one active scanner should own a given DOM node.
+ * React 18 Strict Mode runs mount → cleanup → mount; overlapping async start() calls can stack
+ * video + shader UI. We clear the host element, use a mount-generation guard, and fully
+ * dispose (stop + clear) before creating another Html5Qrcode on that node.
+ * @see https://github.com/mebjas/html5-qrcode
+ */
+
+function parseBusinessIdFromText(text: string): string | null {
+  const trimmed = text.trim()
+  const fromPath = trimmed.match(/\/order\/([^/?#]+)/i)
+  if (fromPath?.[1]) return fromPath[1]
+  const uuidLike = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+  if (uuidLike.test(trimmed)) return trimmed
+  if (trimmed.length === 36 && trimmed.includes('-')) return trimmed
+  return null
+}
+
+type CameraArg = string | { facingMode: string }
+
+async function disposeReader(h: Html5Qrcode | null): Promise<void> {
+  if (!h) return
+  try {
+    await h.stop().catch(() => {})
+  } catch {
+    /* ignore */
+  }
+  try {
+    h.clear()
+  } catch {
+    /* ignore */
+  }
+}
+
+function clearScannerHostElement(elementId: string): void {
+  const el = document.getElementById(elementId)
+  if (el) el.innerHTML = ''
+}
+
+async function startFirstWorkingCamera(
+  readerElementId: string,
+  onDecoded: (text: string) => void,
+  instanceRef: MutableRefObject<Html5Qrcode | null>,
+  isStale: () => boolean
+): Promise<Html5Qrcode | null> {
+  const scanConfig = {
+    fps: 10,
+    qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
+      const edge = Math.min(viewfinderWidth, viewfinderHeight)
+      const side = Math.max(80, Math.floor(Math.min(250, edge * 0.72)))
+      return { width: side, height: side }
+    }
+  }
+
+  const queue: CameraArg[] = [
+    { facingMode: 'environment' },
+    { facingMode: 'user' }
+  ]
+  try {
+    const cams = await Html5Qrcode.getCameras()
+    if (isStale()) return null
+    const seen = new Set<string>()
+    for (const c of cams) {
+      if (c?.id && !seen.has(c.id)) {
+        seen.add(c.id)
+        queue.push(c.id)
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  for (let i = 0; i < queue.length; i++) {
+    if (isStale()) return null
+    const cam = queue[i]
+    let h: Html5Qrcode | null = null
+    try {
+      h = new Html5Qrcode(readerElementId, { verbose: false })
+    } catch {
+      await disposeReader(h)
+      continue
+    }
+    try {
+      await h.start(cam, scanConfig, onDecoded, () => {})
+      if (isStale()) {
+        instanceRef.current = null
+        await disposeReader(h)
+        return null
+      }
+      instanceRef.current = h
+      return h
+    } catch {
+      await disposeReader(h)
+    }
+  }
+  return null
+}
+
+async function decodeQrFromImageFile(fileAnchorId: string, file: File): Promise<string> {
+  const reader = new Html5Qrcode(fileAnchorId, { verbose: false })
+  try {
+    return await reader.scanFile(file, false)
+  } finally {
+    try {
+      reader.clear()
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 function QRScanner(): JSX.Element {
-  const scannerRef = useRef<Html5QrcodeScanner | null>(null)
-  const wrapperRef = useRef<HTMLDivElement | null>(null)
-  const containerRef = useRef<HTMLDivElement | null>(null)
-  const mountCountRef = useRef(0)
-  const scannerId = `qr-reader-${useId().replace(/:/g, '')}`
-
-  // #region agent log
-  DEBUG_LOG('QRScanner render', { scannerId }, 'H2,H5')
-  // #endregion
-
   const navigate = useNavigate()
+  const readerIdRef = useRef<string | undefined>(undefined)
+  if (!readerIdRef.current) {
+    readerIdRef.current =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? `zuri-qr-${crypto.randomUUID()}`
+        : `zuri-qr-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
+  }
+  const readerElementId = readerIdRef.current
+  const fileHostElementId = `${readerElementId}-file`
 
-  useEffect(() => {
-    mountCountRef.current += 1
-    const runId = mountCountRef.current
-    const wrapper = wrapperRef.current
-    // #region agent log
-    DEBUG_LOG('effect start', {
-      scannerId,
-      runId,
-      wrapperFound: !!wrapper,
-      containersWithId: document.querySelectorAll(`[id="${scannerId}"]`).length
-    }, 'H1,H2,H5')
-    // #endregion
-    if (!wrapper) return
+  const mountGenRef = useRef(0)
+  const scannerRef = useRef<Html5Qrcode | null>(null)
+  const handledRef = useRef(false)
+  const cancelledRef = useRef(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
-    wrapper.innerHTML = ''
-    const container = document.createElement('div')
-    container.id = scannerId
-    containerRef.current = container
-    wrapper.appendChild(container)
+  const [scanError, setScanError] = useState<string>('')
+  const [cameraBootKey, setCameraBootKey] = useState(0)
+  const [fileBusy, setFileBusy] = useState(false)
 
-    const scanner = new Html5QrcodeScanner(
-      scannerId,
-      {
-        qrbox: { width: 250, height: 250 },
-        fps: 5,
-        aspectRatio: 1.0
-      },
-      false
-    )
+  useLayoutEffect(() => {
+    const myGen = ++mountGenRef.current
+    const isStale = (): boolean => myGen !== mountGenRef.current
 
-    scannerRef.current = scanner
+    cancelledRef.current = false
+    handledRef.current = false
+    scannerRef.current = null
+    setScanError('')
 
-    const onScanSuccess = (decodedText: string): void => {
-      console.log('QR Code scanned:', decodedText)
-      const businessIdMatch = decodedText.match(/\/order\/([^/]+)/)
-      if (businessIdMatch) {
-        safeClear()
-        navigate(`/order/${businessIdMatch[1]}`)
-      } else if (decodedText.includes('business') || decodedText.length === 36) {
-        safeClear()
-        navigate(`/order/${decodedText}`)
+    const el = document.getElementById(readerElementId)
+    if (!el) {
+      setScanError('Scanner could not initialize. Please reload this page.')
+      return () => {
+        cancelledRef.current = true
+        mountGenRef.current += 1
       }
     }
 
-    const onScanFailure = (): void => {}
+    clearScannerHostElement(readerElementId)
 
-    function safeClear(): void {
+    const onDecoded = (decodedText: string): void => {
       try {
-        scannerRef.current?.clear()
-      } catch (e) {
-        // #region agent log
-        DEBUG_LOG('safeClear threw', { err: String(e), scannerId }, 'H3,H4')
-        // #endregion
+        if (handledRef.current || cancelledRef.current || isStale()) return
+        const id = parseBusinessIdFromText(decodedText)
+        if (!id) return
+        handledRef.current = true
+        const s = scannerRef.current
+        const go = (): void => {
+          if (!cancelledRef.current && !isStale()) navigate(`/order/${id}`)
+        }
+        if (s) {
+          void s
+            .stop()
+            .catch(() => {})
+            .finally(go)
+        } else {
+          go()
+        }
+      } catch {
+        /* ignore */
       }
-      scannerRef.current = null
     }
 
-    scanner.render(onScanSuccess, onScanFailure)
-    // #region agent log
-    DEBUG_LOG('scanner.render() called', { scannerId, runId }, 'H1')
-    // #endregion
+    void (async () => {
+      try {
+        if (isStale()) return
+        const instance = await startFirstWorkingCamera(readerElementId, onDecoded, scannerRef, isStale)
+        if (isStale()) {
+          scannerRef.current = null
+          await disposeReader(instance)
+          return
+        }
+        if (!instance) {
+          setScanError(
+            'No camera worked. Use HTTPS (or localhost), allow camera access, or upload a photo of the QR code below.'
+          )
+          return
+        }
+        scannerRef.current = instance
+      } catch {
+        if (isStale()) return
+        setScanError('Camera could not start. Try uploading a photo of the QR code below.')
+      }
+    })()
 
     return () => {
-      const sc = scannerRef.current
+      cancelledRef.current = true
+      mountGenRef.current += 1
+      const s = scannerRef.current
       scannerRef.current = null
-      // #region agent log
-      const el = document.getElementById(scannerId)
-      DEBUG_LOG('cleanup start', {
-        scannerId,
-        runId,
-        containerStillInDom: !!el,
-        containerChildCount: el ? el.childNodes.length : 0
-      }, 'H3,H4')
-      // #endregion
-      void (async () => {
-        const toRemove = containerRef.current
-        containerRef.current = null
-        if (toRemove?.parentNode) {
-          toRemove.parentNode.removeChild(toRemove)
-        }
-        try {
-          await sc?.clear()
-        } catch {
-          // ignore (container may already be gone)
-        }
-        // #region agent log
-        DEBUG_LOG('cleanup done', { scannerId, runId }, 'H3')
-        // #endregion
-      })()
+      void disposeReader(s).finally(() => {
+        clearScannerHostElement(readerElementId)
+      })
     }
-  }, [navigate, scannerId])
+  }, [navigate, readerElementId, cameraBootKey])
+
+  const onPickImage = (): void => {
+    fileInputRef.current?.click()
+  }
+
+  const onFileChange = async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+
+    setScanError('')
+    setFileBusy(true)
+    try {
+      const s = scannerRef.current
+      scannerRef.current = null
+      await disposeReader(s)
+      clearScannerHostElement(readerElementId)
+
+      const text = await decodeQrFromImageFile(fileHostElementId, file)
+      const id = parseBusinessIdFromText(text)
+      if (id) {
+        navigate(`/order/${id}`)
+        return
+      }
+      setScanError('No ZURI menu QR found in that image. Try a clearer photo or use the camera above.')
+    } catch {
+      setScanError('Could not read that image. Use a PNG or JPG showing the full QR code.')
+    } finally {
+      setFileBusy(false)
+      setCameraBootKey((k) => k + 1)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-zuri-light py-8 px-4">
+      {/* Dedicated host for html5-qrcode file decoding only (never call .start() here). */}
+      <div
+        id={fileHostElementId}
+        className="fixed w-px h-px overflow-hidden opacity-0 pointer-events-none"
+        aria-hidden
+      />
+
       <div className="max-w-2xl mx-auto">
-        <div className="bg-white rounded-2xl shadow-xl p-8">
+        <div className="bg-white rounded-2xl border border-gray-200 p-8">
           <div className="text-center mb-6">
-            <h1 className="text-3xl font-bold text-zuri-black mb-2">Scan QR Code</h1>
-            <p className="text-gray-600">Point your camera at the QR code on the table</p>
+            <h1 className="text-2xl font-semibold text-zuri-black mb-2">Scan QR Code</h1>
+            <p className="text-gray-600 text-sm">Point your camera at the QR code on the table</p>
           </div>
 
-          <div ref={wrapperRef} className="mb-4" />
+          {scanError && (
+            <div className="mb-4 rounded-xl border border-red-200 bg-red-50/60 px-4 py-3 text-center">
+              <p className="text-sm text-red-700">{scanError}</p>
+            </div>
+          )}
+
+          <div className="relative mb-4 w-full min-h-[240px] rounded-xl border border-gray-100 overflow-hidden bg-zuri-black/5">
+            <div id={readerElementId} className="w-full min-h-[240px]" />
+          </div>
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(ev) => void onFileChange(ev)}
+          />
+
+          <div className="rounded-xl border border-zuri-orange/25 bg-zuri-light/80 p-4">
+            <p className="text-xs font-medium text-zuri-black mb-2">Or upload a photo of the QR code</p>
+            <button
+              type="button"
+              disabled={fileBusy}
+              onClick={onPickImage}
+              className="w-full sm:w-auto px-4 py-2 rounded-lg text-sm font-medium border-2 border-zuri-orange text-zuri-orange bg-transparent hover:border-zuri-orange-dark hover:text-zuri-orange-dark transition-colors disabled:opacity-50"
+            >
+              {fileBusy ? 'Reading image…' : 'Choose image'}
+            </button>
+            <p className="text-[11px] text-zuri-black/50 mt-2">PNG or JPG — include the full code in frame.</p>
+          </div>
 
           <div className="text-center mt-6">
             <button
+              type="button"
               onClick={() => navigate('/')}
-              className="text-zuri-black hover:text-zuri-yellow transition"
+              className="text-sm text-zuri-black hover:text-zuri-orange transition"
             >
               ← Back to Home
             </button>
@@ -149,4 +307,3 @@ function QRScanner(): JSX.Element {
 }
 
 export default QRScanner
-

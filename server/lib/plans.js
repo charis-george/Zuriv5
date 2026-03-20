@@ -45,12 +45,12 @@ const PLAN_PRICES_NGN = Object.freeze({
   [PLANS.ZURI_PLUS]: 60000
 });
 
-// Yearly prices (10% off)
+// Yearly prices (20% off monthly × 12)
 const PLAN_PRICES_NGN_YEARLY = Object.freeze({
-  [PLANS.STARTER]: 81000,   // 7500 * 12 * 0.9
-  [PLANS.GROWTH]: 216000,
-  [PLANS.PRO]: 432000,
-  [PLANS.ZURI_PLUS]: 648000
+  [PLANS.STARTER]: 72000,
+  [PLANS.GROWTH]: 192000,
+  [PLANS.PRO]: 384000,
+  [PLANS.ZURI_PLUS]: 576000
 });
 
 function getPlanAmountNg(plan, interval = 'monthly') {

@@ -26,7 +26,7 @@ export class ErrorBoundary extends Component<Props, State> {
       if (this.props.fallback) return this.props.fallback
       return (
         <div className="min-h-screen bg-zuri-light flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-xl p-8 max-w-md w-full text-center">
+          <div className="bg-white rounded-2xl border border-gray-200 p-8 max-w-md w-full text-center">
             <h1 className="text-xl font-bold text-zuri-black mb-2">Something went wrong</h1>
             <p className="text-gray-600 text-sm mb-4 break-all">{this.state.error.message}</p>
             <button

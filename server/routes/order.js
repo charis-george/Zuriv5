@@ -2,17 +2,14 @@ const express = require('express');
 const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../database');
-const { agentLog } = require('../debug-log');
 const { requireBusinessAuth } = require('../middleware/auth');
 const { getOrCreateNetworkCustomer, updateCustomerStats, getStatsByEmail, getStatsForCustomerIds } = require('../lib/zuri-network');
+const { sendBusinessEmail } = require('../lib/notifications')
 
 const supabase = getDb();
 
 // Create order
 router.post('/', async (req, res) => {
-  // #region agent log
-  agentLog({ location: 'order.js:POST', message: 'Order POST received', data: { businessId: req.body?.businessId, itemCount: req.body?.items?.length }, hypothesisId: 'H1' });
-  // #endregion
   try {
     const { businessId, customerName, customerPhone, customerEmail, items, estimatedPrepTime } = req.body;
 
@@ -92,10 +89,6 @@ router.post('/', async (req, res) => {
       .select()
       .single();
 
-    // #region agent log
-    agentLog({ location: 'order.js:orderInsert', message: 'Order insert result', data: { orderError: orderError?.message || null, orderId }, hypothesisId: 'H2' });
-    // #endregion
-
     if (orderError) {
       console.error('Create order error:', orderError);
       return res.status(500).json({ error: 'Failed to create order' });
@@ -104,10 +97,6 @@ router.post('/', async (req, res) => {
     const { error: itemsError } = await supabase
       .from('order_items')
       .insert(orderItems);
-
-    // #region agent log
-    agentLog({ location: 'order.js:orderItemsInsert', message: 'Order items insert result', data: { itemsError: itemsError?.message || null }, hypothesisId: 'H2' });
-    // #endregion
 
     if (itemsError) {
       console.error('Create order items error:', itemsError);
@@ -146,6 +135,30 @@ router.post('/', async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       io.to(`business-${businessId}`).emit('new-order', orderResponse);
+    }
+
+    // Email notification to business (best effort)
+    const itemLines = (orderItemsWithNames || []).map(it => `- ${it.quantity}× ${it.menuItemName} (${it.price.toFixed ? it.price.toFixed(2) : it.price})`).join('\n')
+    try {
+      await sendBusinessEmail({
+        businessId,
+        subject: `New order received (${orderResponse.status})`,
+        text: [
+          `You received a new order from ${orderResponse.customer_name || 'a guest'}.`,
+          ``,
+          `Order: #${String(orderResponse.id).slice(0, 8).toUpperCase()}`,
+          `Total: ₦${Number(orderResponse.total_amount || orderResponse.totalAmount || 0).toFixed(2)}`,
+          `Phone: ${orderResponse.customer_phone || '—'}`,
+          ``,
+          `Items:`,
+          itemLines || '(no items)',
+          ``,
+          `Open your dashboard to start preparing.`
+        ].join('\n')
+      })
+    } catch (e) {
+      // Don't break ordering if SMTP isn't configured
+      console.error('Order email notification error:', e)
     }
 
     res.json(orderResponse);
@@ -340,6 +353,27 @@ router.patch('/:id/status', requireBusinessAuth, async (req, res) => {
     const io = req.app.get('io');
     if (io && order) {
       io.to(`business-${order.business_id}`).emit('order-updated', order);
+    }
+
+    // Email notification on meaningful updates
+    if (order && ['preparing', 'ready', 'completed'].includes(order.status)) {
+      try {
+        const itemCount = Array.isArray(order.items) ? order.items.length : undefined
+        await sendBusinessEmail({
+          businessId: order.business_id,
+          subject: `Order status updated: ${order.status}`,
+          text: [
+            `Order status changed: ${order.status}`,
+            ``,
+            `Order: #${String(order.id).slice(0, 8).toUpperCase()}`,
+            `Total: ₦${Number(order.total_amount || 0).toFixed(2)}`,
+            `Customer: ${order.customer_name || 'Guest'} (${order.customer_phone || '—'})`,
+            itemCount != null ? `Items: ${itemCount}` : null
+          ].filter(Boolean).join('\n')
+        })
+      } catch (e) {
+        console.error('Order status email notification error:', e)
+      }
     }
 
     res.json(order);

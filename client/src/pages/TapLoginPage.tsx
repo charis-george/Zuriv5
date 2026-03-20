@@ -30,7 +30,7 @@ function TapLoginPage(): JSX.Element {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-[#fefbf5]">
-      <div className="w-full max-w-sm bg-white rounded-2xl shadow-lg border border-gray-100 p-6">
+      <div className="w-full max-w-sm bg-white rounded-2xl border border-gray-200 p-6">
         <Link to="/zuri-tap" className="block mb-4">
           <img src="/ZURI.png" alt="ZURI" className="h-8 w-auto" />
         </Link>
