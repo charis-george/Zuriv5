@@ -83,6 +83,9 @@ async function getOrCreateRecipient(supabase, businessId) {
  * @param { number } orderTotalNaira
  * @returns { number } amount in kobo, or 0 if below minimum
  */
+/** Default platform fee when no TRANSFER_PLATFORM_FEE_* env is set (matches customer-facing copy). */
+const DEFAULT_FEE_PERCENT = 1.5;
+
 function computeTransferAmountKobo(orderTotalNaira) {
   let naira = Number(orderTotalNaira);
   if (!Number.isFinite(naira) || naira <= 0) return 0;
@@ -90,6 +93,8 @@ function computeTransferAmountKobo(orderTotalNaira) {
     naira = naira * (1 - FEE_PERCENT / 100);
   } else if (FEE_NAIRA != null && FEE_NAIRA > 0) {
     naira = Math.max(0, naira - FEE_NAIRA);
+  } else {
+    naira = naira * (1 - DEFAULT_FEE_PERCENT / 100);
   }
   if (naira < MIN_TRANSFER_NAIRA) return 0;
   return Math.round(naira * 100);

@@ -3,12 +3,29 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
 const path = require('path');
+const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../database');
 const { getBusinessPlan, canAddBusinessLogo } = require('../lib/plans');
 const { signBusinessToken, requireBusinessAuth } = require('../middleware/auth');
+const { getTransporter } = require('../lib/email');
 
 const supabase = getDb();
+
+function isGrowthPlus(plan) {
+  return plan === 'growth' || plan === 'pro' || plan === 'zuri_plus' || plan === 'enterprise' || plan === 'basic' || plan === 'advanced';
+}
+
+// In-memory store for password reset tokens (use DB + email in production)
+const businessResetTokens = new Map();
+const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+function purgeExpiredBusinessTokens() {
+  const now = Date.now();
+  for (const [token, data] of businessResetTokens.entries()) {
+    if (data.expiresAt < now) businessResetTokens.delete(token);
+  }
+}
 const BUCKET = 'menu-items';
 const logoUpload = multer({
   storage: multer.memoryStorage(),
@@ -108,6 +125,93 @@ router.post('/login', async (req, res) => {
   }
 });
 
+// Forgot password — request reset link (in production, send link by email)
+router.post('/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email || typeof email !== 'string' || !email.trim()) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    const { data: business, error } = await supabase
+      .from('businesses')
+      .select('id')
+      .eq('email', email.trim().toLowerCase())
+      .single();
+
+    if (error || !business) {
+      return res.json({ success: true, message: 'If an account exists with this email, you will receive reset instructions.' });
+    }
+
+    purgeExpiredBusinessTokens();
+    const token = crypto.randomBytes(32).toString('hex');
+    businessResetTokens.set(token, { businessId: business.id, expiresAt: Date.now() + RESET_TOKEN_TTL_MS });
+
+    const baseUrl = req.get('origin') || process.env.BASE_URL || process.env.FRONTEND_URL || 'http://localhost:5173';
+    const resetLink = `${baseUrl}/business/reset-password?token=${token}`;
+
+    const transporter = getTransporter();
+    if (transporter) {
+      try {
+        await transporter.sendMail({
+          from: process.env.SMTP_FROM || process.env.SMTP_USER,
+          to: email.trim().toLowerCase(),
+          subject: 'Reset your ZURI business password',
+          text: `You requested a password reset for your ZURI business account. Click the link below to set a new password (valid for 1 hour):\n\n${resetLink}\n\nIf you didn't request this, you can ignore this email.`,
+          html: `<p>You requested a password reset for your ZURI business account.</p><p><a href="${resetLink}">Set a new password</a> (link valid for 1 hour).</p><p>If you didn't request this, you can ignore this email.</p>`
+        });
+      } catch (err) {
+        console.error('Password reset email error:', err);
+        return res.status(500).json({ error: 'Failed to send reset email. Please try again later.' });
+      }
+      return res.json({ success: true, message: 'If an account exists with this email, you will receive reset instructions.' });
+    }
+
+    // No SMTP configured: return reset link for dev/testing only (do not expose in production)
+    if (process.env.NODE_ENV !== 'production') {
+      return res.json({ success: true, message: 'If an account exists with this email, you will receive reset instructions.', resetLink });
+    }
+    res.json({ success: true, message: 'If an account exists with this email, you will receive reset instructions.' });
+  } catch (err) {
+    console.error('Forgot password error:', err);
+    res.status(500).json({ error: 'Something went wrong' });
+  }
+});
+
+// Reset password — with token from forgot-password flow
+router.post('/reset-password', async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+    if (!token || typeof token !== 'string' || !token.trim()) {
+      return res.status(400).json({ error: 'Reset token is required' });
+    }
+    if (!newPassword || typeof newPassword !== 'string' || !newPassword.trim()) {
+      return res.status(400).json({ error: 'New password is required' });
+    }
+    if (newPassword.trim().length < 6) {
+      return res.status(400).json({ error: 'New password must be at least 6 characters' });
+    }
+
+    const data = businessResetTokens.get(token.trim());
+    if (!data || data.expiresAt < Date.now()) {
+      return res.status(400).json({ error: 'Invalid or expired reset link. Please request a new one.' });
+    }
+
+    const hashedPassword = bcrypt.hashSync(newPassword.trim(), 10);
+    const { error: updateError } = await supabase
+      .from('businesses')
+      .update({ password: hashedPassword })
+      .eq('id', data.businessId);
+    if (updateError) return res.status(500).json({ error: 'Failed to update password' });
+
+    businessResetTokens.delete(token.trim());
+    res.json({ success: true, message: 'Password updated. You can now log in.' });
+  } catch (err) {
+    console.error('Reset password error:', err);
+    res.status(500).json({ error: 'Something went wrong' });
+  }
+});
+
 // Get business by ID
 router.get('/:id', async (req, res) => {
   try {
@@ -115,7 +219,7 @@ router.get('/:id', async (req, res) => {
 
     const { data: business, error } = await supabase
       .from('businesses')
-      .select('id, name, email, phone, address, created_at, plan, paystack_public_key, bank_code, bank_name, account_number, account_name, logo_url')
+      .select('id, name, email, phone, address, created_at, plan, paystack_public_key, bank_code, bank_name, account_number, account_name, logo_url, storefront_config, storefront_details')
       .eq('id', id)
       .single();
 
@@ -133,7 +237,9 @@ router.get('/:id', async (req, res) => {
       createdAt: business.created_at,
       plan: business.plan || 'free',
       paystackPublicKey,
-      logoUrl: business.logo_url || null
+      logoUrl: business.logo_url || null,
+      storefrontConfig: business.storefront_config || null,
+      storefrontDetails: business.storefront_details || null
     };
     if (business.bank_name || business.account_name) {
       payload.bankAccount = {
@@ -279,6 +385,72 @@ router.post('/:id/upload-logo', requireBusinessAuth, logoUpload.single('logo'), 
     if (err.message && err.message.includes('Only images')) return res.status(400).json({ error: err.message });
     console.error('Upload logo error:', err);
     res.status(500).json({ error: 'Failed to upload logo' });
+  }
+});
+
+// Storefront customizer (Growth+) — save published storefront config/details
+router.patch('/:id/storefront', requireBusinessAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (id !== req.businessId) {
+      return res.status(403).json({ error: 'You can only update your own business' });
+    }
+
+    const { config, details } = req.body || {};
+    if (!config || typeof config !== 'object') {
+      return res.status(400).json({ error: 'config is required' });
+    }
+    if (!details || typeof details !== 'object') {
+      return res.status(400).json({ error: 'details is required' });
+    }
+
+    const { data: biz, error: bizErr } = await supabase
+      .from('businesses')
+      .select('id, plan')
+      .eq('id', id)
+      .single();
+    if (bizErr || !biz) return res.status(404).json({ error: 'Business not found' });
+    if (!isGrowthPlus(biz.plan || 'free')) {
+      return res.status(403).json({ error: 'Upgrade to Growth to customize storefront.' });
+    }
+
+    const { data, error } = await supabase
+      .from('businesses')
+      .update({
+        storefront_config: config,
+        storefront_details: details
+      })
+      .eq('id', id)
+      .select('storefront_config, storefront_details')
+      .single();
+
+    if (error) {
+      console.error('Storefront update error:', error);
+      return res.status(500).json({ error: 'Failed to publish storefront changes' });
+    }
+
+    // Broadcast live updates to public storefront viewers
+    try {
+      const io = req.app && req.app.get ? req.app.get('io') : null;
+      if (io) {
+        io.to(`storefront-${id}`).emit('storefront-updated', {
+          businessId: id,
+          config: data.storefront_config || null,
+          details: data.storefront_details || null
+        });
+      }
+    } catch (e) {
+      console.error('Storefront socket broadcast error:', e);
+    }
+
+    res.json({
+      success: true,
+      storefrontConfig: data.storefront_config || null,
+      storefrontDetails: data.storefront_details || null
+    });
+  } catch (err) {
+    console.error('Storefront update error:', err);
+    res.status(500).json({ error: 'Something went wrong' });
   }
 });
 

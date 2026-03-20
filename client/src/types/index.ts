@@ -13,11 +13,60 @@ export interface Business {
   plan?: PlanId
   paystackPublicKey?: string | null
   logoUrl?: string | null
+  storefrontConfig?: StorefrontConfig | null
+  storefrontDetails?: StorefrontDetails | null
   bankAccount?: {
     bankName: string | null
     accountNumberMasked: string | null
     accountName: string | null
   } | null
+}
+
+// Storefront Customizer Types (published to customer ordering page)
+export type StorefrontHeroOverlay = 'gradient' | 'solid' | 'dim' | 'split'
+export type StorefrontFontFamily = 'sans' | 'serif' | 'mono'
+export type StorefrontMenuLayout = 'grid' | 'list' | 'cards'
+export type StorefrontCardImageShape = 'square' | 'rounded' | 'circle'
+export type StorefrontDividerStyle = 'none' | 'soft' | 'bold' | 'dotted'
+export type StorefrontPillShape = 'pill' | 'rectangle' | 'underline'
+export type StorefrontSectionTitleTreatment = 'underlined' | 'uppercase' | 'chip'
+export type StorefrontShadowDepth = 'flat' | 'soft' | 'deep'
+export type StorefrontBackgroundTone = 'light' | 'warm' | 'dark'
+
+export type StorefrontConfig = {
+  brandColor: string
+  backgroundTone: StorefrontBackgroundTone
+  heroOverlay: StorefrontHeroOverlay
+  priceTextColor: string
+
+  fontFamily: StorefrontFontFamily
+  titleSize: number
+  menuItemFontScale: number
+
+  layout: StorefrontMenuLayout
+  gridStyle: 'two_col' | 'row_list' | 'wide_cards'
+  showPhotos: boolean
+  showDescriptions: boolean
+  showCalories: boolean
+  showRatings: boolean
+  cardSize: number
+
+  cardImageShape: StorefrontCardImageShape
+  cardGap: number
+  cardRadius: number
+  dividerStyle: StorefrontDividerStyle
+
+  pillShape: StorefrontPillShape
+  sectionTitleTreatment: StorefrontSectionTitleTreatment
+  shadowDepth: StorefrontShadowDepth
+  categoryStripBorder: boolean
+  heroHeight: number
+}
+
+export type StorefrontDetails = {
+  name: string
+  tagline: string
+  cuisineTags: string[]
 }
 
 export const PLAN_LABELS: Record<PlanId, string> = {
@@ -44,28 +93,28 @@ export const PLAN_PRICES: Record<PlanId, string> = {
 
 export const PLAN_PRICES_YEARLY: Record<PlanId, string> = {
   free: '₦0',
-  starter: '₦81,000',
-  growth: '₦216,000',
-  pro: '₦432,000',
-  zuri_plus: '₦648,000',
+  starter: '₦72,000',
+  growth: '₦192,000',
+  pro: '₦384,000',
+  zuri_plus: '₦576,000',
   enterprise: 'Custom',
-  basic: '₦216,000',
-  advanced: '₦432,000'
+  basic: '₦192,000',
+  advanced: '₦384,000'
 }
 
 /** When billing yearly, show this monthly equivalent on pricing cards (total/12). Full total shown at checkout. */
 export const PLAN_PRICES_YEARLY_AS_MONTHLY: Record<PlanId, string> = {
   free: '₦0',
-  starter: '₦6,750',
-  growth: '₦18,000',
-  pro: '₦36,000',
-  zuri_plus: '₦54,000',
+  starter: '₦6,000',
+  growth: '₦16,000',
+  pro: '₦32,000',
+  zuri_plus: '₦48,000',
   enterprise: 'Custom',
-  basic: '₦18,000',
-  advanced: '₦36,000'
+  basic: '₦16,000',
+  advanced: '₦32,000'
 }
 
-export const YEARLY_DISCOUNT_PCT = 10
+export const YEARLY_DISCOUNT_PCT = 20
 
 // Menu Types
 export interface MenuItem {
@@ -115,6 +164,52 @@ export interface Order {
     totalOrders: number
     businessCount: number
   }
+}
+
+// Reservations (table booking requests -> business confirmation)
+export interface Reservation {
+  id: string
+  businessId?: string
+  business_id?: string
+
+  customerName?: string
+  customer_name?: string
+
+  customerPhone?: string
+  customer_phone?: string
+
+  partySize?: number
+  party_size?: number
+
+  reservedFor?: string
+  reserved_for?: string
+
+  notes?: string | null
+  status: 'requested' | 'confirmed' | 'cancelled'
+  createdAt?: string
+  created_at?: string
+
+  confirmedAt?: string | null
+  confirmed_at?: string | null
+
+  cancelledAt?: string | null
+  cancelled_at?: string | null
+}
+
+export interface Review {
+  id: string
+  businessId?: string
+  business_id?: string
+  orderId?: string
+  order_id?: string
+  customerName?: string
+  customer_name?: string
+  customerEmail?: string
+  customer_email?: string
+  rating: number
+  comment?: string | null
+  createdAt?: string
+  created_at?: string
 }
 
 // Analytics Types

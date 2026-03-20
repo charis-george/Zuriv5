@@ -3,7 +3,6 @@ const router = express.Router();
 const crypto = require('crypto');
 const Paystack = require('@paystack/paystack-sdk');
 const { getDb } = require('../database');
-const { agentLog } = require('../debug-log');
 const { processOrderPayout, updatePayoutStatusFromWebhook } = require('../lib/paystack-transfer');
 
 const supabase = getDb();

@@ -1,0 +1,178 @@
+{"sessionId":"0133e9","location":"index.js","message":"Server started","data":{"port":"3000"},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"menu.js:GET business/:businessId","message":"Menu fetch result","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36","categoriesError":null,"categoriesCount":4},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"menu.js:GET business/:businessId","message":"Menu fetch result","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36","categoriesError":null,"categoriesCount":4},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"menu.js:uploadEntry","message":"Upload image called","data":{"businessId":true,"hasFile":true,"bucket":"menu-items"},"timestamp":1772388269971,"hypothesisId":"H5"}
+{"sessionId":"0133e9","location":"menu.js:afterStorageUpload","message":"Storage upload result","data":{"uploadError":"new row violates row-level security policy","statusCode":"403"},"timestamp":1772388273661,"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"BusinessDashboard.tsx:uploadCatch","message":"Upload failed","data":{"status":500,"error":"new row violates row-level security policy"},"timestamp":1772388273683,"hypothesisId":"H2"}
+{"sessionId":"0133e9","location":"index.js","message":"Server started","data":{"port":"3000"},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"menu.js:GET business/:businessId","message":"Menu fetch result","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36","categoriesError":null,"categoriesCount":4},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"menu.js:GET business/:businessId","message":"Menu fetch result","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36","categoriesError":null,"categoriesCount":4},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"menu.js:uploadEntry","message":"Upload image called","data":{"businessId":true,"hasFile":true,"bucket":"menu-items"},"timestamp":1772388535686,"hypothesisId":"H5"}
+{"sessionId":"0133e9","location":"menu.js:afterStorageUpload","message":"Storage upload result","data":{"uploadError":"new row violates row-level security policy","statusCode":"403"},"timestamp":1772388539874,"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"BusinessDashboard.tsx:uploadCatch","message":"Upload failed","data":{"status":500,"error":"new row violates row-level security policy"},"timestamp":1772388539880,"hypothesisId":"H2"}
+{"sessionId":"0133e9","location":"index.js","message":"Server started","data":{"port":"3000"},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"menu.js:GET business/:businessId","message":"Menu fetch result","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36","categoriesError":null,"categoriesCount":4},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"menu.js:GET business/:businessId","message":"Menu fetch result","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36","categoriesError":null,"categoriesCount":4},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"menu.js:uploadEntry","message":"Upload image called","data":{"businessId":true,"hasFile":true,"bucket":"menu-items"},"timestamp":1772388868923,"hypothesisId":"H5"}
+{"sessionId":"0133e9","location":"menu.js:afterStorageUpload","message":"Storage upload result","data":{"uploadError":null,"statusCode":null},"timestamp":1772388871593,"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"menu.js:GET business/:businessId","message":"Menu fetch result","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36","categoriesError":null,"categoriesCount":4},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"menu.js:GET business/:businessId","message":"Menu fetch result","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36","categoriesError":null,"categoriesCount":4},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"OrderPage.tsx:useEffect","message":"Fetching business and menu","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36"},"timestamp":1772388897449,"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"OrderPage.tsx:useEffect","message":"Fetching business and menu","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36"},"timestamp":1772388897457,"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"menu.js:GET business/:businessId","message":"Menu fetch result","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36","categoriesError":null,"categoriesCount":4},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"OrderPage.tsx:menuLoaded","message":"Menu loaded","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36","menuLength":4},"timestamp":1772388899078,"hypothesisId":"H3"}
+{"sessionId":"0133e9","location":"menu.js:GET business/:businessId","message":"Menu fetch result","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36","categoriesError":null,"categoriesCount":4},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"OrderPage.tsx:menuLoaded","message":"Menu loaded","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36","menuLength":4},"timestamp":1772388900104,"hypothesisId":"H3"}
+{"sessionId":"0133e9","location":"index.js","message":"Server started","data":{"port":"3000"},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"OrderPage.tsx:useEffect","message":"Fetching business and menu","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36"},"timestamp":1772389801233,"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"OrderPage.tsx:useEffect","message":"Fetching business and menu","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36"},"timestamp":1772389801238,"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"OrderPage.tsx:menuLoaded","message":"Menu loaded","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36","menuLength":4},"timestamp":1772389803838,"hypothesisId":"H3"}
+{"sessionId":"0133e9","location":"OrderPage.tsx:menuLoaded","message":"Menu loaded","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36","menuLength":4},"timestamp":1772389805012,"hypothesisId":"H3"}
+{"sessionId":"0133e9","location":"index.js","message":"Server started","data":{"port":"3000"},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"index.js","message":"Server started","data":{"port":"3000"},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"index.js","message":"Server started","data":{"port":"3000"},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"index.js","message":"Server started","data":{"port":"3000"},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r1","hypothesisId":"H2,H5"},"timestamp":1772440506097}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r1","runId":1,"containerFound":true,"containersWithId":1,"hypothesisId":"H1,H2,H5"},"timestamp":1772440506107}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r0","hypothesisId":"H2,H5"},"timestamp":1772440506095}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r1","runId":1,"containerStillInDom":true,"containerChildCount":3,"hypothesisId":"H3,H4"},"timestamp":1772440506117}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r1","runId":1,"hypothesisId":"H3"},"timestamp":1772440506120}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r1","runId":1,"hypothesisId":"H1"},"timestamp":1772440506115}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r1","runId":2,"containerFound":true,"containersWithId":1,"hypothesisId":"H1,H2,H5"},"timestamp":1772440506121}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r1","runId":2,"hypothesisId":"H1"},"timestamp":1772440506125}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r1","runId":2,"containerStillInDom":false,"containerChildCount":0,"hypothesisId":"H3,H4"},"timestamp":1772440525392}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r1","runId":2,"hypothesisId":"H3"},"timestamp":1772440525407}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r2","hypothesisId":"H2,H5"},"timestamp":1772440527421}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r3","hypothesisId":"H2,H5"},"timestamp":1772440527423}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r3","runId":1,"containerFound":true,"containersWithId":1,"hypothesisId":"H1,H2,H5"},"timestamp":1772440527463}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r3","runId":1,"hypothesisId":"H1"},"timestamp":1772440527478}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r3","runId":1,"containerStillInDom":true,"containerChildCount":3,"hypothesisId":"H3,H4"},"timestamp":1772440527483}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r3","runId":1,"hypothesisId":"H3"},"timestamp":1772440527491}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r3","runId":2,"containerFound":true,"containersWithId":1,"hypothesisId":"H1,H2,H5"},"timestamp":1772440527494}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r3","runId":2,"hypothesisId":"H1"},"timestamp":1772440527512}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r3","runId":2,"containerStillInDom":false,"containerChildCount":0,"hypothesisId":"H3,H4"},"timestamp":1772440533355}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r3","runId":2,"hypothesisId":"H3"},"timestamp":1772440533357}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r0","hypothesisId":"H2,H5"},"timestamp":1772441037214}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r1","hypothesisId":"H2,H5"},"timestamp":1772441037216}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r1","runId":1,"containerFound":true,"containersWithId":1,"hypothesisId":"H1,H2,H5"},"timestamp":1772441037227}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r1","runId":1,"hypothesisId":"H1"},"timestamp":1772441037238}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r1","runId":1,"containerStillInDom":true,"containerChildCount":3,"hypothesisId":"H3,H4"},"timestamp":1772441037240}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r1","runId":1,"hypothesisId":"H3"},"timestamp":1772441037241}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r1","runId":2,"containerFound":true,"containersWithId":1,"hypothesisId":"H1,H2,H5"},"timestamp":1772441037242}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r1","runId":2,"hypothesisId":"H1"},"timestamp":1772441037247}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r1","runId":2,"containerStillInDom":false,"containerChildCount":0,"hypothesisId":"H3,H4"},"timestamp":1772441054932}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r1","runId":2,"hypothesisId":"H3"},"timestamp":1772441054934}
+{"sessionId":"0133e9","location":"OrderPage.tsx:useEffect","message":"Fetching business and menu","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36"},"timestamp":1772441054941,"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"OrderPage.tsx:useEffect","message":"Fetching business and menu","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36"},"timestamp":1772441055022,"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"OrderPage.tsx:menuLoaded","message":"Menu loaded","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36","menuLength":4},"timestamp":1772441056829,"hypothesisId":"H3"}
+{"sessionId":"0133e9","location":"OrderPage.tsx:menuLoaded","message":"Menu loaded","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36","menuLength":4},"timestamp":1772441057354,"hypothesisId":"H3"}
+{"sessionId":"0133e9","location":"OrderPage.tsx:beforePlaceOrder","message":"Placing order","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36","itemCount":2},"timestamp":1772441102302,"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"order.js:POST","message":"Order POST received","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36","itemCount":2},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"order.js:orderInsert","message":"Order insert result","data":{"orderError":null,"orderId":"338dd86a-4afa-45cd-bb5e-0b834992f5cf"},"hypothesisId":"H2"}
+{"sessionId":"0133e9","location":"order.js:orderItemsInsert","message":"Order items insert result","data":{"itemsError":null},"hypothesisId":"H2"}
+{"sessionId":"0133e9","location":"OrderPage.tsx:orderSuccess","message":"Order placed","data":{"orderId":"338dd86a-4afa-45cd-bb5e-0b834992f5cf"},"timestamp":1772441103676,"hypothesisId":"H2"}
+{"sessionId":"0133e9","location":"OrderPage.tsx:useEffect","message":"Fetching business and menu","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36"},"timestamp":1772441103731,"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"OrderPage.tsx:menuLoaded","message":"Menu loaded","data":{"businessId":"9eb85020-2a80-49e6-9fa3-9d2287987d36","menuLength":4},"timestamp":1772441104266,"hypothesisId":"H3"}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r0","hypothesisId":"H2,H5"},"timestamp":1772441842564}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r1","hypothesisId":"H2,H5"},"timestamp":1772441842567}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r1","runId":1,"containerFound":true,"containersWithId":1,"hypothesisId":"H1,H2,H5"},"timestamp":1772441842575}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r1","runId":1,"hypothesisId":"H1"},"timestamp":1772441842589}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r1","runId":1,"containerStillInDom":true,"containerChildCount":3,"hypothesisId":"H3,H4"},"timestamp":1772441842592}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r1","runId":1,"hypothesisId":"H3"},"timestamp":1772441842594}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r1","runId":2,"containerFound":true,"containersWithId":1,"hypothesisId":"H1,H2,H5"},"timestamp":1772441842595}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r1","runId":2,"hypothesisId":"H1"},"timestamp":1772441842609}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r1","runId":2,"containerStillInDom":false,"containerChildCount":0,"hypothesisId":"H3,H4"},"timestamp":1772441853379}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r1","runId":2,"hypothesisId":"H3"},"timestamp":1772441853392}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r2","hypothesisId":"H2,H5"},"timestamp":1772441854577}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r3","hypothesisId":"H2,H5"},"timestamp":1772441854578}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r3","runId":1,"containerFound":true,"containersWithId":1,"hypothesisId":"H1,H2,H5"},"timestamp":1772441854608}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r3","runId":1,"hypothesisId":"H1"},"timestamp":1772441854625}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r3","runId":1,"containerStillInDom":true,"containerChildCount":3,"hypothesisId":"H3,H4"},"timestamp":1772441854627}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r3","runId":1,"hypothesisId":"H3"},"timestamp":1772441854644}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r3","runId":2,"containerFound":true,"containersWithId":1,"hypothesisId":"H1,H2,H5"},"timestamp":1772441854653}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r3","runId":2,"hypothesisId":"H1"},"timestamp":1772441854675}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r3","runId":2,"containerStillInDom":false,"containerChildCount":0,"hypothesisId":"H3,H4"},"timestamp":1772441861802}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r3","runId":2,"hypothesisId":"H3"},"timestamp":1772441861808}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r4","hypothesisId":"H2,H5"},"timestamp":1772441862817}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r5","runId":1,"containerStillInDom":true,"containerChildCount":3,"hypothesisId":"H3,H4"},"timestamp":1772441862858}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r5","runId":1,"hypothesisId":"H1"},"timestamp":1772441862857}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r5","runId":1,"containerFound":true,"containersWithId":1,"hypothesisId":"H1,H2,H5"},"timestamp":1772441862850}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r5","runId":1,"hypothesisId":"H3"},"timestamp":1772441862859}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r5","hypothesisId":"H2,H5"},"timestamp":1772441862822}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r5","runId":2,"containerFound":true,"containersWithId":1,"hypothesisId":"H1,H2,H5"},"timestamp":1772441862874}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r5","runId":2,"hypothesisId":"H1"},"timestamp":1772441862880}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r5","runId":2,"containerStillInDom":false,"containerChildCount":0,"hypothesisId":"H3,H4"},"timestamp":1772441868467}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r5","runId":2,"hypothesisId":"H3"},"timestamp":1772441868471}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r7","runId":1,"wrapperFound":true,"containersWithId":0,"hypothesisId":"H1,H2,H5"},"timestamp":1772442021957}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r7","hypothesisId":"H2,H5"},"timestamp":1772442021940}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r6","hypothesisId":"H2,H5"},"timestamp":1772442021938}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r7","runId":1,"hypothesisId":"H1"},"timestamp":1772442021988}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r7","runId":1,"containerStillInDom":true,"containerChildCount":3,"hypothesisId":"H3,H4"},"timestamp":1772442021992}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r7","runId":1,"hypothesisId":"H3"},"timestamp":1772442021998}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r7","runId":2,"wrapperFound":true,"containersWithId":0,"hypothesisId":"H1,H2,H5"},"timestamp":1772442022003}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r7","runId":2,"hypothesisId":"H1"},"timestamp":1772442022009}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r7","runId":2,"hypothesisId":"H3"},"timestamp":1772442028441}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r7","runId":2,"containerStillInDom":false,"containerChildCount":0,"hypothesisId":"H3,H4"},"timestamp":1772442028440}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r0","hypothesisId":"H2,H5"},"timestamp":1772442032972}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r1","hypothesisId":"H2,H5"},"timestamp":1772442032973}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r1","runId":1,"wrapperFound":true,"containersWithId":0,"hypothesisId":"H1,H2,H5"},"timestamp":1772442032989}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r1","runId":1,"hypothesisId":"H1"},"timestamp":1772442033002}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r1","runId":1,"containerStillInDom":true,"containerChildCount":3,"hypothesisId":"H3,H4"},"timestamp":1772442033002}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r1","runId":1,"hypothesisId":"H3"},"timestamp":1772442033003}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r1","runId":2,"wrapperFound":true,"containersWithId":0,"hypothesisId":"H1,H2,H5"},"timestamp":1772442033004}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r1","runId":2,"hypothesisId":"H1"},"timestamp":1772442033008}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r1","runId":2,"containerStillInDom":false,"containerChildCount":0,"hypothesisId":"H3,H4"},"timestamp":1772442043621}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r1","runId":2,"hypothesisId":"H3"},"timestamp":1772442043622}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r0","hypothesisId":"H2,H5"},"timestamp":1772442937870}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r1","hypothesisId":"H2,H5"},"timestamp":1772442937872}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r1","runId":1,"wrapperFound":true,"containersWithId":0,"hypothesisId":"H1,H2,H5"},"timestamp":1772442937894}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r1","runId":1,"hypothesisId":"H1"},"timestamp":1772442937917}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r1","runId":1,"containerStillInDom":true,"containerChildCount":3,"hypothesisId":"H3,H4"},"timestamp":1772442937918}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r1","runId":2,"wrapperFound":true,"containersWithId":0,"hypothesisId":"H1,H2,H5"},"timestamp":1772442937928}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r1","runId":2,"hypothesisId":"H1"},"timestamp":1772442937940}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r1","runId":1,"hypothesisId":"H3"},"timestamp":1772442937952}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r1","runId":2,"containerStillInDom":false,"containerChildCount":0,"hypothesisId":"H3,H4"},"timestamp":1772442946295}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r1","runId":2,"hypothesisId":"H3"},"timestamp":1772442946302}
+{"sessionId":"0133e9","location":"index.js","message":"Server started","data":{"port":"3000"},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"index.js","message":"Server started","data":{"port":"3000"},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"index.js","message":"Server started","data":{"port":"3000"},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"index.js","message":"Server started","data":{"port":"3000"},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"index.js","message":"Server started","data":{"port":"3000"},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"index.js","message":"Server started","data":{"port":"3000"},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"index.js","message":"Server started","data":{"port":"3000"},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"index.js","message":"Server started","data":{"port":"3000"},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"index.js","message":"Server started","data":{"port":"3000"},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r0","hypothesisId":"H2,H5"},"timestamp":1773583753393}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r1","runId":1,"hypothesisId":"H1"},"timestamp":1773583753400}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r1","runId":1,"containerStillInDom":true,"containerChildCount":3,"hypothesisId":"H3,H4"},"timestamp":1773583753401}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r1","hypothesisId":"H2,H5"},"timestamp":1773583753394}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r1","runId":1,"wrapperFound":true,"containersWithId":0,"hypothesisId":"H1,H2,H5"},"timestamp":1773583753396}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r1","runId":2,"wrapperFound":true,"containersWithId":0,"hypothesisId":"H1,H2,H5"},"timestamp":1773583753403}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r1","runId":2,"hypothesisId":"H1"},"timestamp":1773583753404}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r1","runId":1,"hypothesisId":"H3"},"timestamp":1773583753409}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r1","runId":2,"containerStillInDom":false,"containerChildCount":0,"hypothesisId":"H3,H4"},"timestamp":1773583754779}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r1","runId":2,"hypothesisId":"H3"},"timestamp":1773583754780}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r0","hypothesisId":"H2,H5"},"timestamp":1773584223540}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r1","hypothesisId":"H2,H5"},"timestamp":1773584223541}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r1","runId":1,"wrapperFound":true,"containersWithId":0,"hypothesisId":"H1,H2,H5"},"timestamp":1773584223554}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r1","runId":1,"hypothesisId":"H1"},"timestamp":1773584223559}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r1","runId":1,"containerStillInDom":true,"containerChildCount":3,"hypothesisId":"H3,H4"},"timestamp":1773584223560}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r1","runId":2,"wrapperFound":true,"containersWithId":0,"hypothesisId":"H1,H2,H5"},"timestamp":1773584223561}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r1","runId":2,"hypothesisId":"H1"},"timestamp":1773584223562}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r1","runId":1,"hypothesisId":"H3"},"timestamp":1773584223566}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r1","runId":2,"containerStillInDom":false,"containerChildCount":0,"hypothesisId":"H3,H4"},"timestamp":1773584225975}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r1","runId":2,"hypothesisId":"H3"},"timestamp":1773584226005}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r2","hypothesisId":"H2,H5"},"timestamp":1773584230817}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"QRScanner render","data":{"scannerId":"qr-reader-r3","hypothesisId":"H2,H5"},"timestamp":1773584230822}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r3","runId":1,"wrapperFound":true,"containersWithId":0,"hypothesisId":"H1,H2,H5"},"timestamp":1773584230834}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r3","runId":1,"hypothesisId":"H1"},"timestamp":1773584230837}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r3","runId":1,"containerStillInDom":true,"containerChildCount":3,"hypothesisId":"H3,H4"},"timestamp":1773584230839}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"effect start","data":{"scannerId":"qr-reader-r3","runId":2,"wrapperFound":true,"containersWithId":0,"hypothesisId":"H1,H2,H5"},"timestamp":1773584230840}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"scanner.render() called","data":{"scannerId":"qr-reader-r3","runId":2,"hypothesisId":"H1"},"timestamp":1773584230844}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r3","runId":1,"hypothesisId":"H3"},"timestamp":1773584230853}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup start","data":{"scannerId":"qr-reader-r3","runId":2,"containerStillInDom":false,"containerChildCount":0,"hypothesisId":"H3,H4"},"timestamp":1773584628624}
+{"sessionId":"0133e9","location":"QRScanner.tsx","message":"cleanup done","data":{"scannerId":"qr-reader-r3","runId":2,"hypothesisId":"H3"},"timestamp":1773584628643}
+{"sessionId":"0133e9","location":"index.js","message":"Server started","data":{"port":"3000"},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"index.js","message":"Server started","data":{"port":"3000"},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"index.js","message":"Server started","data":{"port":"3000"},"hypothesisId":"H1"}
+{"sessionId":"0133e9","location":"index.js","message":"Server started","data":{"port":"3000"},"hypothesisId":"H1"}

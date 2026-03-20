@@ -3,13 +3,14 @@ import { useParams, useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import io, { Socket } from 'socket.io-client'
 import {
-  LineChart, Line, BarChart, Bar,
+  LineChart, Line, BarChart, Bar, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts'
-import { Business, Order, SalesSummary, SalesByDate, PopularItem, PeakHour, ProfitMargin, QRCodeData, MenuCategory, MenuItem, PLAN_LABELS } from '../types'
+import { Business, Order, Reservation, Review, SalesSummary, SalesByDate, PopularItem, PeakHour, ProfitMargin, QRCodeData, MenuCategory, MenuItem, PLAN_LABELS } from '../types'
 import type { CustomerIntelligence } from '../types'
 import type { MarketInsights } from '../types'
 import { PaperPlaneLoader } from '../components/PaperPlaneLoader'
+import { ConfirmModal } from '../components/ConfirmModal'
 
 type TabType = 'orders' | 'analytics' | 'menu' | 'qr' | 'payment' | 'ai'
 type OrderStatus = 'pending' | 'preparing' | 'ready' | 'completed' | 'cancelled'
@@ -37,6 +38,8 @@ function BusinessDashboard(): JSX.Element {
 
   const [business, setBusiness] = useState<Business | null>(null)
   const [orders, setOrders] = useState<Order[]>([])
+  const [reservations, setReservations] = useState<Reservation[]>([])
+  const [reviews, setReviews] = useState<Review[]>([])
   const [analytics, setAnalytics] = useState<SalesSummary | null>(null)
   const [salesData, setSalesData] = useState<SalesByDate[]>([])
   const [popularItems, setPopularItems] = useState<PopularItem[]>([])
@@ -52,6 +55,8 @@ function BusinessDashboard(): JSX.Element {
   const [loading, setLoading] = useState<boolean>(true)
   const [showItemForm, setShowItemForm] = useState<boolean>(false)
   const [showCategoryForm, setShowCategoryForm] = useState<boolean>(false)
+  const [draggingCategoryId, setDraggingCategoryId] = useState<string | null>(null)
+  const [pendingCategoryDelete, setPendingCategoryDelete] = useState<{ id: string; name: string } | null>(null)
   const [editingItem, setEditingItem] = useState<MenuItem | null>(null)
   const [itemForm, setItemForm] = useState({
     name: '',
@@ -79,6 +84,7 @@ function BusinessDashboard(): JSX.Element {
   const logoInputRef = useRef<HTMLInputElement>(null)
   const [profileOpen, setProfileOpen] = useState(false)
   const [logoMenuOpen, setLogoMenuOpen] = useState(false)
+  const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false)
   const [changePasswordCurrent, setChangePasswordCurrent] = useState('')
   const [changePasswordNew, setChangePasswordNew] = useState('')
@@ -86,6 +92,8 @@ function BusinessDashboard(): JSX.Element {
   const [changePasswordError, setChangePasswordError] = useState<string | null>(null)
   const [changePasswordLoading, setChangePasswordLoading] = useState(false)
   const logoMenuRef = useRef<HTMLDivElement>(null)
+  const profileMenuRef = useRef<HTMLDivElement>(null)
+  const notificationsMenuRef = useRef<HTMLDivElement>(null)
 
   const [zuriTapOn, setZuriTapOn] = useState(false)
   const [tapCode, setTapCode] = useState<string | null>(null)
@@ -134,12 +142,20 @@ function BusinessDashboard(): JSX.Element {
     // Fetch orders
     fetchOrders()
 
+    // Fetch reservations (table booking requests)
+    fetchReservations()
+
+    // Fetch reviews (post-payment ratings)
+    fetchReviews()
+
     // Fetch menu
     fetchMenu()
 
     // Connect to socket for real-time updates
     const socket: Socket = io(WS_URL)
-    socket.emit('join-business', { businessId, token })
+    const emitJoin = () => socket.emit('join-business', { businessId, token })
+    socket.on('connect', emitJoin)
+    emitJoin()
 
     socket.on('new-order', () => {
       fetchOrders()
@@ -157,6 +173,22 @@ function BusinessDashboard(): JSX.Element {
       fetchAnalytics()
     })
 
+    socket.on('new-reservation', () => {
+      fetchReservations()
+    })
+
+    socket.on('reservation-updated', () => {
+      fetchReservations()
+    })
+
+    socket.on('new-review', (data: { review: Review }) => {
+      if (!data?.review?.id) return
+      setReviews(prev => {
+        if (prev.some(r => r.id === data.review.id)) return prev
+        return [data.review, ...prev]
+      })
+    })
+
     return () => {
       socket.disconnect()
     }
@@ -170,6 +202,24 @@ function BusinessDashboard(): JSX.Element {
     document.addEventListener('click', close)
     return () => document.removeEventListener('click', close)
   }, [logoMenuOpen])
+
+  useEffect(() => {
+    if (!profileOpen) return
+    const close = (e: MouseEvent) => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(e.target as Node)) setProfileOpen(false)
+    }
+    document.addEventListener('click', close)
+    return () => document.removeEventListener('click', close)
+  }, [profileOpen])
+
+  useEffect(() => {
+    if (!notificationsOpen) return
+    const close = (e: MouseEvent) => {
+      if (notificationsMenuRef.current && !notificationsMenuRef.current.contains(e.target as Node)) setNotificationsOpen(false)
+    }
+    document.addEventListener('click', close)
+    return () => document.removeEventListener('click', close)
+  }, [notificationsOpen])
 
   useEffect(() => {
     if (!businessId) return
@@ -204,6 +254,35 @@ function BusinessDashboard(): JSX.Element {
     axios.get<Order[]>(`/api/order/business/${businessId}`, { headers: getAuthHeaders() })
       .then(res => setOrders(res.data))
       .catch(err => { if (err.response?.status === 401) { localStorage.removeItem('zuri_business_token'); navigate('/business/login', { replace: true }) } else console.error(err) })
+  }
+
+  const fetchReservations = (): void => {
+    if (!businessId) return
+    axios.get<Reservation[]>(`/api/reservations/business/${businessId}`, { headers: getAuthHeaders() })
+      .then(res => setReservations(Array.isArray(res.data) ? res.data : []))
+      .catch(err => {
+        if (err.response?.status === 401) {
+          localStorage.removeItem('zuri_business_token')
+          navigate('/business/login', { replace: true })
+        } else {
+          console.error(err)
+        }
+      })
+  }
+
+  const fetchReviews = (): void => {
+    if (!businessId) return
+    axios
+      .get<{ reviews: Review[] }>(`/api/reviews/business/${businessId}`, { headers: getAuthHeaders() })
+      .then(res => setReviews(Array.isArray(res.data?.reviews) ? res.data.reviews : []))
+      .catch(err => {
+        if (err.response?.status === 401) {
+          localStorage.removeItem('zuri_business_token')
+          navigate('/business/login', { replace: true })
+        } else {
+          console.error(err)
+        }
+      })
   }
 
   const fetchAnalytics = async (): Promise<void> => {
@@ -348,6 +427,24 @@ function BusinessDashboard(): JSX.Element {
       })
   }
 
+  const handleDeleteCategory = (categoryId: string): void => {
+    const category = menu.find(c => c.id === categoryId)
+    setPendingCategoryDelete({ id: categoryId, name: category?.name || 'this category' })
+  }
+
+  const confirmDeleteCategory = (): void => {
+    if (!businessId || !pendingCategoryDelete) return
+    axios.delete(`/api/menu/category/${pendingCategoryDelete.id}`, { headers: getAuthHeaders() })
+      .then(() => {
+        fetchMenu()
+        setPendingCategoryDelete(null)
+      })
+      .catch(err => {
+        alert('Failed to delete category')
+        console.error(err)
+      })
+  }
+
   const updateOrderStatus = (orderId: string, status: OrderStatus): void => {
     axios.patch(`/api/order/${orderId}/status`, { status }, { headers: getAuthHeaders() })
       .then(() => {
@@ -356,6 +453,17 @@ function BusinessDashboard(): JSX.Element {
       })
       .catch(err => {
         alert('Failed to update order status')
+        console.error(err)
+      })
+  }
+
+  const updateReservationStatus = (reservationId: string, status: Reservation['status']): void => {
+    axios.patch(`/api/reservations/${reservationId}/status`, { status }, { headers: getAuthHeaders() })
+      .then(() => {
+        fetchReservations()
+      })
+      .catch(err => {
+        alert('Failed to update reservation status')
         console.error(err)
       })
   }
@@ -390,19 +498,19 @@ function BusinessDashboard(): JSX.Element {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-zuri-light flex items-center justify-center">
-        <PaperPlaneLoader size="lg" label="Loading dashboard..." />
+      <div className="min-h-screen bg-black flex items-center justify-center font-normal">
+        <PaperPlaneLoader size="lg" />
       </div>
     )
   }
 
   if (!businessId || businessId === 'undefined') {
     return (
-      <div className="min-h-screen bg-white flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-8 max-w-md w-full text-center">
+      <div className="min-h-screen bg-white flex items-center justify-center p-4 font-normal">
+        <div className="bg-white rounded-xl border border-gray-200 p-8 max-w-md w-full text-center">
           <h1 className="text-xl font-bold text-zuri-black mb-2">Invalid dashboard</h1>
           <p className="text-gray-500 text-sm mb-6">Please log in again.</p>
-          <a href="/business/login" className="inline-block bg-zuri-orange text-white px-5 py-2.5 rounded-xl font-semibold text-sm hover:bg-zuri-orange-dark transition">
+          <a href="/business/login" className="inline-block bg-zuri-orange text-white px-4 py-1.5 rounded-lg text-sm hover:bg-zuri-orange-dark transition">
             Log in
           </a>
         </div>
@@ -415,8 +523,37 @@ function BusinessDashboard(): JSX.Element {
   const orderCustomerPhone = (o: Order & { customer_phone?: string }) => (o as { customer_phone?: string }).customer_phone ?? (o as Order).customerPhone
   const orderTotalAmount = (o: Order & { total_amount?: number }) => (o as { total_amount?: number }).total_amount ?? (o as Order).totalAmount
 
+  const reservationCreatedAt = (r: Reservation & { created_at?: string }) => (r as { created_at?: string }).created_at ?? (r as Reservation).createdAt
+  const reservationCustomerName = (r: Reservation & { customer_name?: string }) => (r as { customer_name?: string }).customer_name ?? (r as Reservation).customerName
+  const reservationCustomerPhone = (r: Reservation & { customer_phone?: string }) => (r as { customer_phone?: string }).customer_phone ?? (r as Reservation).customerPhone
+  const reservationReservedFor = (r: Reservation & { reserved_for?: string }) => (r as { reserved_for?: string }).reserved_for ?? (r as Reservation).reservedFor
+  const reservationPartySize = (r: Reservation & { party_size?: number }) => (r as { party_size?: number }).party_size ?? (r as Reservation).partySize
+
+  const reviewCreatedAt = (r: Review & { created_at?: string }) => (r as { created_at?: string }).created_at ?? r.createdAt
+  const reviewCustomerName = (r: Review & { customer_name?: string }) => (r as { customer_name?: string }).customer_name ?? r.customerName
+
+  const analyticsChartData = Array.isArray(salesData) ? [...salesData].reverse() : []
+  const bestHour = Array.isArray(peakHours) && peakHours.length
+    ? peakHours.reduce((best, cur) => (cur.orderCount > best.orderCount ? cur : best), peakHours[0])
+    : null
+  const topMenuItem = Array.isArray(popularItems) && popularItems.length ? popularItems[0] : null
+  const highestMarginItem = Array.isArray(profitMargins) && profitMargins.length
+    ? [...profitMargins].sort((a, b) => b.marginPercentage - a.marginPercentage)[0]
+    : null
+
+  const pendingOrders = orders.filter(o => o.status === 'pending' || o.status === 'preparing')
+  const requestedReservations = reservations.filter(r => r.status === 'requested')
+  const recentReviews = [...reviews].sort((a, b) => new Date(reviewCreatedAt(b) || 0).getTime() - new Date(reviewCreatedAt(a) || 0).getTime()).slice(0, 10)
+
+  const notificationsCount = pendingOrders.length + requestedReservations.length + recentReviews.length
+  const notificationsFeed = [
+    ...pendingOrders.map(o => ({ type: 'order' as const, id: o.id, createdAtMs: new Date(orderCreatedAt(o) || 0).getTime(), order: o })),
+    ...requestedReservations.map(r => ({ type: 'reservation' as const, id: r.id, createdAtMs: new Date(reservationCreatedAt(r) || 0).getTime(), reservation: r })),
+    ...recentReviews.map((r) => ({ type: 'review' as const, id: r.id, createdAtMs: new Date(reviewCreatedAt(r) || 0).getTime(), review: r }))
+  ].sort((a, b) => b.createdAtMs - a.createdAtMs)
+
   return (
-    <div className="min-h-screen bg-[#f5f5f5]">
+    <div className="min-h-screen bg-[#f5f5f5] font-normal">
       <header className="bg-white border-b border-gray-100">
         <div className="max-w-6xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
@@ -424,7 +561,11 @@ function BusinessDashboard(): JSX.Element {
               <div className="relative" ref={logoMenuRef}>
                 <button
                   type="button"
-                  onClick={() => setLogoMenuOpen((open) => !open)}
+                  onClick={() => {
+                    setProfileOpen(false)
+                    setNotificationsOpen(false)
+                    setLogoMenuOpen((open) => !open)
+                  }}
                   className="flex items-center justify-center h-12 w-12 rounded-xl border border-gray-100 overflow-hidden bg-gray-50 hover:bg-gray-100 transition focus:outline-none focus:ring-2 focus:ring-zuri-orange/50"
                 >
                   {business?.logoUrl ? (
@@ -436,13 +577,14 @@ function BusinessDashboard(): JSX.Element {
                   )}
                 </button>
                 {logoMenuOpen && (
-                  <div className="absolute left-0 top-full mt-1 py-1 min-w-[160px] bg-white rounded-xl shadow-lg border border-gray-200 z-40">
+                  <div className="absolute left-0 top-full mt-1 py-1 min-w-[160px] bg-white rounded-xl border border-gray-200 z-40">
                     {business?.plan && business.plan !== 'free' ? (
                       <>
                         <button
                           type="button"
                           onClick={() => {
                             setShowLogoModal(true)
+                            setProfileOpen(false)
                             setLogoUrlInput(business?.logoUrl || '')
                             setLogoUploadError(null)
                             setLogoMenuOpen(false)
@@ -456,6 +598,7 @@ function BusinessDashboard(): JSX.Element {
                           onClick={async () => {
                             if (!businessId) return
                             setLogoMenuOpen(false)
+                            setProfileOpen(false)
                             try {
                               await axios.patch(`/api/business/${businessId}`, { logo_url: '' }, { headers: getAuthHeaders() })
                               setBusiness(prev => prev ? { ...prev, logoUrl: null } : null)
@@ -472,7 +615,10 @@ function BusinessDashboard(): JSX.Element {
                     ) : (
                       <a
                         href="/#pricing"
-                        onClick={() => setLogoMenuOpen(false)}
+                        onClick={() => {
+                          setLogoMenuOpen(false)
+                          setProfileOpen(false)
+                        }}
                         className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
                       >
                         Upgrade to Starter to add a logo
@@ -488,25 +634,210 @@ function BusinessDashboard(): JSX.Element {
             </div>
             <div className="flex items-center gap-4">
               {business?.plan && (
-                <span className="hidden sm:inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-orange-50 text-zuri-orange border border-orange-100">
+                <span className="hidden sm:inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-zuri-orange/10 text-zuri-orange border border-zuri-orange/30">
                   {PLAN_LABELS[business.plan]} plan
                 </span>
               )}
-              <div className="relative">
+              <div className="relative" ref={notificationsMenuRef}>
                 <button
                   type="button"
-                  onClick={() => setProfileOpen((open) => !open)}
+                  onClick={() => {
+                    setProfileOpen(false)
+                    setLogoMenuOpen(false)
+                    setNotificationsOpen((open) => !open)
+                  }}
+                  className="relative flex items-center justify-center w-10 h-10 rounded-full bg-white border border-gray-200 hover:bg-gray-50 transition focus:outline-none focus:ring-2 focus:ring-zuri-orange/50"
+                  aria-label="Notifications"
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-zuri-black">
+                    <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+                    <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                  </svg>
+                  {notificationsCount > 0 && (
+                    <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-zuri-orange text-white text-[11px] font-semibold flex items-center justify-center">
+                      {Math.min(99, notificationsCount)}
+                    </span>
+                  )}
+                </button>
+
+                {notificationsOpen && (
+                  <div className="absolute right-0 mt-3 w-[360px] bg-white rounded-2xl border border-gray-200 z-40 overflow-hidden">
+                    <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between gap-3">
+                      <p className="text-sm font-semibold text-zuri-black truncate">Notifications</p>
+                      {notificationsCount > 0 ? (
+                        <span className="text-xs text-gray-500">{notificationsCount} items</span>
+                      ) : (
+                        <span className="text-xs text-gray-400">All set</span>
+                      )}
+                    </div>
+
+                    {notificationsCount === 0 ? (
+                      <div className="p-4 text-sm text-gray-500">You are all caught up.</div>
+                    ) : (
+                      <div className="max-h-[420px] overflow-y-auto p-3 space-y-2">
+                        {notificationsFeed.map(item => {
+                          if (item.type === 'order' && item.order) {
+                            const order = item.order
+                            return (
+                              <div key={item.id} className="bg-gray-50/50 rounded-xl p-3 border border-gray-100">
+                                <div className="flex justify-between items-start gap-3">
+                                  <div className="min-w-0">
+                                    <p className="text-xs font-bold text-zuri-black truncate">
+                                      #{order.id.slice(0, 8).toUpperCase()} · {orderCustomerName(order) || 'Guest'}
+                                    </p>
+                                    <p className="text-[11px] text-gray-500 mt-0.5 truncate">
+                                      {orderCustomerPhone(order) || '—'} · ₦{orderTotalAmount(order).toFixed(2)}
+                                    </p>
+                                  </div>
+                                  <span className={`inline-block px-2 py-1 rounded-lg text-[11px] font-semibold ${getStatusColor(order.status)}`}>
+                                    {order.status}
+                                  </span>
+                                </div>
+
+                                {order.status === 'pending' && (
+                                  <div className="flex flex-wrap gap-2 mt-3">
+                                    <button
+                                      type="button"
+                                      onClick={() => updateOrderStatus(order.id, 'preparing')}
+                                      className="px-2.5 py-1 bg-zuri-orange text-white rounded-lg text-[11px] font-semibold hover:bg-zuri-orange-dark transition"
+                                    >
+                                      Start
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => updateOrderStatus(order.id, 'cancelled')}
+                                      className="px-2.5 py-1 border border-zuri-orange text-zuri-orange rounded-lg text-[11px] font-semibold hover:bg-zuri-orange hover:text-white transition"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                )}
+
+                                {order.status === 'preparing' && (
+                                  <div className="flex gap-2 mt-3">
+                                    <button
+                                      type="button"
+                                      onClick={() => updateOrderStatus(order.id, 'ready')}
+                                      className="px-2.5 py-1 bg-zuri-orange text-white rounded-lg text-[11px] font-semibold hover:bg-zuri-orange-dark transition"
+                                    >
+                                      Ready
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          }
+
+                          if (item.type === 'review' && item.review) {
+                            const review = item.review
+                            return (
+                              <div key={item.id} className="bg-gray-50/50 rounded-xl p-3 border border-gray-100">
+                                <div className="flex justify-between items-start gap-3">
+                                  <div className="min-w-0">
+                                    <p className="text-xs font-bold text-zuri-black truncate">
+                                      {reviewCustomerName(review) || 'Customer'}
+                                    </p>
+                                    <div className="flex items-center gap-1 mt-1">
+                                      {[1, 2, 3, 4, 5].map((n) => (
+                                        <span key={n} className={n <= review.rating ? 'text-zuri-orange' : 'text-gray-300'}>
+                                          ★
+                                        </span>
+                                      ))}
+                                      <span className="text-[11px] text-gray-500 ml-2">{review.rating} / 5</span>
+                                    </div>
+                                    <p className="text-[11px] text-gray-500 mt-1 line-clamp-2">
+                                      {review.comment || 'No comment'}
+                                    </p>
+                                  </div>
+                              <span className="inline-block px-2 py-1 rounded-lg text-[11px] font-semibold bg-zuri-orange/10 text-zuri-orange border border-zuri-orange/30">
+                                    Review
+                                  </span>
+                                </div>
+                              </div>
+                            )
+                          }
+
+                          if (item.type === 'reservation' && item.reservation) {
+                            const reservation = item.reservation
+                            return (
+                              <div key={item.id} className="bg-gray-50/50 rounded-xl p-3 border border-gray-100">
+                                <div className="flex justify-between items-start gap-3">
+                                  <div className="min-w-0">
+                                    <p className="text-xs font-bold text-zuri-black truncate">
+                                      {reservationCustomerName(reservation) || 'Guest'}
+                                      <span className="text-gray-500 font-normal"> · Party {reservationPartySize(reservation) || 1}</span>
+                                    </p>
+                                    <p className="text-[11px] text-gray-500 mt-0.5 truncate">
+                                      {reservation.customerPhone || reservation.customer_phone || '—'}
+                                    </p>
+                                    <p className="text-[11px] text-gray-500 mt-0.5 truncate">
+                                      {reservationReservedFor(reservation)
+                                        ? new Date(reservationReservedFor(reservation) || 0).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
+                                        : '—'}
+                                    </p>
+                                  </div>
+                                  <span
+                                    className={`inline-block px-2 py-1 rounded-lg text-[11px] font-semibold ${
+                                      reservation.status === 'requested'
+                                        ? 'bg-yellow-100 text-yellow-800'
+                                        : reservation.status === 'confirmed'
+                                          ? 'bg-green-100 text-green-800'
+                                          : 'bg-red-100 text-red-800'
+                                    }`}
+                                  >
+                                    {reservation.status}
+                                  </span>
+                                </div>
+
+                                {reservation.status === 'requested' && (
+                                  <div className="flex flex-wrap gap-2 mt-3">
+                                    <button
+                                      type="button"
+                                      onClick={() => updateReservationStatus(reservation.id, 'confirmed')}
+                                      className="px-2.5 py-1 bg-zuri-orange text-white rounded-lg text-[11px] font-semibold hover:bg-zuri-orange-dark transition"
+                                    >
+                                      Confirm
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => updateReservationStatus(reservation.id, 'cancelled')}
+                                      className="px-2.5 py-1 border border-zuri-orange text-zuri-orange rounded-lg text-[11px] font-semibold hover:bg-zuri-orange hover:text-white transition"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          }
+
+                          return null
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="relative" ref={profileMenuRef}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLogoMenuOpen(false)
+                    setNotificationsOpen(false)
+                    setProfileOpen((open) => !open)
+                  }}
                   className="flex items-center justify-center w-10 h-10 rounded-full bg-zuri-black text-white font-semibold text-sm border border-gray-200 hover:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-zuri-orange"
                 >
                   {business?.name ? business.name.charAt(0).toUpperCase() : 'B'}
                 </button>
                 {profileOpen && (
-                  <div className="absolute right-0 mt-3 w-72 bg-white rounded-2xl shadow-xl border border-gray-200 z-40">
+                  <div className="absolute right-0 mt-3 w-72 bg-white rounded-2xl border border-gray-200 z-40">
                     <div className="px-4 py-3 border-b border-gray-100">
                       <p className="text-sm font-semibold text-zuri-black truncate">{business?.name || 'Business'}</p>
                       <p className="text-xs text-gray-500 truncate">{business?.email}</p>
                       {business?.plan && (
-                        <span className="inline-flex mt-2 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-orange-50 text-zuri-orange border border-orange-100">
+                        <span className="inline-flex mt-2 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-zuri-orange/10 text-zuri-orange border border-zuri-orange/30">
                           {PLAN_LABELS[business.plan]} account
                         </span>
                       )}
@@ -958,7 +1289,7 @@ function BusinessDashboard(): JSX.Element {
               }}
               className={`flex-1 min-w-0 px-4 py-3 text-sm font-semibold transition ${
                 activeTab === 'orders'
-                  ? 'text-zuri-orange border-b-2 border-zuri-orange bg-orange-50/30'
+                  ? 'text-zuri-orange border-b-2 border-zuri-orange bg-zuri-orange/10'
                   : 'text-gray-600 hover:text-zuri-black'
               }`}
             >
@@ -969,7 +1300,7 @@ function BusinessDashboard(): JSX.Element {
                 onClick={() => setActiveTab('analytics')}
                 className={`flex-1 min-w-0 px-4 py-3 text-sm font-semibold transition ${
                   activeTab === 'analytics'
-                    ? 'text-zuri-orange border-b-2 border-zuri-orange bg-orange-50/30'
+                    ? 'text-zuri-orange border-b-2 border-zuri-orange bg-zuri-orange/10'
                     : 'text-gray-600 hover:text-zuri-black'
                 }`}
               >
@@ -980,7 +1311,7 @@ function BusinessDashboard(): JSX.Element {
               onClick={() => setActiveTab('menu')}
               className={`flex-1 min-w-0 px-4 py-3 text-sm font-semibold transition ${
                 activeTab === 'menu'
-                  ? 'text-zuri-orange border-b-2 border-zuri-orange bg-orange-50/30'
+                  ? 'text-zuri-orange border-b-2 border-zuri-orange bg-zuri-orange/10'
                   : 'text-gray-600 hover:text-zuri-black'
               }`}
             >
@@ -990,7 +1321,7 @@ function BusinessDashboard(): JSX.Element {
               onClick={() => setActiveTab('qr')}
               className={`flex-1 min-w-0 px-4 py-3 text-sm font-semibold transition ${
                 activeTab === 'qr'
-                  ? 'text-zuri-orange border-b-2 border-zuri-orange bg-orange-50/30'
+                  ? 'text-zuri-orange border-b-2 border-zuri-orange bg-zuri-orange/10'
                   : 'text-gray-600 hover:text-zuri-black'
               }`}
             >
@@ -1001,7 +1332,7 @@ function BusinessDashboard(): JSX.Element {
                 onClick={() => setActiveTab('ai')}
                 className={`flex-1 min-w-0 px-4 py-3 text-sm font-semibold transition ${
                   activeTab === 'ai'
-                    ? 'text-zuri-orange border-b-2 border-zuri-orange bg-orange-50/30'
+                    ? 'text-zuri-orange border-b-2 border-zuri-orange bg-zuri-orange/10'
                     : 'text-gray-600 hover:text-zuri-black'
                 }`}
               >
@@ -1013,7 +1344,7 @@ function BusinessDashboard(): JSX.Element {
           <div className="p-6">
             {/* Orders Tab */}
             {activeTab === 'orders' && (
-              <div>
+              <div className="space-y-8">
                 <h2 className="text-lg font-bold text-zuri-black mb-6">Recent orders</h2>
                 {orders.length === 0 ? (
                   <p className="text-gray-500 text-sm text-center py-12">No orders yet</p>
@@ -1095,6 +1426,67 @@ function BusinessDashboard(): JSX.Element {
                     ))}
                   </div>
                 )}
+
+                {/* Reservations */}
+                <div>
+                  <h2 className="text-lg font-bold text-zuri-black mb-6">Reservation requests</h2>
+                  {reservations.length === 0 ? (
+                    <p className="text-gray-500 text-sm text-center py-12">No reservation requests yet</p>
+                  ) : (
+                    <div className="space-y-4">
+                      {reservations.map(reservation => (
+                        <div key={reservation.id} className="bg-gray-50/50 rounded-xl p-5 border border-gray-100">
+                          <div className="flex justify-between items-start gap-4 mb-4">
+                            <div>
+                              <p className="font-bold text-zuri-black text-sm">{reservationCustomerName(reservation) || 'Guest'}</p>
+                              <p className="text-xs text-gray-500 mt-0.5">
+                                {reservation.customerPhone || reservation.customer_phone || '—'} · Party {reservationPartySize(reservation) || 1}
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                {reservationReservedFor(reservation)
+                                  ? new Date(reservationReservedFor(reservation) || 0).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
+                                  : '—'}
+                              </p>
+                              {reservation.notes && (
+                                <p className="text-xs text-gray-600 mt-1 line-clamp-2">Notes: {reservation.notes}</p>
+                              )}
+                            </div>
+                            <div className="text-right shrink-0">
+                              <span
+                                className={`inline-block px-2.5 py-1 rounded-lg text-xs font-semibold ${
+                                  reservation.status === 'requested'
+                                    ? 'bg-yellow-100 text-yellow-800'
+                                    : reservation.status === 'confirmed'
+                                      ? 'bg-green-100 text-green-800'
+                                      : 'bg-red-100 text-red-800'
+                                }`}
+                              >
+                                {reservation.status}
+                              </span>
+                            </div>
+                          </div>
+
+                          {reservation.status === 'requested' && (
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                onClick={() => updateReservationStatus(reservation.id, 'confirmed')}
+                                className="px-3 py-1.5 bg-zuri-orange text-white rounded-xl text-xs font-semibold hover:bg-zuri-orange-dark transition"
+                              >
+                                Confirm
+                              </button>
+                              <button
+                                onClick={() => updateReservationStatus(reservation.id, 'cancelled')}
+                                className="px-3 py-1.5 bg-white border border-zuri-orange text-zuri-orange rounded-xl text-xs font-semibold hover:bg-zuri-orange hover:text-white transition"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
@@ -1103,7 +1495,7 @@ function BusinessDashboard(): JSX.Element {
               <div className="space-y-8">
                 {/* Summary Cards */}
                 <div className="grid md:grid-cols-4 gap-4">
-                  <div className="bg-zuri-orange/10 rounded-xl p-5 border border-orange-100">
+                  <div className="bg-zuri-orange/10 rounded-xl p-5 border border-zuri-orange/30">
                     <p className="text-xs text-gray-600 mb-1">Total orders</p>
                     <p className="text-2xl font-bold text-zuri-black">{analytics?.totalOrders || 0}</p>
                   </div>
@@ -1124,13 +1516,13 @@ function BusinessDashboard(): JSX.Element {
                 <div className="bg-white rounded-xl p-6 border border-gray-200">
                   <h3 className="text-lg font-bold text-zuri-black mb-4">Sales over time</h3>
                   <ResponsiveContainer width="100%" height={300}>
-                    <LineChart data={Array.isArray(salesData) ? salesData : []}>
+                    <LineChart data={analyticsChartData}>
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis dataKey="date" />
                       <YAxis />
                       <Tooltip />
                       <Legend />
-                      <Line type="monotone" dataKey="revenue" stroke="#f97316" strokeWidth={2} name="Revenue" />
+                      <Line type="monotone" dataKey="revenue" stroke="#ffbd59" strokeWidth={2} name="Revenue" />
                       <Line type="monotone" dataKey="completedRevenue" stroke="#000000" strokeWidth={2} name="Completed" />
                     </LineChart>
                   </ResponsiveContainer>
@@ -1146,7 +1538,7 @@ function BusinessDashboard(): JSX.Element {
                         <XAxis dataKey="name" angle={-45} textAnchor="end" height={100} />
                         <YAxis />
                         <Tooltip />
-                        <Bar dataKey="totalQuantity" fill="#f97316" />
+                        <Bar dataKey="totalQuantity" fill="#ffbd59" />
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
@@ -1192,6 +1584,108 @@ function BusinessDashboard(): JSX.Element {
                     </table>
                   </div>
                 </div>
+
+                {/* Premium analytics (Pro+) */}
+                {(business?.plan === 'pro' || business?.plan === 'zuri_plus' || business?.plan === 'enterprise') && marketInsights && !marketInsightsLoading && (
+                  <div className="grid md:grid-cols-3 gap-6">
+                    <div className="bg-white rounded-xl p-6 border border-gray-200">
+                      <h3 className="text-lg font-bold text-zuri-black mb-4">Completion rate</h3>
+                      <ResponsiveContainer width="100%" height={260}>
+                        <BarChart
+                          data={[
+                            { name: 'Completed', value: analytics?.completedRevenue || 0 },
+                            { name: 'Pending', value: Math.max(0, (analytics?.totalRevenue || 0) - (analytics?.completedRevenue || 0)) }
+                          ]}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="name" />
+                          <YAxis />
+                          <Tooltip />
+                          <Legend />
+                          <Bar dataKey="value" fill="#ffbd59" />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    <div className="bg-white rounded-xl p-6 border border-gray-200">
+                      <h3 className="text-lg font-bold text-zuri-black mb-4">Platform top items</h3>
+                      <ResponsiveContainer width="100%" height={260}>
+                        <BarChart data={marketInsights.platform.topItemNames.slice(0, 6)}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="name" angle={-35} textAnchor="end" height={90} />
+                          <YAxis />
+                          <Tooltip />
+                          <Bar dataKey="orderCount" fill="#000000" />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    <div className="bg-white rounded-xl p-6 border border-gray-200">
+                      <h3 className="text-lg font-bold text-zuri-black mb-4">Platform peak hours</h3>
+                      <ResponsiveContainer width="100%" height={260}>
+                        <BarChart data={marketInsights.platform.peakHours}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="hour" />
+                          <YAxis />
+                          <Tooltip />
+                          <Bar dataKey="orderCount" fill="#ffbd59" />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                )}
+
+                {(business?.plan === 'pro' || business?.plan === 'zuri_plus' || business?.plan === 'enterprise') && (
+                  <div className="space-y-6">
+                    <div className="grid md:grid-cols-3 gap-4">
+                      <div className="bg-white rounded-xl p-5 border border-gray-200">
+                        <p className="text-xs text-gray-500 mb-1">Peak conversion hour</p>
+                        <p className="text-2xl font-bold text-zuri-black">{bestHour ? `${bestHour.hour}:00` : '—'}</p>
+                        <p className="text-xs text-gray-500 mt-1">{bestHour ? `${bestHour.orderCount} orders` : 'No data yet'}</p>
+                      </div>
+                      <div className="bg-white rounded-xl p-5 border border-gray-200">
+                        <p className="text-xs text-gray-500 mb-1">Top selling item</p>
+                        <p className="text-lg font-bold text-zuri-black truncate">{topMenuItem?.name || '—'}</p>
+                        <p className="text-xs text-gray-500 mt-1">{topMenuItem ? `${topMenuItem.totalQuantity} sold` : 'No data yet'}</p>
+                      </div>
+                      <div className="bg-white rounded-xl p-5 border border-gray-200">
+                        <p className="text-xs text-gray-500 mb-1">Highest margin item</p>
+                        <p className="text-lg font-bold text-zuri-black truncate">{highestMarginItem?.name || '—'}</p>
+                        <p className="text-xs text-gray-500 mt-1">{highestMarginItem ? `${highestMarginItem.marginPercentage.toFixed(1)}% margin` : 'No data yet'}</p>
+                      </div>
+                    </div>
+
+                    <div className="grid md:grid-cols-2 gap-6">
+                      <div className="bg-white rounded-xl p-6 border border-gray-200">
+                        <h3 className="text-lg font-bold text-zuri-black mb-4">Orders vs completed revenue</h3>
+                        <ResponsiveContainer width="100%" height={280}>
+                          <AreaChart data={analyticsChartData}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="date" />
+                            <YAxis yAxisId="left" />
+                            <YAxis yAxisId="right" orientation="right" />
+                            <Tooltip />
+                            <Legend />
+                            <Area yAxisId="left" type="monotone" dataKey="orderCount" stroke="#111827" fill="#E5E7EB" name="Orders" />
+                            <Area yAxisId="right" type="monotone" dataKey="completedRevenue" stroke="#ffbd59" fill="#ffbd59" name="Completed revenue" />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <div className="bg-white rounded-xl p-6 border border-gray-200">
+                        <h3 className="text-lg font-bold text-zuri-black mb-4">Top margins by item</h3>
+                        <ResponsiveContainer width="100%" height={280}>
+                          <BarChart data={profitMargins.slice(0, 8)}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="name" angle={-30} textAnchor="end" height={80} />
+                            <YAxis />
+                            <Tooltip />
+                            <Bar dataKey="marginPercentage" fill="#ffbd59" name="Margin %" />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Market intelligence (Pro+) – Business Graph */}
                 {(business?.plan === 'pro' || business?.plan === 'zuri_plus' || business?.plan === 'enterprise') && (
@@ -1247,7 +1741,7 @@ function BusinessDashboard(): JSX.Element {
                 )}
 
                 {business?.plan && business.plan !== 'free' && business.plan !== 'starter' && (business.plan !== 'pro' && business.plan !== 'zuri_plus' && business.plan !== 'enterprise') && (
-                  <div className="bg-zuri-orange/10 rounded-xl p-6 border border-orange-200">
+                  <div className="bg-zuri-orange/10 rounded-xl p-6 border border-zuri-orange/30">
                     <h3 className="text-lg font-bold text-zuri-black mb-2">Market intelligence</h3>
                     <p className="text-sm text-gray-600 mb-4">See anonymous platform trends, peak times, and how you compare. Available on Pro and above.</p>
                     <a href="/#pricing" className="inline-block bg-zuri-orange text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-zuri-orange-dark transition">Upgrade to Pro</a>
@@ -1261,7 +1755,16 @@ function BusinessDashboard(): JSX.Element {
               <div>
                 <h2 className="text-lg font-bold text-zuri-black mb-6">Menu</h2>
                 <div className="flex justify-between items-center mb-6">
-                  <span />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!businessId) return
+                      navigate(`/business/dashboard/${businessId}/customize`)
+                    }}
+                    className="bg-white border border-zuri-orange text-zuri-orange px-3 py-1.5 rounded-xl text-xs font-semibold hover:bg-zuri-orange hover:text-white transition disabled:opacity-50"
+                  >
+                    Customize menu
+                  </button>
                   <div className="flex gap-2">
                     <button
                       onClick={() => {
@@ -1300,8 +1803,61 @@ function BusinessDashboard(): JSX.Element {
                 ) : (
                   <div className="space-y-8">
                     {menu.map(category => (
-                      <div key={category.id} className="bg-gray-50/50 rounded-xl p-5 border border-gray-100">
-                        <h3 className="text-lg font-bold text-zuri-black mb-4">{category.name}</h3>
+                      <div
+                        key={category.id}
+                        className="bg-gray-50/50 rounded-xl p-5 border border-gray-100"
+                        draggable
+                        onDragStart={(e) => {
+                          if ((e.target as HTMLElement | null)?.closest('button')) return
+                          setDraggingCategoryId(category.id)
+                          e.dataTransfer.effectAllowed = 'move'
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault()
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault()
+                          if (!businessId) return
+                          const fromId = draggingCategoryId
+                          if (!fromId || fromId === category.id) return
+
+                          const fromIndex = menu.findIndex(c => c.id === fromId)
+                          const toIndex = menu.findIndex(c => c.id === category.id)
+                          if (fromIndex < 0 || toIndex < 0) return
+
+                          const next = [...menu]
+                          const [moved] = next.splice(fromIndex, 1)
+                          const insertIndex = toIndex > fromIndex ? toIndex - 1 : toIndex
+                          next.splice(insertIndex, 0, moved)
+
+                          setMenu(next)
+                          setDraggingCategoryId(null)
+
+                          Promise.all(
+                            next.map((c, idx) => (
+                              axios.patch(`/api/menu/category/${c.id}`, { businessId, displayOrder: idx, name: c.name }, { headers: getAuthHeaders() })
+                            ))
+                          )
+                            .then(() => fetchMenu())
+                            .catch(err => {
+                              console.error(err)
+                              fetchMenu()
+                            })
+                        }}
+                      >
+                        <div className="flex items-center justify-between gap-4 mb-4">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-gray-400 select-none">⋮⋮</span>
+                            <h3 className="text-lg font-bold text-zuri-black truncate">{category.name}</h3>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteCategory(category.id)}
+                            className="px-3 py-1.5 border border-zuri-orange text-zuri-orange rounded-lg text-xs font-semibold hover:bg-zuri-orange hover:text-white transition"
+                          >
+                            Delete
+                          </button>
+                        </div>
                         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
                           {category.items.map(item => (
                             <div key={item.id} className="bg-white rounded-xl p-4 border border-gray-200">
@@ -1554,13 +2110,13 @@ function BusinessDashboard(): JSX.Element {
                               setImageUploadError(null)
                               if (imageInputRef.current) imageInputRef.current.value = ''
                             }}
-                            className="flex-1 px-4 py-3 border-2 border-gray-300 rounded-lg font-semibold hover:bg-gray-50 transition"
+                            className="flex-1 px-3 py-1.5 border border-zuri-orange rounded-lg font-semibold text-zuri-orange hover:bg-zuri-orange hover:text-white transition"
                           >
                             Cancel
                           </button>
                           <button
                             type="submit"
-                            className="flex-1 px-4 py-3 bg-zuri-black text-white rounded-lg font-semibold hover:bg-gray-800 transition"
+                            className="flex-1 px-3 py-1.5 bg-zuri-orange text-white rounded-lg font-semibold hover:bg-zuri-orange-dark transition"
                           >
                             {editingItem ? 'Update Item' : 'Add Item'}
                           </button>
@@ -1618,13 +2174,13 @@ function BusinessDashboard(): JSX.Element {
                               setShowCategoryForm(false)
                               setCategoryForm({ name: '', displayOrder: 0 })
                             }}
-                            className="flex-1 px-4 py-3 border-2 border-gray-300 rounded-lg font-semibold hover:bg-gray-50 transition"
+                            className="flex-1 px-3 py-1.5 border border-zuri-orange rounded-lg font-semibold text-zuri-orange hover:bg-zuri-orange hover:text-white transition"
                           >
                             Cancel
                           </button>
                           <button
                             type="submit"
-                            className="flex-1 px-4 py-3 bg-zuri-black text-white rounded-lg font-semibold hover:bg-gray-800 transition"
+                            className="flex-1 px-3 py-1.5 bg-zuri-orange text-white rounded-lg font-semibold hover:bg-zuri-orange-dark transition"
                           >
                             Add Category
                           </button>
@@ -1655,127 +2211,149 @@ function BusinessDashboard(): JSX.Element {
                     </button>
                   </div>
                 ) : (
-                  <p className="text-gray-500 text-sm">Loading QR code...</p>
+                  <div className="py-12 flex items-center justify-center bg-black w-full">
+                    <PaperPlaneLoader size="md" />
+                  </div>
                 )}
               </div>
             )}
 
             {/* Zuri AI Dashboard (Pro and above) */}
             {activeTab === 'ai' && (business?.plan === 'pro' || business?.plan === 'zuri_plus' || business?.plan === 'enterprise') && (
-              <div className="max-w-4xl space-y-6">
-                <h2 className="text-2xl font-bold text-zuri-black">Zuri AI Dashboard</h2>
-                <p className="text-gray-600">
-                  AI-powered revenue insights, sales forecasting, menu optimization, and customer intelligence. Choose an insight or ask your own question.
-                </p>
-
-                {/* Customer Intelligence metrics (Pro+) */}
-                {customerIntelligence && customerIntelligence.uniqueCustomers > 0 && (
-                  <div className="rounded-xl border-2 border-zuri-yellow bg-zuri-light p-4">
-                    <h3 className="font-bold text-zuri-black mb-3">Customer Intelligence</h3>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
-                      <div>
-                        <p className="text-gray-500">Unique customers</p>
-                        <p className="font-semibold text-zuri-black">{customerIntelligence.uniqueCustomers}</p>
-                      </div>
-                      <div>
-                        <p className="text-gray-500">Repeat rate</p>
-                        <p className="font-semibold text-zuri-black">{customerIntelligence.repeatRatePct.toFixed(1)}%</p>
-                      </div>
-                      <div>
-                        <p className="text-gray-500">Avg order value</p>
-                        <p className="font-semibold text-zuri-black">₦{customerIntelligence.avgSpendPerOrder.toFixed(2)}</p>
-                      </div>
-                      <div>
-                        <p className="text-gray-500">Return within 10 days</p>
-                        <p className="font-semibold text-zuri-black">{customerIntelligence.returnWithin10DaysPct.toFixed(1)}%</p>
-                      </div>
+              <div className="max-w-5xl mx-auto">
+                <div className="rounded-3xl border border-zuri-orange/20 bg-white/75 backdrop-blur-sm px-5 py-6 sm:px-10 sm:py-8 shadow-[0_10px_30px_rgba(255,189,89,0.08)]">
+                  <div className="flex items-center justify-between mb-8">
+                    <div className="inline-flex items-center gap-2 rounded-full border border-zuri-orange/20 bg-zuri-orange/5 px-3 py-1 text-xs text-zuri-black/80">
+                      <span className="h-5 w-5 rounded-full bg-zuri-black text-white grid place-items-center text-[10px]">AI</span>
+                      <span>Hello AI</span>
+                    </div>
+                    <div className="h-8 w-8 rounded-full bg-zuri-orange/20 border border-zuri-orange/35 grid place-items-center text-zuri-black text-xs font-semibold">
+                      {business?.name?.charAt(0)?.toUpperCase() || 'U'}
                     </div>
                   </div>
-                )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {[
-                    { type: 'revenue_insights', label: 'AI Revenue Insights', desc: 'Best sellers, slow movers, price & bundle ideas' },
-                    { type: 'sales_forecasting', label: 'AI Sales Forecasting', desc: 'Next week demand, peak hours, staffing' },
-                    { type: 'storefront_optimization', label: 'Smart Menu Optimization', desc: 'Highlight profitable items, suggest bundles' },
-                    { type: 'customer_intelligence', label: 'Customer Intelligence', desc: 'Who your customers are, repeat & LTV' },
-                    { type: 'promotions_suggestions', label: 'Promotions Engine', desc: 'Happy hour, slow-day deals, combos' },
-                    { type: 'sales_summary', label: 'Sales summary', desc: 'Last 7 & 30 days' },
-                    { type: 'menu_optimization', label: 'Menu optimization', desc: 'Ordering & pricing tips' },
-                    { type: 'opportunities', label: 'Opportunities', desc: 'Ways to grow sales' },
-                    { type: 'demand_tips', label: 'Demand & prep tips', desc: 'Peak times & forecasting' }
-                  ].map(({ type, label, desc }) => (
+                  <div className="text-center mb-8">
+                    <p className="text-zuri-black/75 text-xl sm:text-2xl">Hi {business?.name || 'there'}</p>
+                    <h2 className="text-zuri-black text-3xl sm:text-4xl font-semibold leading-tight mt-1">What would you like to know?</h2>
+                    <p className="text-zuri-black/55 text-sm mt-2">Use one of the most common prompts below or ask your own question.</p>
+                  </div>
+
+                  {/* Customer Intelligence metrics (Pro+) */}
+                  {customerIntelligence && customerIntelligence.uniqueCustomers > 0 && (
+                    <div className="rounded-2xl border border-zuri-orange/20 bg-zuri-orange/5 p-4 mb-6">
+                      <h3 className="font-semibold text-zuri-black mb-3">Customer intelligence snapshot</h3>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                        <div>
+                          <p className="text-zuri-black/60">Unique customers</p>
+                          <p className="font-semibold text-zuri-black">{customerIntelligence.uniqueCustomers}</p>
+                        </div>
+                        <div>
+                          <p className="text-zuri-black/60">Repeat rate</p>
+                          <p className="font-semibold text-zuri-black">{customerIntelligence.repeatRatePct.toFixed(1)}%</p>
+                        </div>
+                        <div>
+                          <p className="text-zuri-black/60">Avg order value</p>
+                          <p className="font-semibold text-zuri-black">₦{customerIntelligence.avgSpendPerOrder.toFixed(2)}</p>
+                        </div>
+                        <div>
+                          <p className="text-zuri-black/60">Return in 10 days</p>
+                          <p className="font-semibold text-zuri-black">{customerIntelligence.returnWithin10DaysPct.toFixed(1)}%</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
+                    {[
+                      { type: 'revenue_insights', label: 'Revenue insights', desc: 'Best sellers and bundle ideas' },
+                      { type: 'sales_forecasting', label: 'Sales forecast', desc: 'Demand and peak-hour signals' },
+                      { type: 'promotions_suggestions', label: 'Promotion ideas', desc: 'Offers for slow days' }
+                    ].map(({ type, label, desc }) => (
+                      <button
+                        key={type}
+                        disabled={aiInsightLoading}
+                        onClick={async () => {
+                          if (!businessId) return
+                          setAiInsight(null)
+                          setAiInsightLoading(true)
+                          try {
+                            const { data } = await axios.post<{ insight: string }>('/api/ai/insights', { businessId, type }, { headers: getAuthHeaders() })
+                            setAiInsight(data.insight || 'No response.')
+                          } catch (err: unknown) {
+                            const ax = err as { response?: { data?: { error?: string }; status?: number } }
+                            const msg = ax.response?.data?.error || 'Request failed.'
+                            if (ax.response?.status === 403) setAiInsight(null)
+                            else setAiInsight(`Error: ${msg}`)
+                          } finally {
+                            setAiInsightLoading(false)
+                          }
+                        }}
+                        className="text-left rounded-xl border border-zuri-orange/20 bg-white/80 px-4 py-3 hover:bg-zuri-orange/5 transition disabled:opacity-70"
+                      >
+                        <span className="font-semibold text-zuri-black block">{label}</span>
+                        <span className="text-xs text-zuri-black/60">{desc}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="flex items-center gap-2 rounded-full border border-zuri-orange/25 bg-white/85 px-3 py-2">
+                    <span className="h-6 w-6 rounded-full bg-zuri-orange/15 text-zuri-orange grid place-items-center text-[10px] font-semibold">AI</span>
+                    <input
+                      value={aiCustomQuery}
+                      onChange={(e) => setAiCustomQuery(e.target.value)}
+                      placeholder="Ask whatever you want"
+                      className="flex-1 bg-transparent text-sm text-zuri-black placeholder:text-zuri-black/45 focus:outline-none"
+                    />
                     <button
-                      key={type}
-                      disabled={aiInsightLoading}
+                      type="button"
+                      disabled={aiInsightLoading || !aiCustomQuery.trim()}
                       onClick={async () => {
-                        if (!businessId) return
+                        if (!businessId || !aiCustomQuery.trim()) return
                         setAiInsight(null)
                         setAiInsightLoading(true)
                         try {
-                          const { data } = await axios.post<{ insight: string }>('/api/ai/insights', { businessId, type }, { headers: getAuthHeaders() })
+                          const { data } = await axios.post<{ insight: string }>('/api/ai/insights', {
+                            businessId,
+                            type: 'custom',
+                            query: aiCustomQuery.trim()
+                          }, { headers: getAuthHeaders() })
                           setAiInsight(data.insight || 'No response.')
                         } catch (err: unknown) {
-                          const ax = err as { response?: { data?: { error?: string }; status?: number } }
-                          const msg = ax.response?.data?.error || 'Request failed.'
-                          if (ax.response?.status === 403) setAiInsight(null)
-                          else setAiInsight(`Error: ${msg}`)
+                          const ax = err as { response?: { data?: { error?: string } } }
+                          setAiInsight(`Error: ${ax.response?.data?.error || 'Request failed.'}`)
                         } finally {
                           setAiInsightLoading(false)
                         }
                       }}
-                      className="text-left p-4 rounded-xl border-2 border-zuri-yellow bg-white hover:bg-zuri-light transition disabled:opacity-70"
+                      className="h-7 w-7 rounded-full bg-zuri-orange/20 text-zuri-black grid place-items-center hover:bg-zuri-orange/35 transition disabled:opacity-50"
+                      aria-label="Ask AI"
                     >
-                      <span className="font-semibold text-zuri-black block">{label}</span>
-                      <span className="text-sm text-gray-600">{desc}</span>
+                      {`->`}
                     </button>
-                  ))}
-                </div>
-                <div className="pt-4 border-t border-gray-200">
-                  <label className="block text-sm font-semibold text-zuri-black mb-2">Ask a question about your business</label>
-                  <textarea
-                    value={aiCustomQuery}
-                    onChange={(e) => setAiCustomQuery(e.target.value)}
-                    placeholder="e.g. Which items should I promote this week?"
-                    rows={2}
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-zuri-yellow mb-2"
-                  />
-                  <button
-                    disabled={aiInsightLoading || !aiCustomQuery.trim()}
-                    onClick={async () => {
-                      if (!businessId || !aiCustomQuery.trim()) return
-                      setAiInsight(null)
-                      setAiInsightLoading(true)
-                      try {
-                        const { data } = await axios.post<{ insight: string }>('/api/ai/insights', {
-                          businessId,
-                          type: 'custom',
-                          query: aiCustomQuery.trim()
-                        }, { headers: getAuthHeaders() })
-                        setAiInsight(data.insight || 'No response.')
-                      } catch (err: unknown) {
-                        const ax = err as { response?: { data?: { error?: string } } }
-                        setAiInsight(`Error: ${ax.response?.data?.error || 'Request failed.'}`)
-                      } finally {
-                        setAiInsightLoading(false)
-                      }
-                    }}
-                    className="bg-zuri-black text-white px-6 py-2 rounded-lg font-semibold hover:bg-gray-800 transition disabled:opacity-50"
-                  >
-                    {aiInsightLoading ? 'Thinking…' : 'Ask'}
-                  </button>
-                </div>
-                {aiInsight !== null && (
-                  <div className="rounded-xl border-2 border-zuri-yellow bg-zuri-light p-6">
-                    <h3 className="font-bold text-zuri-black mb-2">Insight</h3>
-                    <div className="whitespace-pre-wrap text-gray-800">{aiInsight}</div>
                   </div>
-                )}
+
+                  {aiInsight !== null && (
+                    <div className="rounded-2xl border border-zuri-orange/20 bg-zuri-orange/5 p-5 mt-5">
+                      <h3 className="font-semibold text-zuri-black mb-2">{aiInsightLoading ? 'Thinking...' : 'Insight'}</h3>
+                      <div className="whitespace-pre-wrap text-zuri-black/85 text-sm leading-relaxed">{aiInsight}</div>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
         </div>
       </div>
+      <ConfirmModal
+        open={!!pendingCategoryDelete}
+        title="Delete category?"
+        message={`"${pendingCategoryDelete?.name || 'This category'}" will be removed, and its items will move to Uncategorized.`}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        danger
+        onConfirm={confirmDeleteCategory}
+        onCancel={() => setPendingCategoryDelete(null)}
+      />
     </div>
   )
 }

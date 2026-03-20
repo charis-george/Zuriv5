@@ -7,10 +7,13 @@ require('dotenv').config();
 
 const app = express();
 const server = http.createServer(app);
+const socketCorsOrigin = process.env.NODE_ENV === 'production' && process.env.FRONTEND_URL
+  ? process.env.FRONTEND_URL
+  : '*';
 const io = socketIo(server, {
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
+    origin: socketCorsOrigin,
+    methods: ['GET', 'POST']
   }
 });
 
@@ -19,10 +22,33 @@ const PORT = process.env.PORT || 3000;
 // Webhook needs raw body for signature verification (must be before express.json())
 app.use('/api/payment/webhook', express.raw({ type: 'application/json' }));
 
-// Middleware
-app.use(cors());
+// CORS: in production restrict to FRONTEND_URL when set
+const corsOrigin = process.env.NODE_ENV === 'production' && process.env.FRONTEND_URL
+  ? process.env.FRONTEND_URL
+  : undefined;
+app.use(cors(corsOrigin ? { origin: corsOrigin } : {}));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../client/dist')));
+
+// Rate limiting: auth and payment routes (webhook excluded)
+const rateLimit = require('express-rate-limit');
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 50,
+  message: { error: 'Too many attempts. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+const paymentLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 40,
+  skip: (req) => req.path === '/api/payment/webhook',
+  message: { error: 'Too many payment requests. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+app.use('/api/business', authLimiter);
+app.use('/api/payment', paymentLimiter);
 
 // Import routes
 const businessRoutes = require('./routes/business');
@@ -38,6 +64,8 @@ const banksRoutes = require('./routes/banks');
 const tapRoutes = require('./routes/tap');
 const tapAuthRoutes = require('./routes/tap-auth');
 const networkRoutes = require('./routes/network');
+const reservationRoutes = require('./routes/reservations');
+const reviewRoutes = require('./routes/reviews');
 
 // Routes
 app.use('/api/business', businessRoutes);
@@ -53,12 +81,21 @@ app.use('/api/ai', aiRoutes);
 app.use('/api/tap', tapRoutes);
 app.use('/api/tap-auth', tapAuthRoutes);
 app.use('/api/network', networkRoutes);
+app.use('/api/reservations', reservationRoutes);
+app.use('/api/reviews', reviewRoutes);
 
 // Socket.io for real-time updates
 const { verifyBusinessToken } = require('./middleware/auth');
 
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
+
+  // Public storefront room (no auth) for live theme updates on customer ordering pages
+  socket.on('join-storefront', (data) => {
+    const businessId = typeof data === 'string' ? data : data?.businessId;
+    if (!businessId || typeof businessId !== 'string') return;
+    socket.join(`storefront-${businessId}`);
+  });
 
   socket.on('join-business', (data) => {
     const businessId = typeof data === 'string' ? data : data?.businessId;
@@ -102,13 +139,11 @@ app.get('*', (req, res) => {
 
 // Initialize database and start server
 const db = require('./database');
-const { agentLog } = require('./debug-log');
 
 db.init()
   .then(() => {
     server.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
-      agentLog({ location: 'index.js', message: 'Server started', data: { port: PORT }, hypothesisId: 'H1' });
     });
   })
   .catch((error) => {

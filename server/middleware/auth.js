@@ -1,6 +1,10 @@
 const jwt = require('jsonwebtoken');
 
-const BUSINESS_JWT_SECRET = process.env.BUSINESS_JWT_SECRET || process.env.JWT_SECRET || 'zuri-business-secret-change-in-production';
+const BUSINESS_JWT_SECRET = process.env.BUSINESS_JWT_SECRET || process.env.JWT_SECRET || (process.env.NODE_ENV !== 'production' ? 'zuri-business-secret-change-in-production' : null);
+
+if (process.env.NODE_ENV === 'production' && !BUSINESS_JWT_SECRET) {
+  throw new Error('BUSINESS_JWT_SECRET or JWT_SECRET must be set in production. Add it to your .env.');
+}
 
 function signBusinessToken(businessId) {
   return jwt.sign(

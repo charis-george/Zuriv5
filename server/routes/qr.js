@@ -46,7 +46,7 @@ router.get('/business/:businessId', async (req, res) => {
 
     const { data: business, error } = await supabase
       .from('businesses')
-      .select('id, name, phone, address, logo_url')
+      .select('id, name, phone, address, logo_url, storefront_config, storefront_details')
       .eq('id', businessId)
       .single();
 
@@ -59,7 +59,9 @@ router.get('/business/:businessId', async (req, res) => {
       name: business.name,
       phone: business.phone,
       address: business.address,
-      logoUrl: business.logo_url || null
+      logoUrl: business.logo_url || null,
+      storefrontConfig: business.storefront_config || null,
+      storefrontDetails: business.storefront_details || null
     });
   } catch (error) {
     console.error('Get business info error:', error);

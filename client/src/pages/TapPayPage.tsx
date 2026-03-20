@@ -98,7 +98,7 @@ function TapPayPage(): JSX.Element {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#fefbf5]">
+      <div className="min-h-screen flex items-center justify-center bg-black">
         <PaperPlaneLoader size="md" />
       </div>
     )
@@ -158,7 +158,7 @@ function TapPayPage(): JSX.Element {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-[#fefbf5]">
-      <div className="w-full max-w-sm bg-white rounded-2xl shadow-lg border border-gray-100 p-6">
+      <div className="w-full max-w-sm bg-white rounded-2xl border border-gray-200 p-6">
         <h1 className="text-lg font-bold text-zuri-black text-center">Pay with Zuri Tap</h1>
         <p className="text-center text-2xl font-bold text-zuri-orange mt-2">₦{session.amount.toFixed(2)}</p>
         <p className="text-center text-gray-600 text-sm mt-1">to {session.businessName}</p>

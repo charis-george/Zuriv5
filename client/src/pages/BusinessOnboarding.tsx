@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { PLAN_LABELS, type PlanId } from '../types'
+import axios from 'axios'
+import { PLAN_LABELS, type PlanId, type Business } from '../types'
 
 const ONBOARDING_KEY = 'zuri_onboarding_done'
 
@@ -28,13 +29,6 @@ const dashboardHighlights: { title: string; description: string }[] = [
   { title: 'Profile', description: 'Business details, logo, Zuri Tap, and password — all in one place.' }
 ]
 
-function getRecommendedPlan(useCase: UseCase | null, size: BusinessSize | null): PlanId {
-  if (!size) return 'free'
-  if (size === 'solo' || size === 'small') return 'starter'
-  if (size === 'medium') return 'growth'
-  return 'pro'
-}
-
 function BusinessOnboarding(): JSX.Element {
   const { businessId } = useParams<{ businessId: string }>()
   const navigate = useNavigate()
@@ -43,6 +37,279 @@ function BusinessOnboarding(): JSX.Element {
   const [businessSize, setBusinessSize] = useState<BusinessSize | null>(null)
   const [highlightIndex, setHighlightIndex] = useState(0)
   const [direction, setDirection] = useState<'in' | 'out'>('in')
+  const [businessPlan, setBusinessPlan] = useState<PlanId>('free')
+
+  type MenuSetupChoice = 'empty' | 'sample' | 'upload' | 'spreadsheet'
+  const [menuChoice, setMenuChoice] = useState<MenuSetupChoice | null>(null)
+  const [menuSetupLoading, setMenuSetupLoading] = useState(false)
+  const [menuSetupError, setMenuSetupError] = useState<string | null>(null)
+
+  const getAuthHeaders = () => {
+    const token = localStorage.getItem('zuri_business_token')
+    return token ? { Authorization: `Bearer ${token}` } : {}
+  }
+
+  const canImportSpreadsheet = businessPlan === 'pro' || businessPlan === 'zuri_plus' || businessPlan === 'enterprise'
+  const canUploadMenuPictures = businessPlan !== 'free'
+
+  const parseCsvLine = (line: string): string[] => {
+    const out: string[] = []
+    let cur = ''
+    let inQuotes = false
+    for (let i = 0; i < line.length; i += 1) {
+      const ch = line[i]
+      if (ch === '"') {
+        const next = line[i + 1]
+        if (inQuotes && next === '"') {
+          cur += '"'
+          i += 1
+        } else {
+          inQuotes = !inQuotes
+        }
+      } else if (ch === ',' && !inQuotes) {
+        out.push(cur.trim())
+        cur = ''
+      } else {
+        cur += ch
+      }
+    }
+    out.push(cur.trim())
+    return out
+  }
+
+  const createSampleMenu = async (): Promise<void> => {
+    if (!businessId) return
+    if (menuSetupLoading) return
+    setMenuSetupLoading(true)
+    setMenuSetupError(null)
+    try {
+      const categories = [
+        {
+          name: 'Popular',
+          items: [
+            { name: 'Jollof & grilled chicken', description: 'Smoky rice with house marinade.', price: 4500, cost: 0 },
+            { name: 'Afro grain bowl', description: 'Greens, grains, and pepper sauce.', price: 5200, cost: 0 }
+          ]
+        },
+        {
+          name: 'Sides & extras',
+          items: [
+            { name: 'Plantain wedges', description: 'Crispy sweet plantain.', price: 1200, cost: 0 },
+            { name: 'Chef’s salad', description: 'Ask staff for today’s mix.', price: 2500, cost: 0 }
+          ]
+        },
+        {
+          name: 'Drinks',
+          items: [
+            { name: 'Zobo (Hibiscus)', description: 'Chilled, refreshing and spicy.', price: 1800, cost: 0 },
+            { name: 'Ice-cold juice', description: 'Pick your flavour.', price: 2000, cost: 0 }
+          ]
+        }
+      ]
+
+      const createdCategoryIds: Record<string, string> = {}
+      // Create categories first so items can reference them.
+      for (let i = 0; i < categories.length; i += 1) {
+        const cat = categories[i]
+        const res = await axios.post('/api/menu/category', { businessId, name: cat.name, displayOrder: i }, { headers: getAuthHeaders() })
+        createdCategoryIds[cat.name] = res.data?.id
+      }
+
+      for (let i = 0; i < categories.length; i += 1) {
+        const cat = categories[i]
+        const categoryId = createdCategoryIds[cat.name]
+        for (let j = 0; j < cat.items.length; j += 1) {
+          const it = cat.items[j]
+          await axios.post(
+            '/api/menu/item',
+            {
+              businessId,
+              categoryId,
+              name: it.name,
+              description: it.description,
+              price: it.price,
+              cost: it.cost,
+              imageUrl: null,
+              available: true,
+              displayOrder: j
+            },
+            { headers: getAuthHeaders() }
+          )
+        }
+      }
+
+      setMenuChoice('sample')
+    } catch (err) {
+      setMenuSetupError(axios.isAxiosError(err) ? err.response?.data?.error || 'Failed to create sample menu' : 'Failed to create sample menu')
+    } finally {
+      setMenuSetupLoading(false)
+    }
+  }
+
+  const importSpreadsheetCsv = async (file: File): Promise<void> => {
+    if (!businessId) return
+    if (!canImportSpreadsheet) {
+      setMenuSetupError('Spreadsheet import is available on Pro and above.')
+      return
+    }
+    if (menuSetupLoading) return
+    setMenuSetupLoading(true)
+    setMenuSetupError(null)
+    try {
+      const text = await file.text()
+      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+      if (lines.length < 2) throw new Error('No rows found')
+
+      const headers = parseCsvLine(lines[0]).map(h => h.toLowerCase())
+      const idx = (key: string) => headers.indexOf(key.toLowerCase())
+
+      const get = (row: string[], key: string) => {
+        const i = idx(key)
+        if (i === -1) return ''
+        return row[i] ?? ''
+      }
+
+      const categoryKey = idx('category') !== -1 ? 'category' : (idx('category_name') !== -1 ? 'category_name' : 'category')
+      const nameKey = idx('name') !== -1 ? 'name' : 'item_name'
+      const priceKey = idx('price') !== -1 ? 'price' : 'item_price'
+
+      const rows = lines.slice(1).map((line) => parseCsvLine(line))
+      const normalized = rows
+        .map((row) => {
+          const categoryName = get(row, categoryKey)
+          const itemName = get(row, nameKey)
+          if (!categoryName || !itemName) return null
+          const description = get(row, 'description')
+          const priceRaw = get(row, priceKey)
+          const costRaw = get(row, 'cost')
+          const availableRaw = get(row, 'available')
+          const imageUrl = get(row, 'image_url') || get(row, 'imageurl')
+
+          const price = Number(priceRaw)
+          const cost = Number(costRaw)
+          const available = availableRaw ? !['false', '0', 'no'].includes(String(availableRaw).toLowerCase()) : true
+
+          if (Number.isNaN(price)) return null
+
+          return {
+            categoryName,
+            itemName,
+            description,
+            price,
+            cost: Number.isNaN(cost) ? 0 : cost,
+            available,
+            imageUrl: imageUrl || null
+          }
+        })
+        .filter(Boolean) as Array<{
+          categoryName: string
+          itemName: string
+          description: string
+          price: number
+          cost: number
+          available: boolean
+          imageUrl: string | null
+        }>
+
+      if (!normalized.length) throw new Error('No valid rows found')
+
+      const byCategory = new Map<string, typeof normalized>()
+      normalized.forEach((r) => {
+        const list = byCategory.get(r.categoryName) || []
+        list.push(r)
+        byCategory.set(r.categoryName, list)
+      })
+
+      const createdCategoryIds: Record<string, string> = {}
+      const categoryNames = [...byCategory.keys()]
+      for (let i = 0; i < categoryNames.length; i += 1) {
+        const name = categoryNames[i]
+        const res = await axios.post('/api/menu/category', { businessId, name, displayOrder: i }, { headers: getAuthHeaders() })
+        createdCategoryIds[name] = res.data?.id
+      }
+
+      const categoryNameArr = categoryNames
+      for (let i = 0; i < categoryNameArr.length; i += 1) {
+        const catName = categoryNameArr[i]
+        const categoryId = createdCategoryIds[catName]
+        const items = byCategory.get(catName) || []
+        for (let j = 0; j < items.length; j += 1) {
+          const it = items[j]
+          await axios.post(
+            '/api/menu/item',
+            {
+              businessId,
+              categoryId,
+              name: it.itemName,
+              description: it.description || null,
+              price: it.price,
+              cost: it.cost || 0,
+              imageUrl: it.imageUrl,
+              available: it.available,
+              displayOrder: j
+            },
+            { headers: getAuthHeaders() }
+          )
+        }
+      }
+
+      setMenuChoice('spreadsheet')
+    } catch (err) {
+      setMenuSetupError(axios.isAxiosError(err) ? err.response?.data?.error || 'Failed to import spreadsheet' : 'Failed to import spreadsheet')
+    } finally {
+      setMenuSetupLoading(false)
+    }
+  }
+
+  const uploadMenuImage = async (file: File): Promise<void> => {
+    if (!businessId) return
+    if (!canUploadMenuPictures) {
+      setMenuSetupError('Menu photos are available from Starter plan and above.')
+      return
+    }
+    if (menuSetupLoading) return
+    setMenuSetupLoading(true)
+    setMenuSetupError(null)
+    try {
+      if (!file.type.startsWith('image/')) {
+        throw new Error('PDF import is not available yet. Please upload an image.')
+      }
+
+      const form = new FormData()
+      form.append('businessId', businessId)
+      form.append('image', file)
+
+      const uploadRes = await axios.post('/api/menu/upload-image', form, { headers: getAuthHeaders() })
+      const imageUrl = uploadRes.data?.imageUrl as string | undefined
+      if (!imageUrl) throw new Error('Upload failed')
+
+      const categoryRes = await axios.post('/api/menu/category', { businessId, name: 'Imported from photo', displayOrder: 0 }, { headers: getAuthHeaders() })
+      const categoryId = categoryRes.data?.id as string | undefined
+      if (!categoryId) throw new Error('Could not create category')
+
+      await axios.post(
+        '/api/menu/item',
+        {
+          businessId,
+          categoryId,
+          name: file.name.replace(/\.[^.]+$/, ''),
+          description: 'Imported from your menu photo. Edit item details in the dashboard.',
+          price: 0,
+          cost: 0,
+          imageUrl,
+          available: false,
+          displayOrder: 0
+        },
+        { headers: getAuthHeaders() }
+      )
+
+      setMenuChoice('upload')
+    } catch (err) {
+      setMenuSetupError(axios.isAxiosError(err) ? err.response?.data?.error || 'Failed to upload menu image' : (err as Error).message || 'Failed to upload menu image')
+    } finally {
+      setMenuSetupLoading(false)
+    }
+  }
 
   useEffect(() => {
     const token = localStorage.getItem('zuri_business_token')
@@ -50,6 +317,13 @@ function BusinessOnboarding(): JSX.Element {
       navigate('/business/login', { replace: true })
       return
     }
+    axios
+      .get<Business>(`/api/business/${businessId}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((res) => {
+        const plan = res.data?.plan as PlanId | undefined
+        if (plan) setBusinessPlan(plan)
+      })
+      .catch(() => {})
     if (localStorage.getItem(`${ONBOARDING_KEY}_${businessId}`) === '1') {
       navigate(`/business/dashboard/${businessId}`, { replace: true })
     }
@@ -88,7 +362,6 @@ function BusinessOnboarding(): JSX.Element {
     }
   }
 
-  const recommendedPlan = getRecommendedPlan(useCase, businessSize)
   const canProceed = (step === 0 && useCase !== null) || (step === 1 && businessSize !== null) || step >= 2
 
   return (
@@ -125,7 +398,7 @@ function BusinessOnboarding(): JSX.Element {
                   onClick={() => setUseCase(opt.id)}
                   className={`text-left p-5 rounded-2xl border-2 transition-all duration-200 flex items-start gap-4 relative ${
                     useCase === opt.id
-                      ? 'border-zuri-orange bg-white shadow-md shadow-orange-100'
+                      ? 'border-zuri-orange bg-white shadow-md shadow-zuri-orange/20'
                       : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm'
                   }`}
                 >
@@ -168,7 +441,7 @@ function BusinessOnboarding(): JSX.Element {
                   onClick={() => setBusinessSize(opt.id)}
                   className={`text-left p-5 rounded-2xl border-2 transition-all duration-200 flex items-start gap-3 relative ${
                     businessSize === opt.id
-                      ? 'border-zuri-orange bg-white shadow-md shadow-orange-100'
+                      ? 'border-zuri-orange bg-white shadow-md shadow-zuri-orange/20'
                       : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm'
                   }`}
                 >
@@ -201,7 +474,7 @@ function BusinessOnboarding(): JSX.Element {
                   <div
                     key={item.title}
                     className={`p-4 rounded-2xl border-2 transition-all duration-300 ${
-                      i === highlightIndex ? 'border-zuri-orange bg-white shadow-md shadow-orange-100' : 'border-gray-100 bg-white/80'
+                      i === highlightIndex ? 'border-zuri-orange bg-white shadow-md shadow-zuri-orange/20' : 'border-gray-100 bg-white/80'
                     }`}
                   >
                     <div className="flex items-center gap-3">
@@ -248,7 +521,7 @@ function BusinessOnboarding(): JSX.Element {
                           key={label}
                           className={`flex-1 px-2.5 py-1.5 text-center cursor-default transition-colors ${
                             isActive
-                              ? 'bg-orange-50 text-zuri-orange border-b-2 border-zuri-orange'
+                              ? 'bg-zuri-orange/10 text-zuri-orange border-b-2 border-zuri-orange'
                               : 'text-gray-500 hover:text-zuri-black'
                           }`}
                         >
@@ -263,7 +536,7 @@ function BusinessOnboarding(): JSX.Element {
                       <div
                         className={`rounded-lg border px-3 py-2 flex items-center justify-between ${
                           dashboardHighlights[highlightIndex].title === 'Orders'
-                            ? 'border-zuri-orange bg-orange-50/60'
+                            ? 'border-zuri-orange bg-zuri-orange/20'
                             : 'border-gray-200 bg-white'
                         }`}
                       >
@@ -280,7 +553,7 @@ function BusinessOnboarding(): JSX.Element {
                       <div
                         className={`rounded-lg border px-3 py-2 flex items-center justify-between ${
                           dashboardHighlights[highlightIndex].title === 'Menu'
-                            ? 'border-zuri-orange bg-orange-50/60'
+                            ? 'border-zuri-orange bg-zuri-orange/20'
                             : 'border-gray-200 bg-white'
                         }`}
                       >
@@ -299,7 +572,7 @@ function BusinessOnboarding(): JSX.Element {
                       <div
                         className={`rounded-lg border px-2 py-1.5 ${
                           dashboardHighlights[highlightIndex].title === 'QR Code'
-                            ? 'border-zuri-orange bg-orange-50/60'
+                            ? 'border-zuri-orange bg-zuri-orange/20'
                             : 'border-gray-200 bg-white'
                         }`}
                       >
@@ -309,7 +582,7 @@ function BusinessOnboarding(): JSX.Element {
                       <div
                         className={`rounded-lg border px-2 py-1.5 ${
                           dashboardHighlights[highlightIndex].title === 'Payment & pricing'
-                            ? 'border-zuri-orange bg-orange-50/60'
+                            ? 'border-zuri-orange bg-zuri-orange/20'
                             : 'border-gray-200 bg-white'
                         }`}
                       >
@@ -319,7 +592,7 @@ function BusinessOnboarding(): JSX.Element {
                       <div
                         className={`rounded-lg border px-2 py-1.5 ${
                           dashboardHighlights[highlightIndex].title === 'Profile'
-                            ? 'border-zuri-orange bg-orange-50/60'
+                            ? 'border-zuri-orange bg-zuri-orange/20'
                             : 'border-gray-200 bg-white'
                         }`}
                       >
@@ -334,40 +607,118 @@ function BusinessOnboarding(): JSX.Element {
           </div>
         )}
 
-        {/* Step 3: Pricing recommendation */}
+        {/* Step 3: Setup your menu */}
         {step === 3 && (
           <div className="animate-fadeIn">
             <h1 className="text-2xl md:text-3xl font-bold text-zuri-black mb-2">
-              Choose your plan
+              Setup your menu
             </h1>
             <p className="text-gray-600 mb-8">
-              Based on your answers we suggest <span className="font-semibold text-zuri-black">{PLAN_LABELS[recommendedPlan]}</span>. Or start with Free and upgrade when you&apos;re ready.
+              Let&apos;s set up and verify your information for seamless experience.
             </p>
-            <div className="rounded-2xl border-2 border-gray-200 bg-white p-6 mb-6">
-              <p className="text-sm text-gray-600 mb-4">Recommended for you: {PLAN_LABELS[recommendedPlan]}</p>
-              <div className="flex flex-wrap gap-3">
+
+            <div className="rounded-2xl border border-gray-200 bg-white p-6 mb-6">
+              <div className="grid md:grid-cols-2 gap-4">
+                <div className="rounded-xl border border-gray-200 p-4">
+                  <p className="font-semibold text-zuri-black text-sm mb-2">
+                    Upload your menu photo or PDF
+                  </p>
+                  <p className="text-sm text-gray-600 mb-3">
+                    Our AI makes it editable in minutes.
+                  </p>
+                  <input
+                    type="file"
+                    accept="image/*,application/pdf"
+                    disabled={!canUploadMenuPictures || menuSetupLoading}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0]
+                      if (!f) return
+                      void uploadMenuImage(f)
+                    }}
+                    className="w-full text-sm"
+                  />
+                  {!canUploadMenuPictures ? (
+                    <p className="text-xs text-gray-500 mt-2">Upgrade to Starter to upload menu photos.</p>
+                  ) : null}
+                  {menuChoice === 'upload' ? (
+                    <p className="text-xs text-green-700 mt-2 font-semibold">Photo uploaded.</p>
+                  ) : null}
+                </div>
+
+                <div className="rounded-xl border border-gray-200 p-4">
+                  <p className="font-semibold text-zuri-black text-sm mb-2">
+                    Import from spread sheet
+                  </p>
+                  <p className="text-sm text-gray-600 mb-3">Only available for Pro and above.</p>
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    disabled={!canImportSpreadsheet || menuSetupLoading}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0]
+                      if (!f) return
+                      void importSpreadsheetCsv(f)
+                    }}
+                    className="w-full text-sm"
+                  />
+                  <a
+                    href="/menu-sample-sheet.csv"
+                    className="inline-block text-xs text-zuri-orange hover:underline mt-2"
+                  >
+                    Download sample sheet
+                  </a>
+                  {!canImportSpreadsheet ? (
+                    <p className="text-xs text-gray-500 mt-2">Upgrade to Pro to import a CSV spreadsheet.</p>
+                  ) : null}
+                  {menuChoice === 'spreadsheet' ? (
+                    <p className="text-xs text-green-700 mt-2 font-semibold">Spreadsheet imported.</p>
+                  ) : null}
+                </div>
+
+                <div className="rounded-xl border border-gray-200 p-4 md:col-span-2">
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                    <div>
+                      <p className="font-semibold text-zuri-black text-sm">Create a sample menu</p>
+                      <p className="text-sm text-gray-600 mt-1">
+                        Generate a sample menu to streamline the setup process
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void createSampleMenu()}
+                      disabled={menuSetupLoading}
+                      className="px-5 py-2.5 rounded-xl font-semibold text-sm bg-zuri-orange text-white hover:bg-zuri-orange-dark transition disabled:opacity-50"
+                    >
+                      {menuSetupLoading ? 'Working…' : 'Create a sample menu'}
+                    </button>
+                  </div>
+                  {menuChoice === 'sample' ? (
+                    <p className="text-xs text-green-700 mt-3 font-semibold">Sample menu created.</p>
+                  ) : null}
+                </div>
+              </div>
+
+              {menuSetupError ? (
+                <p className="text-sm text-red-600 mt-4 font-semibold">
+                  {menuSetupError}
+                </p>
+              ) : null}
+
+              <div className="mt-6 flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
                 <button
                   type="button"
                   onClick={() => {
-                    if (!businessId) return
-                    localStorage.setItem(`${ONBOARDING_KEY}_${businessId}`, '1')
-                    navigate(`/business/dashboard/${businessId}`, { replace: true })
+                    setMenuChoice('empty')
+                    handleNext()
                   }}
-                  className="px-5 py-2.5 rounded-xl font-semibold text-sm bg-zuri-orange text-white hover:bg-zuri-orange-dark transition"
+                  className="px-5 py-2.5 rounded-xl font-semibold text-sm border-2 border-gray-200 text-gray-700 hover:border-gray-300 hover:bg-gray-50 transition"
+                  disabled={menuSetupLoading}
                 >
-                  Start with Free for now
+                  Skip for now
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!businessId) return
-                    localStorage.setItem(`${ONBOARDING_KEY}_${businessId}`, '1')
-                    navigate(`/subscribe/${recommendedPlan}?interval=monthly`, { replace: true })
-                  }}
-                  className="px-5 py-2.5 rounded-xl font-semibold text-sm border-2 border-zuri-orange text-zuri-orange hover:bg-orange-50 transition"
-                >
-                  Go to {PLAN_LABELS[recommendedPlan]}
-                </button>
+                <div className="text-xs text-gray-500">
+                  Your menu can be edited anytime in your dashboard.
+                </div>
               </div>
             </div>
           </div>
@@ -380,9 +731,13 @@ function BusinessOnboarding(): JSX.Element {
               <svg className="w-8 h-8 text-zuri-orange" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
             </div>
             <h1 className="text-2xl md:text-3xl font-bold text-zuri-black mb-2">
-              You&apos;re all set
+              {menuChoice === null || menuChoice === 'empty' ? 'Start with empty menu' : "You're all set"}
             </h1>
-            <p className="text-gray-600 mb-8">Head to your dashboard and start taking orders.</p>
+            <p className="text-gray-600 mb-8">
+              {menuChoice === null || menuChoice === 'empty'
+                ? 'We&apos;ll create your dashboard with an empty menu so you can add categories and items next.'
+                : 'Head to your dashboard and start taking orders.'}
+            </p>
           </div>
         )}
 
@@ -401,7 +756,7 @@ function BusinessOnboarding(): JSX.Element {
             disabled={!canProceed && step < 2}
             className="px-6 py-2.5 rounded-xl font-semibold text-sm bg-zuri-orange text-white hover:bg-zuri-orange-dark transition disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {step === 4 ? 'Go to dashboard' : 'Continue'}
+            {step === 4 ? (menuChoice === null || menuChoice === 'empty' ? 'Start with empty menu' : 'Go to dashboard') : 'Continue'}
           </button>
         </div>
       </div>

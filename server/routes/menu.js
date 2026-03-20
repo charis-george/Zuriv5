@@ -197,6 +197,68 @@ router.post('/category', requireBusinessAuth, async (req, res) => {
   }
 });
 
+// Update category (e.g. display order) — requires business auth
+router.patch('/category/:categoryId', requireBusinessAuth, async (req, res) => {
+  try {
+    const { categoryId } = req.params;
+    const { businessId, displayOrder, name } = req.body;
+    if (!businessId || businessId !== req.businessId) {
+      return res.status(403).json({ error: 'You can only update categories for your own business' });
+    }
+    const updateData = {};
+    if (typeof displayOrder === 'number') updateData.display_order = displayOrder;
+    if (typeof name === 'string' && name.trim()) updateData.name = name.trim();
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ error: 'Nothing to update' });
+    }
+    const { data, error } = await supabase
+      .from('categories')
+      .update(updateData)
+      .eq('id', categoryId)
+      .eq('business_id', businessId)
+      .select()
+      .single();
+    if (error) {
+      console.error('Update category error:', error);
+      return res.status(500).json({ error: 'Failed to update category' });
+    }
+    if (!data) return res.status(404).json({ error: 'Category not found' });
+    res.json({ id: data.id, name: data.name, displayOrder: data.display_order });
+  } catch (error) {
+    console.error('Update category error:', error);
+    res.status(500).json({ error: 'Failed to update category' });
+  }
+});
+
+// Delete category — requires business auth. Items in this category become uncategorized (category_id set null by DB).
+router.delete('/category/:categoryId', requireBusinessAuth, async (req, res) => {
+  try {
+    const { categoryId } = req.params;
+    const businessId = req.businessId;
+    const { data: category, error: fetchError } = await supabase
+      .from('categories')
+      .select('id, business_id')
+      .eq('id', categoryId)
+      .single();
+    if (fetchError || !category || category.business_id !== businessId) {
+      return res.status(404).json({ error: 'Category not found' });
+    }
+    const { error: deleteError } = await supabase
+      .from('categories')
+      .delete()
+      .eq('id', categoryId)
+      .eq('business_id', businessId);
+    if (deleteError) {
+      console.error('Delete category error:', deleteError);
+      return res.status(500).json({ error: 'Failed to delete category' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Delete category error:', error);
+    res.status(500).json({ error: 'Failed to delete category' });
+  }
+});
+
 // Create menu item — requires business auth
 router.post('/item', requireBusinessAuth, async (req, res) => {
   try {

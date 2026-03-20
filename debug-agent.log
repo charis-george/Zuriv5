@@ -1,0 +1,5 @@
+{"source":"QRScanner","phase":"effect_mount","readerElementId":"zuri-qr-1057e51d-862a-4254-bde9-a28936a454f7","serverAt":"2026-03-19T22:24:16.357Z"}
+{"source":"QRScanner","phase":"effect_cleanup","serverAt":"2026-03-19T22:24:16.465Z"}
+{"source":"QRScanner","phase":"effect_mount","readerElementId":"zuri-qr-1057e51d-862a-4254-bde9-a28936a454f7","serverAt":"2026-03-19T22:24:16.479Z"}
+{"source":"QRScanner","phase":"start_ok","cam":"facing:environment","index":0,"serverAt":"2026-03-19T22:24:18.509Z"}
+{"source":"QRScanner","phase":"start_ok","cam":"facing:environment","index":0,"serverAt":"2026-03-19T22:24:18.586Z"}
