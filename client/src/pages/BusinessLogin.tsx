@@ -1,6 +1,7 @@
 import { useState, FormEvent } from 'react'
 import { useNavigate, Link, useSearchParams } from 'react-router-dom'
 import axios from 'axios'
+import { API_BASE_URL } from '../lib/apiBase'
 import { Business, BusinessFormData } from '../types'
 import { NoticeModal, type NoticeVariant } from '../components/NoticeModal'
 
@@ -63,7 +64,26 @@ function BusinessLogin(): JSX.Element {
       }
     } catch (err) {
       if (axios.isAxiosError(err)) {
-        setError(err.response?.data?.error || 'An error occurred')
+        const apiErr = err.response?.data && typeof err.response.data === 'object' && 'error' in err.response.data
+          ? String((err.response.data as { error: unknown }).error)
+          : ''
+        if (apiErr) {
+          setError(apiErr)
+        } else if (err.code === 'ERR_NETWORK' || err.message === 'Network Error') {
+          setError(
+            API_BASE_URL
+              ? 'Cannot reach the API. Check that the backend is running and CORS allows this site.'
+              : 'Cannot reach the API. If you use a hosted frontend (e.g. Vercel), set VITE_API_URL to your backend URL in the project environment variables.'
+          )
+        } else if (err.response?.status === 404) {
+          setError(
+            API_BASE_URL
+              ? 'Login API returned 404. Check VITE_API_URL and backend routes.'
+              : 'Login API not found. Deploy the Node server or set VITE_API_URL to where it is hosted.'
+          )
+        } else {
+          setError(err.message || 'An error occurred')
+        }
       } else {
         setError('An error occurred')
       }
