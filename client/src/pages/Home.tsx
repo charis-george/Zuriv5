@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import { useState, FormEvent, useEffect, useRef } from 'react'
+import { apiUrl } from '../lib/apiBase'
 import { PLAN_PRICES, PLAN_PRICES_YEARLY_AS_MONTHLY, YEARLY_DISCOUNT_PCT, type BillingInterval } from '../types'
 
 const CONTACT_EMAIL = 'zuriia2026@gmail.com'
@@ -83,7 +84,7 @@ function Home(): JSX.Element {
     setSending(true)
     setSubmitMessage(null)
     try {
-      const res = await fetch('/api/contact', {
+      const res = await fetch(apiUrl('/api/contact'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email.trim(), source: formSource })
