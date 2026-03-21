@@ -5,11 +5,29 @@ const socketIo = require('socket.io');
 const path = require('path');
 require('dotenv').config();
 
+/** Comma-separated list, e.g. https://app.vercel.app,https://preview.vercel.app */
+function parseFrontendOrigins() {
+  const raw = process.env.FRONTEND_URL;
+  if (!raw || typeof raw !== 'string') return null;
+  const list = raw.split(',').map((s) => s.trim().replace(/\/$/, '')).filter(Boolean);
+  return list.length ? list : null;
+}
+
 const app = express();
 const server = http.createServer(app);
-const socketCorsOrigin = process.env.NODE_ENV === 'production' && process.env.FRONTEND_URL
-  ? process.env.FRONTEND_URL
-  : '*';
+
+const frontendOrigins =
+  process.env.NODE_ENV === 'production' ? parseFrontendOrigins() : null;
+const corsOriginOption =
+  frontendOrigins && frontendOrigins.length === 1
+    ? frontendOrigins[0]
+    : frontendOrigins && frontendOrigins.length > 1
+      ? frontendOrigins
+      : undefined;
+
+const socketCorsOrigin =
+  process.env.NODE_ENV === 'production' && corsOriginOption ? corsOriginOption : '*';
+
 const io = socketIo(server, {
   cors: {
     origin: socketCorsOrigin,
@@ -22,11 +40,8 @@ const PORT = process.env.PORT || 3000;
 // Webhook needs raw body for signature verification (must be before express.json())
 app.use('/api/payment/webhook', express.raw({ type: 'application/json' }));
 
-// CORS: in production restrict to FRONTEND_URL when set
-const corsOrigin = process.env.NODE_ENV === 'production' && process.env.FRONTEND_URL
-  ? process.env.FRONTEND_URL
-  : undefined;
-app.use(cors(corsOrigin ? { origin: corsOrigin } : {}));
+// CORS: in production, allow FRONTEND_URL (comma-separated for prod + Vercel previews)
+app.use(cors(corsOriginOption ? { origin: corsOriginOption } : {}));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../client/dist')));
 
