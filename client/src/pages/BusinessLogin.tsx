@@ -2,6 +2,7 @@ import { useState, FormEvent } from 'react'
 import { useNavigate, Link, useSearchParams } from 'react-router-dom'
 import axios from 'axios'
 import { API_BASE_URL } from '../lib/apiBase'
+import { formatApiErrorBody } from '../lib/formatApiError'
 import { Business, BusinessFormData } from '../types'
 import { NoticeModal, type NoticeVariant } from '../components/NoticeModal'
 
@@ -45,10 +46,15 @@ function BusinessLogin(): JSX.Element {
           email: formData.email,
           password: formData.password
         })
+        const businessId = response.data?.id
+        if (!businessId || typeof businessId !== 'string') {
+          setError('Login response was invalid. Please try again or contact support.')
+          return
+        }
         const token = response.data.token
         if (token) localStorage.setItem('zuri_business_token', token)
-        if (response.data.id) localStorage.setItem('zuri_business_id', response.data.id)
-        afterAuth(response.data.id)
+        localStorage.setItem('zuri_business_id', businessId)
+        afterAuth(businessId)
       } else {
         await axios.post<Business>('/api/business/register', {
           name: formData.name,
@@ -64,9 +70,7 @@ function BusinessLogin(): JSX.Element {
       }
     } catch (err) {
       if (axios.isAxiosError(err)) {
-        const apiErr = err.response?.data && typeof err.response.data === 'object' && 'error' in err.response.data
-          ? String((err.response.data as { error: unknown }).error)
-          : ''
+        const apiErr = formatApiErrorBody(err.response?.data)
         if (apiErr) {
           setError(apiErr)
         } else if (err.code === 'ERR_NETWORK' || err.message === 'Network Error') {
