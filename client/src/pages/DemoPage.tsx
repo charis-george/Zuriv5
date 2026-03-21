@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
+import { apiUrl } from '../lib/apiBase'
 
 function DemoPage(): JSX.Element {
   const [fullName, setFullName] = useState('')
@@ -27,7 +28,7 @@ function DemoPage(): JSX.Element {
         message && `Notes: ${message}`,
       ].filter(Boolean).join('\n')
 
-      const res = await fetch('/api/contact', {
+      const res = await fetch(apiUrl('/api/contact'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email.trim(), source: 'demo', message: details }),
