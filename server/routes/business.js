@@ -12,6 +12,11 @@ const { getTransporter } = require('../lib/email');
 
 const supabase = getDb();
 
+function normalizeBusinessEmail(email) {
+  if (email == null || typeof email !== 'string') return '';
+  return email.trim().toLowerCase();
+}
+
 function isGrowthPlus(plan) {
   return plan === 'growth' || plan === 'pro' || plan === 'zuri_plus' || plan === 'enterprise' || plan === 'basic' || plan === 'advanced';
 }
@@ -45,11 +50,16 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ error: 'Name, email, and password are required' });
     }
 
+    const emailNorm = normalizeBusinessEmail(email);
+    if (!emailNorm) {
+      return res.status(400).json({ error: 'A valid email is required' });
+    }
+
     // Check if email already exists
     const { data: existingBusiness } = await supabase
       .from('businesses')
       .select('id')
-      .eq('email', email)
+      .eq('email', emailNorm)
       .single();
 
     if (existingBusiness) {
@@ -65,7 +75,7 @@ router.post('/register', async (req, res) => {
       .insert({
         id: businessId,
         name,
-        email,
+        email: emailNorm,
         password: hashedPassword,
         phone: phone || null,
         address: address || null
@@ -99,19 +109,35 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Email and password are required' });
     }
 
+    const emailNorm = normalizeBusinessEmail(email);
+    if (!emailNorm) {
+      return res.status(400).json({ error: 'A valid email is required' });
+    }
+
     // Get business by email
     const { data: business, error } = await supabase
       .from('businesses')
       .select('*')
-      .eq('email', email)
+      .eq('email', emailNorm)
       .single();
 
     if (error || !business) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
+    const storedHash = business.password;
+    if (storedHash == null || typeof storedHash !== 'string' || !storedHash.length) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
     // Verify password
-    if (!bcrypt.compareSync(password, business.password)) {
+    let passwordOk = false;
+    try {
+      passwordOk = bcrypt.compareSync(String(password), storedHash);
+    } catch {
+      passwordOk = false;
+    }
+    if (!passwordOk) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
