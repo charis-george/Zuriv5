@@ -81,6 +81,12 @@ function BusinessLogin(): JSX.Element {
               ? 'Login API returned 404. Check VITE_API_URL and backend routes.'
               : 'Login API not found. Deploy the Node server or set VITE_API_URL to where it is hosted.'
           )
+        } else if (err.response?.status === 405) {
+          setError(
+            API_BASE_URL
+              ? 'The server rejected POST (405). Check that VITE_API_URL is your Node API origin, not a static file host.'
+              : '405 Method Not Allowed: the browser posted to this site instead of your API. In Vercel, set VITE_API_URL to your backend URL (e.g. https://your-api.railway.app), redeploy, and do not use your frontend URL as the API.'
+          )
         } else {
           setError(err.message || 'An error occurred')
         }
