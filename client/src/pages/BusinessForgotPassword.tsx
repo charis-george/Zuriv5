@@ -1,6 +1,7 @@
 import { useState, FormEvent } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import axios from 'axios'
+import { formatUserFacingError } from '../lib/formatApiError'
 
 function BusinessForgotPassword(): JSX.Element {
   const [searchParams] = useSearchParams()
@@ -26,7 +27,11 @@ function BusinessForgotPassword(): JSX.Element {
       setSent(true)
       if (data.resetLink) setResetLink(data.resetLink)
     } catch (err) {
-      setError(axios.isAxiosError(err) ? (err.response?.data?.error || 'Something went wrong') : 'Something went wrong')
+      setError(
+        axios.isAxiosError(err)
+          ? formatUserFacingError(err.response?.data, 'Unable to send reset link. Please try again.')
+          : 'Unable to send reset link. Please try again.'
+      )
     } finally {
       setLoading(false)
     }

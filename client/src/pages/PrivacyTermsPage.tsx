@@ -1,12 +1,30 @@
 import { Link } from 'react-router-dom'
+import { organizationJsonLd, usePageSeo } from '../lib/seo'
 
 function PrivacyTermsPage(): JSX.Element {
+  usePageSeo({
+    title: 'Privacy Policy & Terms of Service | ZURI',
+    description: 'Read ZURI privacy policy and terms of service covering business accounts, customer orders, payments, data handling, and platform use.',
+    path: '/privacy',
+    type: 'article',
+    jsonLd: [
+      organizationJsonLd,
+      {
+        '@context': 'https://schema.org',
+        '@type': 'WebPage',
+        name: 'ZURI Privacy Policy and Terms of Service',
+        url: 'https://zuriqo.com/privacy',
+        description: 'Privacy policy and terms of service for the ZURI ordering and payment platform.'
+      }
+    ]
+  })
+
   return (
     <div className="min-h-screen bg-white text-zuri-black">
       <header className="border-b border-gray-200">
         <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
           <Link to="/" className="flex items-center gap-2 text-zuri-black hover:opacity-80 transition">
-            <img src="/ZURI.png" alt="" className="h-8 w-auto" />
+            <img src="/ZURI.png" alt="ZURI logo" className="h-8 w-auto" />
             <span className="text-[11px] tracking-[0.32em] uppercase">Z U R I</span>
           </Link>
           <nav className="text-sm text-gray-500">

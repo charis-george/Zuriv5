@@ -4,9 +4,15 @@ import axios from 'axios'
 import io, { Socket } from 'socket.io-client'
 import { SavedCard } from '../types'
 import { PaperPlaneLoader } from '../components/PaperPlaneLoader'
+import { API_BASE_URL, apiUrl } from '../lib/apiBase'
+import { clearTapToken, getTapToken } from '../lib/tapAuthStorage'
+import { formatUserFacingError } from '../lib/formatApiError'
+import { organizationJsonLd, usePageSeo } from '../lib/seo'
+import { preloadPaystackInline, startZuriPayment } from '../lib/paystackZuri'
 
 const WS_URL =
   (import.meta.env.VITE_WS_URL as string) ||
+  API_BASE_URL ||
   (typeof window !== 'undefined' && window.location.hostname === 'localhost'
     ? 'http://localhost:3000'
     : (typeof window !== 'undefined' ? window.location.origin : ''))
@@ -20,7 +26,6 @@ interface TapRequest {
 }
 
 function TapWaitPage(): JSX.Element {
-  const navigate = useNavigate()
   const [tapUser, setTapUser] = useState<{ id: string; email: string } | null>(null)
   const [loading, setLoading] = useState(true)
   const [code, setCode] = useState('')
@@ -33,17 +38,41 @@ function TapWaitPage(): JSX.Element {
   const [paystackLoading, setPaystackLoading] = useState(false)
   const [paid, setPaid] = useState(false)
   const socketRef = useRef<Socket | null>(null)
+  const businessName = request?.businessName?.trim() || 'Zuri Tap'
+
+  usePageSeo({
+    title: `ZURI | ${businessName}`,
+    description: request
+      ? `Pay ${request.businessName} securely with Zuri Tap.`
+      : 'Enter a Zuri Tap business code to receive a payment request and complete payment from your saved card.',
+    path: '/tap',
+    jsonLd: [
+      organizationJsonLd,
+      {
+        '@context': 'https://schema.org',
+        '@type': 'WebPage',
+        name: 'Zuri Tap Payment Code',
+        url: 'https://zuriqo.com/tap',
+        description: 'Customer page for entering a Zuri Tap business payment code.'
+      }
+    ]
+  })
+  const navigate = useNavigate()
 
   useEffect(() => {
-    const token = localStorage.getItem('zuri_tap_token')
+    preloadPaystackInline()
+  }, [])
+
+  useEffect(() => {
+    const token = getTapToken()
     if (!token) {
       navigate('/tap/login?redirect=' + encodeURIComponent('/tap'))
       return
     }
-    axios.get('/api/tap-auth/me', { headers: { Authorization: `Bearer ${token}` } })
+    axios.get(apiUrl('/api/tap-auth/me'), { headers: { Authorization: `Bearer ${token}` } })
       .then(res => setTapUser(res.data))
       .catch(() => {
-        localStorage.removeItem('zuri_tap_token')
+        clearTapToken()
         navigate('/tap/login?redirect=' + encodeURIComponent('/tap'))
       })
       .finally(() => setLoading(false))
@@ -81,7 +110,7 @@ function TapWaitPage(): JSX.Element {
 
   useEffect(() => {
     if (!request || !tapUser) return
-    axios.get<SavedCard[]>(`/api/payment/saved-cards?email=${encodeURIComponent(tapUser.email)}&businessId=${request.businessId}`)
+    axios.get<SavedCard[]>(apiUrl(`/api/payment/saved-cards?email=${encodeURIComponent(tapUser.email)}&businessId=${request.businessId}`))
       .then(res => setSavedCards(Array.isArray(res.data) ? res.data : []))
       .catch(() => setSavedCards([]))
   }, [request, tapUser])
@@ -110,8 +139,8 @@ function TapWaitPage(): JSX.Element {
     if (!request || !tapUser || !password.trim()) return
     setPaying(true)
     try {
-      const token = localStorage.getItem('zuri_tap_token')
-      await axios.post('/api/tap/charge-with-password', {
+      const token = getTapToken()
+      await axios.post(apiUrl('/api/tap/charge-with-password'), {
         orderId: request.orderId,
         email: tapUser.email,
         password: password.trim()
@@ -120,7 +149,7 @@ function TapWaitPage(): JSX.Element {
       setRequest(null)
       setPassword('')
     } catch (err) {
-      alert(axios.isAxiosError(err) ? (err.response?.data?.error || 'Payment failed') : 'Payment failed')
+      alert(axios.isAxiosError(err) ? formatUserFacingError(err.response?.data, 'Payment failed') : 'Payment failed')
     } finally {
       setPaying(false)
     }
@@ -130,7 +159,7 @@ function TapWaitPage(): JSX.Element {
     if (!request || !tapUser) return
     setPaystackLoading(true)
     try {
-      const { data } = await axios.post<{ authorizationUrl: string }>('/api/payment/initialize', {
+      const { data } = await axios.post<{ authorizationUrl: string; accessCode?: string; reference: string }>(apiUrl('/api/payment/initialize'), {
         email: tapUser.email,
         amount: request.amount,
         orderId: request.orderId,
@@ -139,13 +168,23 @@ function TapWaitPage(): JSX.Element {
         tap: true,
         callbackUrl: `${window.location.origin}/payment-done?reference=${request.orderId}&tap=1`
       })
-      if (data?.authorizationUrl) {
-        window.location.href = data.authorizationUrl
-        return
-      }
-      alert('Could not start payment')
+      await startZuriPayment(
+        {
+          authorizationUrl: data.authorizationUrl,
+          accessCode: data.accessCode,
+          reference: data.reference || request.orderId,
+        },
+        {
+          successPath: `${window.location.origin}/payment-done?reference=${encodeURIComponent(request.orderId)}&tap=1`,
+          onError: (msg) => alert(msg || 'Could not start payment'),
+        },
+      )
     } catch (err) {
-      alert(axios.isAxiosError(err) ? (err.response?.data?.error || 'Could not start payment') : 'Could not start payment')
+      alert(
+        axios.isAxiosError(err)
+          ? formatUserFacingError(err.response?.data, 'Could not start payment')
+          : 'Could not start payment'
+      )
     } finally {
       setPaystackLoading(false)
     }
@@ -159,7 +198,7 @@ function TapWaitPage(): JSX.Element {
     )
   }
 
-  if (!tapUser) return null
+  if (!tapUser) return <></>
 
   return (
     <div className="min-h-screen bg-[#fefbf5] p-4">

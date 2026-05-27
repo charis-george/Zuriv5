@@ -38,3 +38,15 @@ export function formatApiErrorBody(data: unknown): string {
     return 'Something went wrong. Please try again.'
   }
 }
+
+function looksTechnical(message: string): boolean {
+  return /(cors|railway|vercel|vite_api_url|stack|trace|upstream|internal|deploy|redeploy|backend|api route|method not allowed|err_network|network error)/i.test(message)
+}
+
+/** Convert any thrown API problem into friendly copy for end users. */
+export function formatUserFacingError(data: unknown, fallback = 'Something went wrong. Please try again.'): string {
+  const raw = formatApiErrorBody(data).trim()
+  if (!raw) return fallback
+  if (looksTechnical(raw)) return fallback
+  return raw
+}

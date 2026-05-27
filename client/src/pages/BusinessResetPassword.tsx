@@ -1,6 +1,7 @@
 import { useState, FormEvent, useEffect } from 'react'
 import { Link, useSearchParams, useNavigate } from 'react-router-dom'
 import axios from 'axios'
+import { formatUserFacingError } from '../lib/formatApiError'
 
 function BusinessResetPassword(): JSX.Element {
   const [searchParams] = useSearchParams()
@@ -28,7 +29,11 @@ function BusinessResetPassword(): JSX.Element {
       setSuccess(true)
       setTimeout(() => navigate('/business/login'), 2000)
     } catch (err) {
-      setError(axios.isAxiosError(err) ? (err.response?.data?.error || 'Something went wrong') : 'Something went wrong')
+      setError(
+        axios.isAxiosError(err)
+          ? formatUserFacingError(err.response?.data, 'Unable to update password. Please try again.')
+          : 'Unable to update password. Please try again.'
+      )
     } finally {
       setLoading(false)
     }

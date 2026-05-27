@@ -1,0 +1,84 @@
+/* ZURI Paystack overlay (parent page — full ZURI branding) */
+#zuri-paystack-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 99998;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(23, 23, 23, 0.82);
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.2s ease, visibility 0.2s ease;
+}
+
+#zuri-paystack-overlay.zuri-paystack-overlay--visible {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.zuri-paystack-overlay__panel {
+  max-width: 20rem;
+  width: 100%;
+  text-align: center;
+  padding: 1.75rem 1.5rem;
+  border-radius: 1.25rem;
+  background: #fffdf5;
+  border: 1px solid rgba(255, 189, 89, 0.45);
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.28);
+}
+
+.zuri-paystack-overlay__logo {
+  margin: 0 auto 0.75rem;
+  display: block;
+  object-fit: contain;
+}
+
+.zuri-paystack-overlay__title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #171717;
+  margin: 0 0 0.35rem;
+}
+
+.zuri-paystack-overlay__msg {
+  font-size: 0.875rem;
+  color: #525252;
+  margin: 0 0 1rem;
+  line-height: 1.45;
+}
+
+.zuri-paystack-overlay__spinner {
+  width: 2rem;
+  height: 2rem;
+  margin: 0 auto 1rem;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 189, 89, 0.25);
+  border-top-color: #ffbd59;
+  animation: zuri-paystack-spin 0.75s linear infinite;
+}
+
+.zuri-paystack-overlay__hint {
+  font-size: 0.7rem;
+  color: #737373;
+  margin: 0;
+  line-height: 1.4;
+}
+
+@keyframes zuri-paystack-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Paystack inline modal chrome on the parent document */
+iframe[src*='paystack'],
+iframe[src*='checkout.paystack'] {
+  border-radius: 12px !important;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35) !important;
+}
+

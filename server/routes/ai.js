@@ -1,4 +1,754 @@
-/** Minimal router: replace with full module if your repo version was lost. */
 const express = require('express');
 const router = express.Router();
+
+const { getDb } = require('../database');
+const { requireBusinessAuth } = require('../middleware/auth');
+const {
+  getBusinessPlan,
+  canAccessAIFeatures,
+  canUseStorefrontAIGeneration,
+  canAccessOpsAi
+} = require('../lib/plans');
+
+const supabase = getDb();
+
+const allowedInsightTypes = new Set([
+  'revenue_insights',
+  'sales_forecasting',
+  'promotions_suggestions',
+  'custom'
+]);
+
+function isOpsAiPlan(plan) {
+  return canAccessOpsAi(plan);
+}
+
+function clampInt(n, min, max, fallback) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return fallback;
+  return Math.max(min, Math.min(max, Math.trunc(x)));
+}
+
+function sumMoney(list, key) {
+  return list.reduce((acc, row) => acc + (Number(row && row[key]) || 0), 0);
+}
+
+function weekdayHourKeyUtc(iso) {
+  const d = new Date(iso);
+  const day = d.getUTCDay(); // 0..6
+  const hour = d.getUTCHours(); // 0..23
+  return `${day}_${hour}`;
+}
+
+function clamp01(x) {
+  const n = Number(x);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(1, n));
+}
+
+function extractHexColors(text) {
+  const t = String(text || '');
+  const matches = t.match(/#[0-9a-fA-F]{6}\b/g) || [];
+  return [...new Set(matches.map((m) => m.toLowerCase()))];
+}
+
+function pickBrandConfigFromReferences(brandReferences) {
+  const raw = Array.isArray(brandReferences) ? brandReferences.join(' ') : '';
+  const colors = extractHexColors(raw);
+  const brandColor = colors[0] || '#f97316';
+  const priceTextColor = colors[1] || brandColor;
+  const lowered = raw.toLowerCase();
+  const backgroundTone = /dark|black|midnight|charcoal/.test(lowered) ? 'dark' : /warm|cream|beige|earth/.test(lowered) ? 'warm' : 'light';
+  const heroOverlay = /minimal|flat|clean/.test(lowered) ? 'solid' : /split/.test(lowered) ? 'split' : 'gradient';
+  const fontFamily = /serif|editorial|classic/.test(lowered) ? 'serif' : /mono|tech/.test(lowered) ? 'mono' : 'sans';
+  return { brandColor, priceTextColor, backgroundTone, heroOverlay, fontFamily };
+}
+
+async function assertOwnBusinessAndPlan(req, res, businessId) {
+  if (!businessId || typeof businessId !== 'string') {
+    res.status(400).json({ error: 'businessId is required' });
+    return null;
+  }
+  if (businessId !== req.businessId) {
+    res.status(403).json({ error: 'Forbidden' });
+    return null;
+  }
+  const plan = await getBusinessPlan(businessId);
+  return { plan };
+}
+
+function buildPrompt({ type, businessName, stats, query }) {
+  const header = [
+    'You are Zuri AI, a business analytics assistant for restaurants/food businesses.',
+    'Use the provided stats. If a stat is missing, say so briefly and make conservative suggestions.',
+    'Return a clear, practical answer for the business owner. Avoid mentioning you used an API or database.',
+    'Format rules:',
+    '- Start with a 1-2 sentence summary.',
+    '- Then provide 4-7 bullet points with specific actions.',
+    '- End with 1 short “Next step” recommendation.'
+  ].join('\n');
+
+  const statsBlock = [
+    `Business: ${businessName || 'Unknown'}`,
+    `Period (days): ${stats.periodDays}`,
+    `Completed orders: ${stats.completedOrders}`,
+    `Total revenue: ₦${Math.round(stats.totalRevenue).toLocaleString()}`,
+    `Avg order value: ₦${Math.round(stats.avgOrderValue).toLocaleString()}`,
+    `Top items (last ${stats.periodDays} days): ${
+      stats.topItems.length ? stats.topItems.map((t) => `${t.name} (${t.orderCount}x)`).join(', ') : 'N/A'
+    }`,
+    `Peak ordering hours (UTC) top 3: ${
+      stats.peakHours.length ? stats.peakHours.map((h) => `${h.hour}:00 (${h.orderCount}x)`).join(', ') : 'N/A'
+    }`
+  ].join('\n');
+
+  if (type === 'custom') {
+    return [
+      header,
+      '',
+      `Business question: ${query}`,
+      '',
+      'Use the stats below to answer the question:',
+      statsBlock
+    ].join('\n');
+  }
+
+  const taskByType = {
+    revenue_insights:
+      'Task: Provide revenue insights, including best-selling items and bundle/upsell ideas to increase revenue.',
+    sales_forecasting:
+      'Task: Provide sales forecasting insights: demand patterns, likely busy times, and how to prepare staffing/inventory.',
+    promotions_suggestions:
+      'Task: Provide promotions suggestions for slow days: targeted offers and how to measure impact.'
+  };
+
+  return [
+    header,
+    '',
+    taskByType[type] || 'Task: Provide actionable business insights.',
+    '',
+    'Context stats:',
+    statsBlock
+  ].join('\n');
+}
+
+router.post('/insights', requireBusinessAuth, async (req, res) => {
+  try {
+    const { businessId, type, query } = req.body || {};
+    if (!businessId || typeof businessId !== 'string') {
+      return res.status(400).json({ error: 'businessId is required' });
+    }
+    if (businessId !== req.businessId) {
+      return res.status(403).json({ error: 'You can only request insights for your own business' });
+    }
+    if (!type || typeof type !== 'string' || !allowedInsightTypes.has(type)) {
+      return res.status(400).json({ error: 'Invalid insight type' });
+    }
+    if (type === 'custom') {
+      if (!query || typeof query !== 'string' || !query.trim()) {
+        return res.status(400).json({ error: 'query is required for custom type' });
+      }
+    }
+
+    const plan = await getBusinessPlan(businessId);
+    if (!canAccessAIFeatures(plan)) {
+      return res.status(403).json({ error: 'Upgrade to Scale to unlock AI insights.' });
+    }
+
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      return res.status(503).json({ error: 'Anthropic AI not configured (missing ANTHROPIC_API_KEY).' });
+    }
+
+    // Keep prompt sizes predictable; allow override but clamp.
+    const periodDays = clampInt(req.body?.periodDays, 7, 90, 30);
+    const start = new Date(Date.now() - periodDays * 24 * 60 * 60 * 1000);
+
+    // Fetch recent completed orders and basic item aggregates.
+    const { data: orders, error: ordersErr } = await supabase
+      .from('orders')
+      .select('id,status,total_amount,created_at')
+      .eq('business_id', businessId)
+      .gte('created_at', start.toISOString())
+      .limit(4000);
+
+    if (ordersErr) {
+      console.error('[ZURI] ai.insights orders query error:', ordersErr);
+      return res.status(500).json({ error: 'Failed to load business stats' });
+    }
+
+    const list = orders || [];
+    const completed = list.filter((o) => o && o.status === 'completed');
+    const totalRevenue = sumMoney(completed, 'total_amount');
+    const completedOrders = completed.length;
+    const avgOrderValue = completedOrders > 0 ? totalRevenue / completedOrders : 0;
+
+    // Peak hours: bucket by UTC hour based on order timestamps.
+    const peakCounts = new Map();
+    for (const o of list) {
+      const iso = o && o.created_at ? String(o.created_at) : null;
+      if (!iso) continue;
+      const h = new Date(iso).getUTCHours();
+      peakCounts.set(h, (peakCounts.get(h) || 0) + 1);
+    }
+    const peakHours = [...peakCounts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([hour, orderCount]) => ({ hour, orderCount }));
+
+    // Top items: aggregate quantities from recent completed orders.
+    const orderIds = completed.map((o) => o.id).filter(Boolean).slice(0, 2000);
+    let topItems = [];
+    if (orderIds.length > 0) {
+      const { data: lines, error: liErr } = await supabase
+        .from('order_items')
+        .select('menu_item_id,quantity')
+        .in('order_id', orderIds);
+
+      if (liErr) {
+        console.error('[ZURI] ai.insights order_items query error:', liErr);
+      } else {
+        const counts = new Map();
+        for (const l of lines || []) {
+          const mid = l && l.menu_item_id ? l.menu_item_id : null;
+          if (!mid) continue;
+          counts.set(mid, (counts.get(mid) || 0) + (Number(l.quantity) || 0));
+        }
+
+        const topIds = [...counts.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 5)
+          .map(([id]) => id);
+
+        if (topIds.length > 0) {
+          const { data: namesData, error: nErr } = await supabase
+            .from('menu_items')
+            .select('id,name')
+            .in('id', topIds);
+
+          if (nErr) {
+            console.error('[ZURI] ai.insights menu_items query error:', nErr);
+          } else {
+            const nameById = (namesData || []).reduce((acc, m) => {
+              acc[m.id] = m.name || 'Item';
+              return acc;
+            }, {});
+            topItems = topIds.map((id) => ({
+              name: nameById[id] || 'Menu item',
+              orderCount: counts.get(id) || 0
+            }));
+          }
+        }
+      }
+    }
+
+    const { data: business } = await supabase
+      .from('businesses')
+      .select('name')
+      .eq('id', businessId)
+      .single();
+
+    const anthropic = new (require('@anthropic-ai/sdk'))({ apiKey });
+    // Use a model string supported by the Anthropic SDK docs by default.
+    const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5-20250929';
+
+    const prompt = buildPrompt({
+      type,
+      businessName: business?.name,
+      stats: {
+        periodDays,
+        completedOrders,
+        totalRevenue,
+        avgOrderValue,
+        topItems,
+        peakHours
+      },
+      query
+    });
+
+    const msg = await anthropic.messages.create({
+      model,
+      max_tokens: 800,
+      messages: [{ role: 'user', content: prompt }]
+    });
+
+    const content0 = msg && Array.isArray(msg.content) ? msg.content[0] : null;
+    const insight =
+      (typeof content0 === 'string' ? content0 : content0 && typeof content0.text === 'string' ? content0.text : null) ||
+      (msg && typeof msg.content === 'string' ? msg.content : null) ||
+      '';
+
+    const cleaned = insight.trim() || 'No response from AI.';
+    res.json({ insight: cleaned });
+  } catch (err) {
+    console.error('[ZURI] ai.insights error:', err);
+    res.status(500).json({
+      error: 'Failed to generate AI insight',
+      details: err && err.message ? err.message : String(err)
+    });
+  }
+});
+
+/**
+ * GET /api/ai/signals?businessId=...
+ * Lightweight, non-chatbot “always-on” signals for the dashboard.
+ */
+router.get('/signals', requireBusinessAuth, async (req, res) => {
+  try {
+    const businessId = typeof req.query.businessId === 'string' ? req.query.businessId : '';
+    const ok = await assertOwnBusinessAndPlan(req, res, businessId);
+    if (!ok) return;
+    if (!isOpsAiPlan(ok.plan)) return res.status(403).json({ error: 'Upgrade to Scale to unlock live operations signals.' });
+
+    const now = new Date();
+    const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const last30m = new Date(Date.now() - 30 * 60 * 1000);
+    const lookbackDays = 28;
+    const lookbackStart = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000);
+
+    const [{ data: recentOrders, error: rErr }, { data: menuItems, error: mErr }] = await Promise.all([
+      supabase
+        .from('orders')
+        .select('id,total_amount,created_at,payment_status')
+        .eq('business_id', businessId)
+        .gte('created_at', lookbackStart.toISOString())
+        .limit(8000),
+      supabase
+        .from('menu_items')
+        .select('id,name,available,stock_on_hand,low_stock_threshold')
+        .eq('business_id', businessId)
+        .limit(5000)
+    ]);
+
+    if (rErr) return res.status(500).json({ error: 'Failed to load order signals' });
+    if (mErr) return res.status(500).json({ error: 'Failed to load menu signals' });
+
+    const orders = recentOrders || [];
+    const paid = orders.filter((o) => o && o.payment_status === 'paid');
+    const paidToday = paid.filter((o) => o.created_at && new Date(o.created_at) >= todayStart);
+    const paidLast30m = paid.filter((o) => o.created_at && new Date(o.created_at) >= last30m);
+
+    // Rush hour indicator: compare last 30m order rate to typical for this weekday+hour.
+    const slotKeyNow = weekdayHourKeyUtc(now.toISOString());
+    const sameSlotPast = paid.filter((o) => {
+      if (!o.created_at) return false;
+      const d = new Date(o.created_at);
+      if (d >= todayStart) return false;
+      return weekdayHourKeyUtc(d.toISOString()) === slotKeyNow;
+    });
+    const baselinePerHour = sameSlotPast.length / Math.max(1, lookbackDays / 7);
+    const last30mRatePerHour = paidLast30m.length * 2;
+    const rushRatio = baselinePerHour > 0 ? last30mRatePerHour / baselinePerHour : paidLast30m.length > 0 ? 2 : 0;
+
+    // Today’s top items: compute from today’s paid orders via order_items.
+    const paidTodayIds = paidToday.map((o) => o.id).filter(Boolean).slice(0, 5000);
+    let topItems = [];
+    if (paidTodayIds.length) {
+      const { data: lines } = await supabase
+        .from('order_items')
+        .select('menu_item_id,quantity,order_id')
+        .in('order_id', paidTodayIds);
+      const counts = new Map();
+      for (const l of lines || []) {
+        const id = l.menu_item_id;
+        if (!id) continue;
+        counts.set(id, (counts.get(id) || 0) + (Number(l.quantity) || 0));
+      }
+      const topIds = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([id]) => id);
+      if (topIds.length) {
+        const { data: names } = await supabase.from('menu_items').select('id,name').in('id', topIds);
+        const nameById = (names || []).reduce((acc, it) => {
+          acc[it.id] = it.name || 'Item';
+          return acc;
+        }, {});
+        topItems = topIds.map((id) => ({ id, name: nameById[id] || 'Menu item', orderCount: counts.get(id) || 0 }));
+      }
+    }
+
+    // Anomaly (heuristic): compare revenue so far to avg revenue for same weekday scaled by fraction-of-day.
+    const minutesSinceStart = Math.max(1, Math.floor((Date.now() - todayStart.getTime()) / 60000));
+    const revenueSoFar = sumMoney(paidToday, 'total_amount');
+
+    const sameWeekdayPast = paid.filter((o) => {
+      if (!o.created_at) return false;
+      const d = new Date(o.created_at);
+      return d < todayStart && d.getUTCDay() === now.getUTCDay();
+    });
+    const fracDay = clamp01(minutesSinceStart / (24 * 60));
+    const pastDayRevenue = {};
+    for (const o of sameWeekdayPast) {
+      const dayKey = String(o.created_at).slice(0, 10);
+      pastDayRevenue[dayKey] = (pastDayRevenue[dayKey] || 0) + (Number(o.total_amount) || 0);
+    }
+    const pastRevs = Object.values(pastDayRevenue);
+    const avgFullDay = pastRevs.length ? pastRevs.reduce((a, b) => a + b, 0) / pastRevs.length : 0;
+    const expectedSoFar = avgFullDay * fracDay;
+    const anomaly =
+      expectedSoFar > 0
+        ? {
+            expectedSoFar,
+            revenueSoFar,
+            deltaPct: Math.round(((revenueSoFar - expectedSoFar) / expectedSoFar) * 1000) / 10
+          }
+        : null;
+
+    // Low stock flags: stock vs threshold + velocity projection (last 2h).
+    const items = menuItems || [];
+    const tracked = items.filter((i) => i.stock_on_hand != null && Number(i.stock_on_hand) >= 0);
+    const last2h = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const paidLast2h = paid.filter((o) => o.created_at && new Date(o.created_at) >= last2h);
+    const paidLast2hIds = paidLast2h.map((o) => o.id).filter(Boolean).slice(0, 4000);
+    const velocityByItem = new Map();
+    if (paidLast2hIds.length) {
+      const { data: lines2h } = await supabase
+        .from('order_items')
+        .select('menu_item_id,quantity,order_id')
+        .in('order_id', paidLast2hIds);
+      for (const l of lines2h || []) {
+        const id = l.menu_item_id;
+        if (!id) continue;
+        velocityByItem.set(id, (velocityByItem.get(id) || 0) + (Number(l.quantity) || 0));
+      }
+    }
+    const lowStock = tracked
+      .map((it) => {
+        const stock = Number(it.stock_on_hand) || 0;
+        const threshold = it.low_stock_threshold != null ? Number(it.low_stock_threshold) || 0 : 0;
+        const qty2h = velocityByItem.get(it.id) || 0;
+        const perHour = qty2h / 2;
+        const projectedHoursLeft = perHour > 0 ? stock / perHour : null;
+        const isLow = threshold > 0 ? stock <= threshold : stock <= 0;
+        const willRunOutSoon = projectedHoursLeft != null && projectedHoursLeft <= 1.5;
+        if (!isLow && !willRunOutSoon) return null;
+        return {
+          id: it.id,
+          name: it.name || 'Item',
+          stockOnHand: stock,
+          lowStockThreshold: threshold || null,
+          projectedHoursLeft
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 12);
+
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      businessId,
+      generatedAt: new Date().toISOString(),
+      rush: {
+        last30mOrders: paidLast30m.length,
+        baselinePerHour,
+        rushRatio
+      },
+      anomaly,
+      todayTopItems: topItems,
+      lowStock
+    });
+  } catch (e) {
+    console.error('[ZURI] ai.signals error:', e);
+    res.status(500).json({ error: 'Failed to load AI signals' });
+  }
+});
+
+/**
+ * POST /api/ai/menu/description
+ * Suggest a short, compelling menu item description in the house style.
+ */
+router.post('/menu/description', requireBusinessAuth, async (req, res) => {
+  try {
+    const { businessId, itemName, categoryName } = req.body || {};
+    const ok = await assertOwnBusinessAndPlan(req, res, businessId);
+    if (!ok) return;
+    if (!canUseStorefrontAIGeneration(ok.plan)) {
+      return res.status(403).json({ error: 'Upgrade to Growth to unlock AI menu assist.' });
+    }
+
+    if (!itemName || typeof itemName !== 'string' || !itemName.trim()) {
+      return res.status(400).json({ error: 'itemName is required' });
+    }
+
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) return res.status(503).json({ error: 'AI not configured' });
+
+    // Pull a few existing descriptions to match tone.
+    const { data: samples } = await supabase
+      .from('menu_items')
+      .select('description')
+      .eq('business_id', businessId)
+      .not('description', 'is', null)
+      .limit(6);
+
+    const styleSamples = (samples || [])
+      .map((s) => (s.description && String(s.description).trim()) || '')
+      .filter(Boolean)
+      .slice(0, 4);
+
+    const anthropic = new (require('@anthropic-ai/sdk'))({ apiKey });
+    const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5-20250929';
+
+    const prompt = [
+      'You write menu item descriptions for a restaurant ordering app.',
+      'Write ONE short description (1–2 sentences), warm and appetizing, not overly poetic.',
+      'Avoid emojis. Avoid quotes. Do not mention pricing. Keep it under 160 characters.',
+      categoryName ? `Category: ${categoryName}` : '',
+      `Item name: ${itemName}`,
+      styleSamples.length ? `Style examples from this menu:\n- ${styleSamples.join('\n- ')}` : '',
+      '',
+      'Return only the description text.'
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    const msg = await anthropic.messages.create({
+      model,
+      max_tokens: 120,
+      messages: [{ role: 'user', content: prompt }]
+    });
+
+    const content0 = msg && Array.isArray(msg.content) ? msg.content[0] : null;
+    const text =
+      (typeof content0 === 'string'
+        ? content0
+        : content0 && typeof content0.text === 'string'
+          ? content0.text
+          : '') || '';
+
+    const cleaned = String(text).trim().replace(/\s+/g, ' ');
+    if (!cleaned) return res.status(500).json({ error: 'No AI response' });
+    res.json({ description: cleaned.slice(0, 200) });
+  } catch (e) {
+    console.error('[ZURI] ai.menu.description error:', e);
+    res.status(500).json({ error: 'Failed to generate description' });
+  }
+});
+
+/**
+ * GET /api/ai/briefing?businessId=...&days=1
+ * Daily briefing card summary (yesterday by default).
+ */
+router.get('/briefing', requireBusinessAuth, async (req, res) => {
+  try {
+    const businessId = typeof req.query.businessId === 'string' ? req.query.businessId : '';
+    const ok = await assertOwnBusinessAndPlan(req, res, businessId);
+    if (!ok) return;
+    if (!isOpsAiPlan(ok.plan)) return res.status(403).json({ error: 'Upgrade to Scale to unlock this feature.' });
+
+    const now = new Date();
+    const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())); // today 00:00 UTC
+    const start = new Date(end.getTime() - 24 * 60 * 60 * 1000); // yesterday 00:00 UTC
+
+    const { data: orders, error } = await supabase
+      .from('orders')
+      .select('id,total_amount,created_at,payment_status')
+      .eq('business_id', businessId)
+      .gte('created_at', start.toISOString())
+      .lt('created_at', end.toISOString())
+      .limit(8000);
+    if (error) return res.status(500).json({ error: 'Failed to load briefing' });
+
+    const paid = (orders || []).filter((o) => o.payment_status === 'paid');
+    const totalOrders = paid.length;
+    const totalRevenue = sumMoney(paid, 'total_amount');
+    const avgOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+
+    // busiest hour
+    const byHour = new Map();
+    for (const o of paid) {
+      const h = new Date(o.created_at).getUTCHours();
+      byHour.set(h, (byHour.get(h) || 0) + 1);
+    }
+    const busiest = [...byHour.entries()].sort((a, b) => b[1] - a[1])[0];
+
+    // top item
+    const ids = paid.map((o) => o.id).filter(Boolean);
+    let topItem = null;
+    if (ids.length) {
+      const { data: lines } = await supabase
+        .from('order_items')
+        .select('menu_item_id,quantity,order_id')
+        .in('order_id', ids.slice(0, 5000));
+      const counts = new Map();
+      for (const l of lines || []) counts.set(l.menu_item_id, (counts.get(l.menu_item_id) || 0) + (Number(l.quantity) || 0));
+      const topId = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+      if (topId) {
+        const { data: mi } = await supabase.from('menu_items').select('name').eq('id', topId).single();
+        topItem = { name: mi?.name || 'Item', count: counts.get(topId) || 0 };
+      }
+    }
+
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      date: start.toISOString().slice(0, 10),
+      totalOrders,
+      totalRevenue,
+      avgOrderValue,
+      topItem,
+      busiestHourUtc: busiest ? { hour: busiest[0], orderCount: busiest[1] } : null
+    });
+  } catch (e) {
+    console.error('[ZURI] ai.briefing error:', e);
+    res.status(500).json({ error: 'Failed to load briefing' });
+  }
+});
+
+/**
+ * GET /api/ai/slow-hours?businessId=...&days=60
+ * Detect slow hours by weekday/hour for this business.
+ */
+router.get('/slow-hours', requireBusinessAuth, async (req, res) => {
+  try {
+    const businessId = typeof req.query.businessId === 'string' ? req.query.businessId : '';
+    const ok = await assertOwnBusinessAndPlan(req, res, businessId);
+    if (!ok) return;
+    if (!isOpsAiPlan(ok.plan)) return res.status(403).json({ error: 'Upgrade to Scale to unlock this feature.' });
+
+    const days = clampInt(req.query.days, 14, 120, 60);
+    const start = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const { data: orders, error } = await supabase
+      .from('orders')
+      .select('created_at,payment_status,total_amount')
+      .eq('business_id', businessId)
+      .gte('created_at', start.toISOString())
+      .limit(8000);
+    if (error) return res.status(500).json({ error: 'Failed to load slow hours' });
+
+    const paid = (orders || []).filter((o) => o.payment_status === 'paid');
+    const buckets = new Map(); // key day_hour -> {count,revenue}
+    for (const o of paid) {
+      const d = new Date(o.created_at);
+      const key = `${d.getUTCDay()}_${d.getUTCHours()}`;
+      const prev = buckets.get(key) || { orderCount: 0, revenue: 0 };
+      prev.orderCount += 1;
+      prev.revenue += Number(o.total_amount) || 0;
+      buckets.set(key, prev);
+    }
+
+    const rows = [...buckets.entries()].map(([key, v]) => {
+      const [weekday, hour] = key.split('_').map((x) => Number(x));
+      return { weekday, hour, orderCount: v.orderCount, revenue: v.revenue };
+    });
+    // find slowest 3 by order count (but require some history)
+    rows.sort((a, b) => a.orderCount - b.orderCount);
+    const slow = rows.slice(0, 3);
+
+    res.set('Cache-Control', 'no-store');
+    res.json({ periodDays: days, slowHours: slow });
+  } catch (e) {
+    console.error('[ZURI] ai.slow-hours error:', e);
+    res.status(500).json({ error: 'Failed to load slow hours' });
+  }
+});
+
+/**
+ * POST /api/ai/storefront-generate
+ * One AI storefront generation on Growth, unlimited on Scale/Enterprise (legacy Pro/Zuri AI).
+ */
+router.post('/storefront-generate', requireBusinessAuth, async (req, res) => {
+  try {
+    const { businessId, brandReferences, storeName, taglineHint } = req.body || {};
+    if (!businessId || typeof businessId !== 'string') {
+      return res.status(400).json({ error: 'businessId is required' });
+    }
+    if (businessId !== req.businessId) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    if (!Array.isArray(brandReferences)) {
+      return res.status(400).json({ error: 'brandReferences is required (3-4 items)' });
+    }
+    const refs = brandReferences.map((x) => String(x || '').trim()).filter(Boolean);
+    if (refs.length < 3 || refs.length > 4) {
+      return res.status(400).json({ error: 'Please provide 3-4 brand design references.' });
+    }
+
+    const plan = await getBusinessPlan(businessId);
+    if (!canUseStorefrontAIGeneration(plan)) {
+      return res.status(403).json({ error: 'Upgrade to Growth or above to use AI storefront generation.' });
+    }
+
+    const { data: business, error: bErr } = await supabase
+      .from('businesses')
+      .select('id,name,storefront_ai_generations')
+      .eq('id', businessId)
+      .single();
+    if (bErr || !business) {
+      return res.status(404).json({ error: 'Business not found' });
+    }
+
+    const used = Number(business.storefront_ai_generations || 0);
+    const isGrowth = plan === 'growth';
+    if (isGrowth && used >= 1) {
+      return res.status(403).json({
+        error: 'You have used your one AI generation on Growth. Upgrade to Scale to generate again.'
+      });
+    }
+
+    const generatedBase = pickBrandConfigFromReferences(refs);
+    const generatedConfig = {
+      ...generatedBase,
+      layout: 'cards',
+      gridStyle: 'wide_cards',
+      showPhotos: true,
+      showDescriptions: true,
+      showCalories: false,
+      showRatings: false,
+      cardSize: 1,
+      cardImageShape: 'rounded',
+      cardGap: 14,
+      cardRadius: 18,
+      dividerStyle: 'soft',
+      fontFamily: generatedBase.fontFamily,
+      titleSize: 36,
+      menuItemFontScale: 1,
+      pillShape: 'pill',
+      sectionTitleTreatment: 'underlined',
+      shadowDepth: 'soft',
+      categoryStripBorder: true,
+      heroHeight: 220
+    };
+    const generatedDetails = {
+      name: String(storeName || business.name || 'Your store').trim(),
+      tagline: String(taglineHint || 'Crafted to match your brand style').trim(),
+      cuisineTags: ['Signature', 'Curated', 'Premium']
+    };
+
+    const { error: upErr } = await supabase
+      .from('businesses')
+      .update({
+        storefront_config: generatedConfig,
+        storefront_details: generatedDetails,
+        storefront_ai_generations: used + 1
+      })
+      .eq('id', businessId);
+    if (upErr) {
+      console.error('[ZURI] ai.storefront-generate update error:', upErr);
+      return res.status(500).json({ error: 'Failed to save generated storefront' });
+    }
+
+    try {
+      const io = req.app && req.app.get ? req.app.get('io') : null;
+      if (io) {
+        io.to(`storefront-${businessId}`).emit('storefront-updated', {
+          businessId,
+          config: generatedConfig,
+          details: generatedDetails
+        });
+      }
+    } catch (e) {
+      console.error('[ZURI] ai.storefront-generate socket error:', e);
+    }
+
+    return res.json({
+      success: true,
+      storefrontConfig: generatedConfig,
+      storefrontDetails: generatedDetails,
+      generationsUsed: used + 1,
+      generationsRemainingOnGrowth: Math.max(0, 1 - (used + 1))
+    });
+  } catch (e) {
+    console.error('[ZURI] ai.storefront-generate error:', e);
+    return res.status(500).json({ error: 'Failed to generate storefront' });
+  }
+});
+
 module.exports = router;

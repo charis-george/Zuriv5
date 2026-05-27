@@ -3,6 +3,11 @@ import { useParams, useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import { Business, PLAN_PRICES, PLAN_PRICES_YEARLY, PLAN_LABELS, YEARLY_DISCOUNT_PCT, type BillingInterval } from '../types'
 import { PaperPlaneLoader } from '../components/PaperPlaneLoader'
+import { CustomDropdown } from '../components/CustomDropdown'
+import { apiUrl } from '../lib/apiBase'
+import { formatUserFacingError } from '../lib/formatApiError'
+import { preloadPaystackInline, startZuriPayment } from '../lib/paystackZuri'
+import { formatModeTransactionFee } from '../lib/transactionFees'
 
 function BusinessPaymentPage(): JSX.Element {
   const { businessId } = useParams<{ businessId: string }>()
@@ -22,8 +27,14 @@ function BusinessPaymentPage(): JSX.Element {
   const [bankPassword, setBankPassword] = useState('')
   const [bankSaving, setBankSaving] = useState(false)
   const [showBankForm, setShowBankForm] = useState(true)
+  const [bankFormError, setBankFormError] = useState<string | null>(null)
   const [upgradeLoading, setUpgradeLoading] = useState<string | null>(null)
   const [upgradeBillingInterval, setUpgradeBillingInterval] = useState<BillingInterval>('monthly')
+  const [cancelLoading, setCancelLoading] = useState(false)
+
+  useEffect(() => {
+    preloadPaystackInline()
+  }, [])
 
   useEffect(() => {
     if (!businessId) return
@@ -32,7 +43,7 @@ function BusinessPaymentPage(): JSX.Element {
       navigate('/business/login', { replace: true })
       return
     }
-    axios.get<Business>(`/api/business/${businessId}`, { headers: getAuthHeaders() })
+    axios.get<Business>(apiUrl(`/api/business/${businessId}`), { headers: getAuthHeaders() })
       .then(res => {
         setBusiness(res.data)
         setLoading(false)
@@ -46,7 +57,7 @@ function BusinessPaymentPage(): JSX.Element {
           setLoading(false)
         }
       })
-    axios.get<{ code: string; name: string }[]>('/api/banks')
+    axios.get<{ code: string; name: string }[]>(apiUrl('/api/banks'))
       .then(res => setBanks(Array.isArray(res.data) ? res.data : []))
       .catch(() => {})
   }, [businessId, navigate])
@@ -102,9 +113,25 @@ function BusinessPaymentPage(): JSX.Element {
       <div className="max-w-2xl mx-auto px-4 py-8">
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
           <h2 className="text-lg font-bold text-zuri-black mb-6">Get paid</h2>
-          <p className="text-gray-500 text-sm mb-6">
-            Add your Nigerian bank account to receive payouts. We verify the account name so payments go to the right place.
+          <p className="text-gray-600 text-sm mb-3 leading-relaxed">
+            Add a Nigerian payout account so customer payments can settle to you. We match your bank record through Paystack, then you confirm with your Zuri business password—only you can change where money goes.
           </p>
+          <div className="rounded-xl border border-zuri-orange/25 bg-zuri-orange/5 p-4 mb-6">
+            <p className="text-sm font-semibold text-zuri-black mb-1">Before you can save a bank account</p>
+            <ul className="text-xs text-gray-600 space-y-1.5 list-disc list-inside leading-relaxed">
+              <li>Choose your bank and enter your full account number (NUBAN).</li>
+              <li>Tap <span className="font-semibold text-zuri-black">Verify account</span> so the account name appears.</li>
+              <li>Enter your Zuri <span className="font-semibold text-zuri-black">login password</span> and save—this stops anyone who gets into your session from changing your payout details.</li>
+            </ul>
+          </div>
+          {banks.length === 0 ? (
+            <div className="mb-6 p-4 rounded-xl border border-amber-200 bg-amber-50">
+              <p className="text-sm font-semibold text-amber-900 mb-1">Bank list unavailable</p>
+              <p className="text-xs text-amber-800 leading-relaxed">
+                We couldn&apos;t load Nigerian banks from Paystack. Refresh the page in a moment. If this keeps happening, check your connection or contact Zuri support—without the list you can&apos;t pick a bank yet.
+              </p>
+            </div>
+          ) : null}
           {business.bankAccount?.accountName ? (
             <div className="mb-8 p-5 rounded-xl bg-zuri-orange/10 border border-zuri-orange/30">
               <p className="font-semibold text-zuri-black text-sm">Payout account</p>
@@ -116,6 +143,7 @@ function BusinessPaymentPage(): JSX.Element {
                   setShowBankForm(true)
                   setBankForm({ bankCode: '', bankName: '', accountNumber: '', accountName: '' })
                   setBankResolveError(null)
+                  setBankFormError(null)
                   setBankPassword('')
                 }}
                 className="mt-3 text-sm font-semibold text-zuri-orange hover:underline"
@@ -128,12 +156,13 @@ function BusinessPaymentPage(): JSX.Element {
             <form
               onSubmit={async (e) => {
                 e.preventDefault()
+                setBankFormError(null)
                 if (!businessId || !bankForm.bankCode || !bankForm.bankName || !bankForm.accountNumber.trim() || !bankForm.accountName.trim()) {
-                  alert('Select bank, enter account number, and verify to show account name before saving.')
+                  setBankFormError('Select a bank, enter your account number, and verify so the account name appears before saving.')
                   return
                 }
                 if (!bankPassword.trim()) {
-                  alert('Enter your Zuri business account password to save bank details.')
+                  setBankFormError('Enter your Zuri business login password to confirm this change.')
                   return
                 }
                 setBankSaving(true)
@@ -150,12 +179,25 @@ function BusinessPaymentPage(): JSX.Element {
                   setBankForm({ bankCode: '', bankName: '', accountNumber: '', accountName: '' })
                   setBankPassword('')
                   setShowBankForm(false)
+                  setBankFormError(null)
                   alert('Bank details saved.')
                 } catch (err) {
                   if (axios.isAxiosError(err) && err.response?.status === 401) {
-                    alert(err.response?.data?.error || 'Incorrect password. Enter your Zuri business account password.')
+                    setBankFormError(
+                      formatUserFacingError(err.response?.data, 'That password doesn’t match your Zuri business account. Try again or reset your password from the login page.')
+                    )
+                  } else if (axios.isAxiosError(err)) {
+                    const raw = formatUserFacingError(err.response?.data, '')
+                    const lower = raw.toLowerCase()
+                    if (lower.includes('could not verify account')) {
+                      setBankFormError(
+                        'We couldn’t complete a security check on our side. Wait a moment, try saving again, or log out and back in. If it keeps failing, contact Zuri support.'
+                      )
+                    } else {
+                      setBankFormError(raw || 'Couldn’t save bank details. Check your connection and try again.')
+                    }
                   } else {
-                    alert('Failed to save. Try again.')
+                    setBankFormError('Couldn’t save bank details. Check your connection and try again.')
                   }
                 } finally {
                   setBankSaving(false)
@@ -165,20 +207,18 @@ function BusinessPaymentPage(): JSX.Element {
             >
               <div>
                 <label className="block text-sm font-medium text-gray-600 mb-1">Bank</label>
-                <select
+                <CustomDropdown
+                  options={banks.map(b => ({ value: b.code, label: b.name }))}
                   value={bankForm.bankCode}
-                  onChange={(e) => {
-                    const option = e.target.selectedOptions?.[0]
-                    setBankForm(f => ({ ...f, bankCode: e.target.value, bankName: option?.text ?? '' }))
+                  onChange={(val, label) => {
+                    setBankForm(f => ({ ...f, bankCode: val, bankName: label }))
+                    setBankFormError(null)
+                    setBankResolveError(null)
                   }}
-                  required
-                  className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50 focus:border-zuri-orange"
-                >
-                  <option value="">Select bank</option>
-                  {banks.map((b) => (
-                    <option key={b.code} value={b.code}>{b.name}</option>
-                  ))}
-                </select>
+                  placeholder="Select bank"
+                  searchable
+                  disabled={banks.length === 0}
+                />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-600 mb-1">Account number</label>
@@ -186,7 +226,11 @@ function BusinessPaymentPage(): JSX.Element {
                   type="text"
                   inputMode="numeric"
                   value={bankForm.accountNumber}
-                  onChange={(e) => setBankForm(f => ({ ...f, accountNumber: e.target.value.replace(/\D/g, '').slice(0, 16) }))}
+                  onChange={(e) => {
+                    setBankForm(f => ({ ...f, accountNumber: e.target.value.replace(/\D/g, '').slice(0, 16) }))
+                    setBankFormError(null)
+                    setBankResolveError(null)
+                  }}
                   placeholder="8–16 digits (e.g. 10 for Nigerian NUBAN)"
                   maxLength={16}
                   className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50 focus:border-zuri-orange"
@@ -200,15 +244,17 @@ function BusinessPaymentPage(): JSX.Element {
                     setBankResolveError(null)
                     setBankResolving(true)
                     try {
-                      const { data } = await axios.get<{ account_name: string }>('/api/banks/resolve', {
+                      const { data } = await axios.get<{ account_name: string }>(apiUrl('/api/banks/resolve'), {
                         params: { bank_code: bankForm.bankCode, account_number: bankForm.accountNumber.trim() }
                       })
                       setBankForm(f => ({ ...f, accountName: data.account_name || '' }))
                     } catch (err: unknown) {
                       const ax = err as { response?: { data?: { error?: string } } }
-                      const msg = ax.response?.data?.error || 'Could not verify account. Check bank and account number.'
-                      setBankResolveError(msg)
-                      alert(msg)
+                      const msg = formatUserFacingError(ax.response?.data, '')
+                      setBankResolveError(
+                        msg ||
+                          'Paystack could not match this account. Double-check the bank and your NUBAN (usually 10 digits), then try Verify again. If your details are correct, try again later or ask your bank.'
+                      )
                     } finally {
                       setBankResolving(false)
                     }
@@ -219,11 +265,15 @@ function BusinessPaymentPage(): JSX.Element {
                 </button>
               </div>
               {bankResolveError ? (
-                <div className="p-3 rounded-xl bg-amber-50 border border-amber-200">
-                  <p className="text-sm text-amber-800">{bankResolveError}</p>
-                  {(bankResolveError.includes('test') || bankResolveError.includes('limit') || bankResolveError.includes('001')) && (
-                    <p className="text-xs text-amber-700 mt-1">Tip: In test mode, use <strong>Zenith Bank</strong> (code 057) with test account number <strong>0000000000</strong> to avoid the 3-per-day live resolve limit. Or switch to live keys for real accounts.</p>
-                  )}
+                <div className="p-4 rounded-xl bg-amber-50 border border-amber-200">
+                  <p className="text-sm font-semibold text-amber-900 mb-1">We couldn&apos;t verify this account yet</p>
+                  <p className="text-sm text-amber-900/95 leading-relaxed">{bankResolveError}</p>
+                </div>
+              ) : null}
+              {bankFormError ? (
+                <div className="p-4 rounded-xl bg-red-50 border border-red-100">
+                  <p className="text-sm font-semibold text-red-800 mb-1">Can&apos;t save payout account</p>
+                  <p className="text-sm text-red-800/95 leading-relaxed">{bankFormError}</p>
                 </div>
               ) : null}
               {bankForm.accountName ? (
@@ -258,7 +308,9 @@ function BusinessPaymentPage(): JSX.Element {
           <hr className="border-gray-100 my-8" />
 
           <h3 className="text-lg font-bold text-zuri-black mb-4">Upgrade plan</h3>
-          <p className="text-gray-500 text-sm mb-4">You’ll be redirected to Paystack to pay securely.</p>
+          <p className="text-gray-600 text-sm mb-4 leading-relaxed">
+            Checkout opens in ZURI Pay with ZURI-branded Paystack checkout for a consistent billing experience.
+          </p>
           <div className="flex items-center gap-2 mb-4">
             <span className="text-sm font-semibold text-zuri-black">Billing:</span>
             <button
@@ -277,7 +329,7 @@ function BusinessPaymentPage(): JSX.Element {
             </button>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {(['starter', 'growth', 'pro', 'zuri_plus'] as const).map((plan) => (
+            {(['starter', 'growth', 'scale'] as const).map((plan) => (
               <button
                 key={plan}
                 disabled={business.plan === plan || upgradeLoading !== null}
@@ -285,15 +337,24 @@ function BusinessPaymentPage(): JSX.Element {
                   if (!businessId || !business?.email) return
                   setUpgradeLoading(plan)
                   try {
-                    const { data } = await axios.post<{ authorizationUrl: string }>('/api/subscription/initialize', {
+                    const { data } = await axios.post<{ authorizationUrl: string; accessCode?: string; reference: string }>(apiUrl('/api/subscription/initialize'), {
                       businessId,
                       plan,
                       email: business.email,
                       callbackUrl: `${window.location.origin}/upgrade-done`,
                       interval: upgradeBillingInterval
                     }, { headers: getAuthHeaders() })
-                    if (data?.authorizationUrl) window.location.href = data.authorizationUrl
-                    else alert('Failed to start payment')
+                    await startZuriPayment(
+                      {
+                        authorizationUrl: data.authorizationUrl,
+                        accessCode: data.accessCode,
+                        reference: data.reference,
+                      },
+                      {
+                        successPath: `${window.location.origin}/upgrade-done`,
+                        onError: (msg) => alert(msg || 'Failed to start payment'),
+                      },
+                    )
                   } catch {
                     alert('Failed to start payment')
                   } finally {
@@ -302,11 +363,53 @@ function BusinessPaymentPage(): JSX.Element {
                 }}
                 className="bg-zuri-orange text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-zuri-orange-dark transition disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {upgradeLoading === plan ? 'Redirecting…' : `Upgrade to ${PLAN_LABELS[plan]} — ${upgradeBillingInterval === 'monthly' ? PLAN_PRICES[plan] + '/mo' : PLAN_PRICES_YEARLY[plan] + '/yr'}`}
+                {upgradeLoading === plan ? 'Opening checkout…' : `Upgrade to ${PLAN_LABELS[plan]} — ${upgradeBillingInterval === 'monthly' ? PLAN_PRICES[plan] + '/mo' : PLAN_PRICES_YEARLY[plan] + '/yr'}`}
               </button>
             ))}
           </div>
-          <p className="text-gray-500 text-xs mt-4">A 1.5% transaction fee applies on every customer purchase.</p>
+          {business.plan && business.plan !== 'free' ? (
+            <div className="mt-5 rounded-xl border border-red-100 bg-red-50 p-4">
+              <p className="text-sm font-semibold text-red-700 mb-1">Cancel subscription</p>
+              <p className="text-xs text-red-700/90 mb-3">
+                This will move your account to the Free plan immediately.
+              </p>
+              <button
+                type="button"
+                disabled={cancelLoading}
+                onClick={async () => {
+                  if (!businessId) return
+                  const ok = window.confirm('Cancel subscription and switch to Free plan now?')
+                  if (!ok) return
+                  setCancelLoading(true)
+                  try {
+                    await axios.post(
+                      apiUrl('/api/subscription/cancel'),
+                      { businessId },
+                      { headers: getAuthHeaders() }
+                    )
+                    const { data } = await axios.get<Business>(apiUrl(`/api/business/${businessId}`), { headers: getAuthHeaders() })
+                    setBusiness(data)
+                    alert('Subscription cancelled. Your account is now on Free plan.')
+                  } catch (err) {
+                    alert(
+                      axios.isAxiosError(err)
+                        ? formatUserFacingError(err.response?.data, 'Could not cancel subscription right now.')
+                        : 'Could not cancel subscription right now.'
+                    )
+                  } finally {
+                    setCancelLoading(false)
+                  }
+                }}
+                className="bg-red-600 text-white px-3 py-1.5 rounded-lg text-sm font-semibold hover:bg-red-700 transition disabled:opacity-60"
+              >
+                {cancelLoading ? 'Cancelling…' : 'Cancel subscription'}
+              </button>
+            </div>
+          ) : null}
+          <p className="text-gray-500 text-xs mt-4">
+            Transaction fee:{' '}
+            {formatModeTransactionFee(business.businessMode === 'ticketing' ? 'ticketing' : 'menu')}.
+          </p>
         </div>
       </div>
     </div>

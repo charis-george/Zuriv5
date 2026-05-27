@@ -1,6 +1,8 @@
 import { useState, FormEvent, useEffect } from 'react'
 import { Link, useSearchParams, useNavigate } from 'react-router-dom'
 import axios from 'axios'
+import { apiUrl } from '../lib/apiBase'
+import { formatUserFacingError } from '../lib/formatApiError'
 
 function TapResetPassword(): JSX.Element {
   const [searchParams] = useSearchParams()
@@ -23,11 +25,15 @@ function TapResetPassword(): JSX.Element {
     if (newPassword.length < 6) return setError('Password must be at least 6 characters')
     setLoading(true)
     try {
-      await axios.post('/api/tap-auth/reset-password', { token, newPassword })
+      await axios.post(apiUrl('/api/tap-auth/reset-password'), { token, newPassword })
       setSuccess(true)
       setTimeout(() => navigate('/tap/login'), 2000)
     } catch (err) {
-      setError(axios.isAxiosError(err) ? (err.response?.data?.error || 'Something went wrong') : 'Something went wrong')
+      setError(
+        axios.isAxiosError(err)
+          ? formatUserFacingError(err.response?.data, 'Unable to update password. Please try again.')
+          : 'Unable to update password. Please try again.'
+      )
     } finally {
       setLoading(false)
     }

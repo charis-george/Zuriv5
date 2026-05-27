@@ -1,7 +1,11 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import axios from 'axios'
-import { PLAN_LABELS, type PlanId, type Business } from '../types'
+import { PLAN_LABELS, type PlanId, type Business, type BusinessMode } from '../types'
+import { formatUserFacingError } from '../lib/formatApiError'
+import { ZURI_FEATURES_BY_TIER, planHighlights } from '../lib/zuriFeaturesByTier'
+import { CustomDropdown } from '../components/CustomDropdown'
+import { formatModeTransactionFee } from '../lib/transactionFees'
 
 const ONBOARDING_KEY = 'zuri_onboarding_done'
 
@@ -23,34 +27,124 @@ const businessSizes: { id: BusinessSize; title: string; description: string }[] 
 
 const dashboardHighlights: { title: string; description: string }[] = [
   { title: 'Orders', description: 'See every order in real time and update status as you prepare.' },
-  { title: 'Menu', description: 'Add categories and items, set prices, and toggle availability.' },
+  { title: 'Menu', description: 'Add categories and items, set prices, guest-language names, and toggle availability.' },
+  {
+    title: 'Analytics',
+    description:
+      'Sales, trends, popular dishes, and peak hours from Growth. Scale adds Zuri Assist metrics, market intelligence, and richer margin views.'
+  },
   { title: 'QR Code', description: 'Download your QR so customers can scan and order from their phone.' },
-  { title: 'Payment & pricing', description: 'Add your bank account for payouts and upgrade your plan when ready.' },
-  { title: 'Profile', description: 'Business details, logo, Zuri Tap, and password — all in one place.' }
+  { title: 'Payment & pricing', description: 'Payouts, plans — upgrade to Growth for analytics & guest AI menu, Scale for Zuri Assist & CSV import.' },
+  { title: 'Profile', description: 'Business details, logo, Zuri Tap (Growth+), and password — all in one place.' }
+]
+
+const dashboardHighlightsTicketing: { title: string; description: string }[] = [
+  { title: 'Orders', description: 'See ticket orders, holds, and paid confirmations as they come in.' },
+  { title: 'Tickets', description: 'Create tiers (GA, VIP, add-ons), set prices, and control availability.' },
+  {
+    title: 'Analytics',
+    description: 'Same revenue analytics as restaurants — Growth for dashboards; Scale for Zuri Assist and network benchmarks.'
+  },
+  { title: 'QR Code', description: 'Guests scan your code to open your ticket storefront and checkout.' },
+  { title: 'Payment & pricing', description: 'Payouts and plans — CSV ticket import on Scale and above.' },
+  { title: 'Profile', description: 'Event name, branding, Zuri Tap (Growth+), and password — all in one place.' }
+]
+
+const SAMPLE_MENU_CATEGORIES = [
+  {
+    name: 'Popular',
+    items: [
+      { name: 'Jollof & grilled chicken', description: 'Smoky rice with house marinade.', price: 4500, cost: 0 },
+      { name: 'Afro grain bowl', description: 'Greens, grains, and pepper sauce.', price: 5200, cost: 0 }
+    ]
+  },
+  {
+    name: 'Sides & extras',
+    items: [
+      { name: 'Plantain wedges', description: 'Crispy sweet plantain.', price: 1200, cost: 0 },
+      { name: 'Chef’s salad', description: 'Ask staff for today’s mix.', price: 2500, cost: 0 }
+    ]
+  },
+  {
+    name: 'Drinks',
+    items: [
+      { name: 'Zobo (Hibiscus)', description: 'Chilled, refreshing and spicy.', price: 1800, cost: 0 },
+      { name: 'Ice-cold juice', description: 'Pick your flavour.', price: 2000, cost: 0 }
+    ]
+  }
+]
+
+const SAMPLE_TICKET_CATEGORIES = [
+  {
+    name: 'Admission',
+    items: [
+      {
+        name: 'General admission',
+        description: 'Standard entry for your published date and session.',
+        price: 5000,
+        cost: 0
+      },
+      {
+        name: 'VIP access',
+        description: 'Priority entry and lounge access where applicable.',
+        price: 15000,
+        cost: 0
+      }
+    ]
+  },
+  {
+    name: 'Add-ons',
+    items: [
+      {
+        name: 'Meet & greet',
+        description: 'Limited slots after the main session.',
+        price: 12000,
+        cost: 0
+      }
+    ]
+  }
 ]
 
 function BusinessOnboarding(): JSX.Element {
   const { businessId } = useParams<{ businessId: string }>()
   const navigate = useNavigate()
   const [step, setStep] = useState(0)
+  const [business, setBusiness] = useState<Business | null>(null)
   const [useCase, setUseCase] = useState<UseCase | null>(null)
   const [businessSize, setBusinessSize] = useState<BusinessSize | null>(null)
   const [highlightIndex, setHighlightIndex] = useState(0)
   const [direction, setDirection] = useState<'in' | 'out'>('in')
   const [businessPlan, setBusinessPlan] = useState<PlanId>('free')
+  /** Persisted to the business when leaving step 2 */
+  const [storefrontUseCase, setStorefrontUseCase] = useState<BusinessMode | null>(null)
 
   type MenuSetupChoice = 'empty' | 'sample' | 'upload' | 'spreadsheet'
   const [menuChoice, setMenuChoice] = useState<MenuSetupChoice | null>(null)
   const [menuSetupLoading, setMenuSetupLoading] = useState(false)
   const [menuSetupError, setMenuSetupError] = useState<string | null>(null)
+  const [banks, setBanks] = useState<{ code: string; name: string }[]>([])
+  const [bankForm, setBankForm] = useState({ bankCode: '', bankName: '', accountNumber: '', accountName: '' })
+  const [bankResolving, setBankResolving] = useState(false)
+  const [bankResolveError, setBankResolveError] = useState<string | null>(null)
+  const [bankPassword, setBankPassword] = useState('')
+  const [bankSaving, setBankSaving] = useState(false)
+  const [bankFormError, setBankFormError] = useState<string | null>(null)
+  const [showBankForm, setShowBankForm] = useState(true)
 
   const getAuthHeaders = () => {
     const token = localStorage.getItem('zuri_business_token')
     return token ? { Authorization: `Bearer ${token}` } : {}
   }
 
-  const canImportSpreadsheet = businessPlan === 'pro' || businessPlan === 'zuri_plus' || businessPlan === 'enterprise'
+  const canImportSpreadsheet =
+    businessPlan === 'scale' || businessPlan === 'pro' || businessPlan === 'zuri_plus' || businessPlan === 'enterprise'
   const canUploadMenuPictures = businessPlan !== 'free'
+  const previewHighlights =
+    storefrontUseCase === 'ticketing' ? dashboardHighlightsTicketing : dashboardHighlights
+  const previewNavTabs =
+    storefrontUseCase === 'ticketing'
+      ? (['Orders', 'Analytics', 'Tickets', 'QR Code', 'Payment', 'Profile'] as const)
+      : (['Orders', 'Analytics', 'Menu', 'QR Code', 'Payment', 'Profile'] as const)
 
   const parseCsvLine = (line: string): string[] => {
     const out: string[] = []
@@ -83,29 +177,8 @@ function BusinessOnboarding(): JSX.Element {
     setMenuSetupLoading(true)
     setMenuSetupError(null)
     try {
-      const categories = [
-        {
-          name: 'Popular',
-          items: [
-            { name: 'Jollof & grilled chicken', description: 'Smoky rice with house marinade.', price: 4500, cost: 0 },
-            { name: 'Afro grain bowl', description: 'Greens, grains, and pepper sauce.', price: 5200, cost: 0 }
-          ]
-        },
-        {
-          name: 'Sides & extras',
-          items: [
-            { name: 'Plantain wedges', description: 'Crispy sweet plantain.', price: 1200, cost: 0 },
-            { name: 'Chef’s salad', description: 'Ask staff for today’s mix.', price: 2500, cost: 0 }
-          ]
-        },
-        {
-          name: 'Drinks',
-          items: [
-            { name: 'Zobo (Hibiscus)', description: 'Chilled, refreshing and spicy.', price: 1800, cost: 0 },
-            { name: 'Ice-cold juice', description: 'Pick your flavour.', price: 2000, cost: 0 }
-          ]
-        }
-      ]
+      const isTickets = storefrontUseCase === 'ticketing'
+      const categories = isTickets ? SAMPLE_TICKET_CATEGORIES : SAMPLE_MENU_CATEGORIES
 
       const createdCategoryIds: Record<string, string> = {}
       // Create categories first so items can reference them.
@@ -140,7 +213,11 @@ function BusinessOnboarding(): JSX.Element {
 
       setMenuChoice('sample')
     } catch (err) {
-      setMenuSetupError(axios.isAxiosError(err) ? err.response?.data?.error || 'Failed to create sample menu' : 'Failed to create sample menu')
+      const fallback =
+        storefrontUseCase === 'ticketing'
+          ? 'Failed to create sample tickets. Please try again.'
+          : 'Failed to create sample menu. Please try again.'
+      setMenuSetupError(axios.isAxiosError(err) ? formatUserFacingError(err.response?.data, fallback) : fallback)
     } finally {
       setMenuSetupLoading(false)
     }
@@ -149,7 +226,7 @@ function BusinessOnboarding(): JSX.Element {
   const importSpreadsheetCsv = async (file: File): Promise<void> => {
     if (!businessId) return
     if (!canImportSpreadsheet) {
-      setMenuSetupError('Spreadsheet import is available on Pro and above.')
+      setMenuSetupError('Spreadsheet import is available on Scale and above.')
       return
     }
     if (menuSetupLoading) return
@@ -255,7 +332,11 @@ function BusinessOnboarding(): JSX.Element {
 
       setMenuChoice('spreadsheet')
     } catch (err) {
-      setMenuSetupError(axios.isAxiosError(err) ? err.response?.data?.error || 'Failed to import spreadsheet' : 'Failed to import spreadsheet')
+      setMenuSetupError(
+        axios.isAxiosError(err)
+          ? formatUserFacingError(err.response?.data, 'Failed to import spreadsheet. Please try again.')
+          : 'Failed to import spreadsheet. Please try again.'
+      )
     } finally {
       setMenuSetupLoading(false)
     }
@@ -283,7 +364,15 @@ function BusinessOnboarding(): JSX.Element {
       const imageUrl = uploadRes.data?.imageUrl as string | undefined
       if (!imageUrl) throw new Error('Upload failed')
 
-      const categoryRes = await axios.post('/api/menu/category', { businessId, name: 'Imported from photo', displayOrder: 0 }, { headers: getAuthHeaders() })
+      const categoryRes = await axios.post(
+        '/api/menu/category',
+        {
+          businessId,
+          name: storefrontUseCase === 'ticketing' ? 'Imported artwork' : 'Imported from photo',
+          displayOrder: 0
+        },
+        { headers: getAuthHeaders() }
+      )
       const categoryId = categoryRes.data?.id as string | undefined
       if (!categoryId) throw new Error('Could not create category')
 
@@ -293,7 +382,10 @@ function BusinessOnboarding(): JSX.Element {
           businessId,
           categoryId,
           name: file.name.replace(/\.[^.]+$/, ''),
-          description: 'Imported from your menu photo. Edit item details in the dashboard.',
+          description:
+            storefrontUseCase === 'ticketing'
+              ? 'Imported from your artwork. Rename and set the ticket price in the dashboard.'
+              : 'Imported from your menu photo. Edit item details in the dashboard.',
           price: 0,
           cost: 0,
           imageUrl,
@@ -305,7 +397,19 @@ function BusinessOnboarding(): JSX.Element {
 
       setMenuChoice('upload')
     } catch (err) {
-      setMenuSetupError(axios.isAxiosError(err) ? err.response?.data?.error || 'Failed to upload menu image' : (err as Error).message || 'Failed to upload menu image')
+      setMenuSetupError(
+        axios.isAxiosError(err)
+          ? formatUserFacingError(
+              err.response?.data,
+              storefrontUseCase === 'ticketing'
+                ? 'Failed to upload image. Please try again.'
+                : 'Failed to upload menu image. Please try again.'
+            )
+          : (err as Error).message ||
+              (storefrontUseCase === 'ticketing'
+                ? 'Failed to upload image. Please try again.'
+                : 'Failed to upload menu image. Please try again.')
+      )
     } finally {
       setMenuSetupLoading(false)
     }
@@ -320,9 +424,17 @@ function BusinessOnboarding(): JSX.Element {
     axios
       .get<Business>(`/api/business/${businessId}`, { headers: { Authorization: `Bearer ${token}` } })
       .then((res) => {
+        setBusiness(res.data)
         const plan = res.data?.plan as PlanId | undefined
         if (plan) setBusinessPlan(plan)
+        const bm = res.data?.businessMode
+        if (bm === 'menu' || bm === 'ticketing') setStorefrontUseCase(bm)
+        if (res.data?.bankAccount?.accountName) setShowBankForm(false)
       })
+      .catch(() => {})
+    axios
+      .get<{ code: string; name: string }[]>('/api/banks')
+      .then((res) => setBanks(Array.isArray(res.data) ? res.data : []))
       .catch(() => {})
     if (localStorage.getItem(`${ONBOARDING_KEY}_${businessId}`) === '1') {
       navigate(`/business/dashboard/${businessId}`, { replace: true })
@@ -330,15 +442,36 @@ function BusinessOnboarding(): JSX.Element {
   }, [businessId, navigate])
 
   useEffect(() => {
-    if (step !== 2) return
+    if (step === 3) setHighlightIndex(0)
+  }, [step, storefrontUseCase])
+
+  useEffect(() => {
+    if (step !== 3) return
+    const len =
+      storefrontUseCase === 'ticketing' ? dashboardHighlightsTicketing.length : dashboardHighlights.length
     const t = setInterval(() => {
-      setHighlightIndex(i => (i + 1) % dashboardHighlights.length)
+      setHighlightIndex((i) => (i + 1) % len)
     }, 2200)
     return () => clearInterval(t)
-  }, [step])
+  }, [step, storefrontUseCase])
 
-  const handleNext = (): void => {
-    if (step < 4) {
+  const handleNext = async (): Promise<void> => {
+    if (step === 2 && businessId && storefrontUseCase) {
+      try {
+        await axios.patch(
+          `/api/business/${businessId}`,
+          { businessMode: storefrontUseCase },
+          { headers: getAuthHeaders() }
+        )
+      } catch (err) {
+        const msg = axios.isAxiosError(err)
+          ? formatUserFacingError(err.response?.data, 'Could not save your choice. Please try again.')
+          : 'Could not save your choice. Please try again.'
+        alert(msg)
+        return
+      }
+    }
+    if (step < 5) {
       setDirection('out')
       setTimeout(() => {
         setStep(s => s + 1)
@@ -362,18 +495,23 @@ function BusinessOnboarding(): JSX.Element {
     }
   }
 
-  const canProceed = (step === 0 && useCase !== null) || (step === 1 && businessSize !== null) || step >= 2
+  const canProceed =
+    (step === 0 && useCase !== null) ||
+    (step === 1 && businessSize !== null) ||
+    (step === 2 && storefrontUseCase !== null) ||
+    step >= 3
+  const hasVerifiedBankAccount = !!business?.bankAccount?.accountName
 
   return (
     <div className="min-h-screen bg-white flex flex-col items-center justify-center py-12 px-4">
       <div
-        className={`w-full max-w-2xl transition-all duration-300 ease-out ${
+        className={`w-full max-w-4xl transition-all duration-300 ease-out ${
           direction === 'out' ? 'opacity-0 translate-y-2' : 'opacity-100 translate-y-0'
         }`}
       >
         {/* Progress */}
         <div className="flex justify-center gap-1.5 mb-10">
-          {[0, 1, 2, 3, 4].map(i => (
+          {[0, 1, 2, 3, 4, 5].map(i => (
             <div
               key={i}
               className={`h-1 rounded-full transition-all duration-300 ${
@@ -461,8 +599,81 @@ function BusinessOnboarding(): JSX.Element {
           </div>
         )}
 
-        {/* Step 2: Dashboard guide with live preview */}
+        {/* Step 2: Menu vs ticketing storefront */}
         {step === 2 && (
+          <div className="animate-fadeIn">
+            <h1 className="text-2xl md:text-3xl font-bold text-zuri-black mb-2">
+              What will customers order from you?
+            </h1>
+            <p className="text-gray-600 mb-8">
+              Menus are built for restaurants and cafés. Ticketing uses a focused checkout for events and paid entry — you can switch anytime in Account. On{' '}
+              <strong>Growth</strong> and above, guests get Zuri Assist on your public menu (trending dishes, languages, taste preferences) when you enable it in the dashboard.
+            </p>
+            <div className="grid gap-4">
+              <button
+                type="button"
+                onClick={() => setStorefrontUseCase('menu')}
+                className={`text-left p-5 rounded-2xl border-2 transition-all duration-200 flex items-start gap-4 ${
+                  storefrontUseCase === 'menu'
+                    ? 'border-zuri-orange bg-white shadow-md shadow-zuri-orange/20'
+                    : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm'
+                }`}
+              >
+                <span className="flex-shrink-0 w-10 h-10 rounded-xl bg-gray-100 flex items-center justify-center text-zuri-black text-lg" aria-hidden>
+                  ☰
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-zuri-black">Menus & table ordering</p>
+                  <p className="text-sm text-gray-600 mt-0.5">Categories, dishes, prep times — the classic Zuri storefront.</p>
+                </div>
+                <span
+                  className={`flex-shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center ${
+                    storefrontUseCase === 'menu' ? 'border-zuri-orange bg-zuri-orange' : 'border-gray-300'
+                  }`}
+                >
+                  {storefrontUseCase === 'menu' && (
+                    <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                    </svg>
+                  )}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setStorefrontUseCase('ticketing')}
+                className={`text-left p-5 rounded-2xl border-2 transition-all duration-200 flex items-start gap-4 ${
+                  storefrontUseCase === 'ticketing'
+                    ? 'border-zuri-orange bg-white shadow-md shadow-zuri-orange/20'
+                    : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm'
+                }`}
+              >
+                <span className="flex-shrink-0 w-10 h-10 rounded-xl bg-gray-100 flex items-center justify-center text-zuri-black" aria-hidden>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 5v2m0 4v2m0 4v2M5 5a2 2 0 00-2 2v3a2 2 0 110 4v3a2 2 0 002 2h14a2 2 0 002-2v-3a2 2 0 110-4V7a2 2 0 00-2-2H5z" />
+                  </svg>
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-zuri-black">Tickets & events</p>
+                  <p className="text-sm text-gray-600 mt-0.5">Ticket-style checkout for your guests. Your dashboard still uses the same items list (as ticket types).</p>
+                </div>
+                <span
+                  className={`flex-shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center ${
+                    storefrontUseCase === 'ticketing' ? 'border-zuri-orange bg-zuri-orange' : 'border-gray-300'
+                  }`}
+                >
+                  {storefrontUseCase === 'ticketing' && (
+                    <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                    </svg>
+                  )}
+                </span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Step 3: Dashboard guide with live preview */}
+        {step === 3 && (
           <div className="animate-fadeIn">
             <h1 className="text-2xl md:text-3xl font-bold text-zuri-black mb-2">
               Your dashboard at a glance
@@ -470,7 +681,7 @@ function BusinessOnboarding(): JSX.Element {
             <p className="text-gray-600 mb-8">See the main areas and how they work, in a live dashboard preview.</p>
             <div className="flex flex-col md:flex-row gap-6 items-stretch">
               <div className="space-y-3 md:w-2/5">
-                {dashboardHighlights.map((item, i) => (
+                {previewHighlights.map((item, i) => (
                   <div
                     key={item.title}
                     className={`p-4 rounded-2xl border-2 transition-all duration-300 ${
@@ -496,7 +707,9 @@ function BusinessOnboarding(): JSX.Element {
               <div className="md:w-3/5 rounded-2xl border border-gray-200 bg-white shadow-md p-4 md:p-6 min-h-[260px] md:min-h-[340px] flex flex-col">
                 <div className="flex items-center justify-between mb-4">
                   <div>
-                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Demo restaurant</p>
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                      {storefrontUseCase === 'ticketing' ? 'Demo event' : 'Demo restaurant'}
+                    </p>
                     <p className="text-[11px] text-gray-500">ZURI dashboard preview</p>
                   </div>
                   <div className="flex items-center gap-1.5">
@@ -507,14 +720,16 @@ function BusinessOnboarding(): JSX.Element {
                 </div>
                 <div className="rounded-xl border border-gray-200 overflow-hidden bg-white flex-1 flex flex-col">
                   <div className="flex text-[11px] font-medium border-b border-gray-200">
-                    {['Orders', 'Analytics', 'Menu', 'QR Code', 'Payment', 'Profile'].map(label => {
+                    {previewNavTabs.map((label) => {
+                      const hi = previewHighlights[highlightIndex]
                       const isActive =
-                        (label === 'Orders' && dashboardHighlights[highlightIndex].title === 'Orders') ||
-                        (label === 'Menu' && dashboardHighlights[highlightIndex].title === 'Menu') ||
-                        (label === 'QR Code' && dashboardHighlights[highlightIndex].title === 'QR Code') ||
-                        (label === 'Payment' && dashboardHighlights[highlightIndex].title === 'Payment & pricing') ||
-                        (label === 'Profile' && dashboardHighlights[highlightIndex].title === 'Profile') ||
-                        (label === 'Analytics' && dashboardHighlights[highlightIndex].title === 'Analytics')
+                        (label === 'Orders' && hi.title === 'Orders') ||
+                        (label === 'Menu' && hi.title === 'Menu') ||
+                        (label === 'Tickets' && hi.title === 'Tickets') ||
+                        (label === 'Analytics' && hi.title === 'Analytics') ||
+                        (label === 'QR Code' && hi.title === 'QR Code') ||
+                        (label === 'Payment' && hi.title === 'Payment & pricing') ||
+                        (label === 'Profile' && hi.title === 'Profile')
 
                       return (
                         <div
@@ -535,34 +750,59 @@ function BusinessOnboarding(): JSX.Element {
                       {/* Orders preview */}
                       <div
                         className={`rounded-lg border px-3 py-2 flex items-center justify-between ${
-                          dashboardHighlights[highlightIndex].title === 'Orders'
+                          previewHighlights[highlightIndex].title === 'Orders'
                             ? 'border-zuri-orange bg-zuri-orange/20'
                             : 'border-gray-200 bg-white'
                         }`}
                       >
                         <div>
-                          <p className="font-semibold text-zuri-black text-xs">Order #A24F</p>
-                          <p className="text-[11px] text-gray-500">2 items · ₦4,200</p>
+                          <p className="font-semibold text-zuri-black text-xs">
+                            {storefrontUseCase === 'ticketing' ? 'Order #T4B2' : 'Order #A24F'}
+                          </p>
+                          <p className="text-[11px] text-gray-500">
+                            {storefrontUseCase === 'ticketing' ? '2 tickets · ₦18,000' : '2 items · ₦4,200'}
+                          </p>
                         </div>
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-800 font-medium">
-                          preparing
+                          {storefrontUseCase === 'ticketing' ? 'awaiting pay' : 'preparing'}
                         </span>
                       </div>
 
-                      {/* Menu preview */}
+                      {/* Menu / tickets preview */}
                       <div
                         className={`rounded-lg border px-3 py-2 flex items-center justify-between ${
-                          dashboardHighlights[highlightIndex].title === 'Menu'
+                          previewHighlights[highlightIndex].title === 'Menu' ||
+                          previewHighlights[highlightIndex].title === 'Tickets'
                             ? 'border-zuri-orange bg-zuri-orange/20'
                             : 'border-gray-200 bg-white'
                         }`}
                       >
                         <div>
-                          <p className="font-semibold text-zuri-black text-xs">Grilled Chicken</p>
-                          <p className="text-[11px] text-gray-500">₦3,500 · Available</p>
+                          <p className="font-semibold text-zuri-black text-xs">
+                            {storefrontUseCase === 'ticketing' ? 'General admission' : 'Grilled Chicken'}
+                          </p>
+                          <p className="text-[11px] text-gray-500">
+                            {storefrontUseCase === 'ticketing' ? '₦5,000 · On sale' : '₦3,500 · Available'}
+                          </p>
                         </div>
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">
-                          Menu
+                          {storefrontUseCase === 'ticketing' ? 'Tickets' : 'Menu'}
+                        </span>
+                      </div>
+
+                      <div
+                        className={`rounded-lg border px-3 py-2 flex items-center justify-between ${
+                          previewHighlights[highlightIndex].title === 'Analytics'
+                            ? 'border-zuri-orange bg-zuri-orange/20'
+                            : 'border-gray-200 bg-white'
+                        }`}
+                      >
+                        <div>
+                          <p className="font-semibold text-zuri-black text-xs">Last 7 days</p>
+                          <p className="text-[11px] text-gray-500">₦42k revenue · 38 orders</p>
+                        </div>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-zuri-orange/15 text-zuri-orange font-medium">
+                          Analytics
                         </span>
                       </div>
                     </div>
@@ -571,7 +811,7 @@ function BusinessOnboarding(): JSX.Element {
                     <div className="grid grid-cols-3 gap-2 mt-auto">
                       <div
                         className={`rounded-lg border px-2 py-1.5 ${
-                          dashboardHighlights[highlightIndex].title === 'QR Code'
+                          previewHighlights[highlightIndex].title === 'QR Code'
                             ? 'border-zuri-orange bg-zuri-orange/20'
                             : 'border-gray-200 bg-white'
                         }`}
@@ -581,7 +821,7 @@ function BusinessOnboarding(): JSX.Element {
                       </div>
                       <div
                         className={`rounded-lg border px-2 py-1.5 ${
-                          dashboardHighlights[highlightIndex].title === 'Payment & pricing'
+                          previewHighlights[highlightIndex].title === 'Payment & pricing'
                             ? 'border-zuri-orange bg-zuri-orange/20'
                             : 'border-gray-200 bg-white'
                         }`}
@@ -591,7 +831,7 @@ function BusinessOnboarding(): JSX.Element {
                       </div>
                       <div
                         className={`rounded-lg border px-2 py-1.5 ${
-                          dashboardHighlights[highlightIndex].title === 'Profile'
+                          previewHighlights[highlightIndex].title === 'Profile'
                             ? 'border-zuri-orange bg-zuri-orange/20'
                             : 'border-gray-200 bg-white'
                         }`}
@@ -604,27 +844,72 @@ function BusinessOnboarding(): JSX.Element {
                 </div>
               </div>
             </div>
+
+              <div className="mt-8 rounded-2xl border border-gray-200 bg-gray-50/70 p-5 md:p-6">
+                <h2 className="text-lg font-bold text-zuri-black mb-1">Plans and features</h2>
+                <p className="text-sm text-gray-600 mb-4">
+                  Each column builds on the one before.{' '}
+                  <a href="/pricing" className="text-zuri-orange font-semibold hover:underline">
+                    View live pricing →
+                  </a>
+                </p>
+                <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-4 max-h-[min(480px,55vh)] overflow-y-auto pr-1">
+                  {ZURI_FEATURES_BY_TIER.map((block) => (
+                    <div key={block.tier} className="rounded-xl border border-gray-200 bg-white p-4 flex flex-col shadow-sm">
+                      <p className="text-xs font-bold uppercase tracking-wide text-zuri-orange">{block.title}</p>
+                      <p className="text-xs text-gray-500 mb-3">{block.subtitle}</p>
+                      <ul className="text-xs text-gray-700 space-y-1.5 list-disc pl-4 flex-1">
+                        {block.bullets.map((b, i) => (
+                          <li key={`${block.tier}-${i}`}>{b}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[11px] text-gray-500 mt-4 leading-relaxed">
+                  <strong>Zuri Plus (legacy)</strong> rows include the same headline capabilities as Scale; ask support if you
+                  want to move to the current Scale plan.
+                </p>
+              </div>
           </div>
         )}
 
-        {/* Step 3: Setup your menu */}
-        {step === 3 && (
+        {/* Step 4: Setup your menu */}
+        {step === 4 && (
           <div className="animate-fadeIn">
             <h1 className="text-2xl md:text-3xl font-bold text-zuri-black mb-2">
-              Setup your menu
+              {storefrontUseCase === 'ticketing' ? 'Set up your tickets' : 'Setup your menu'}
             </h1>
             <p className="text-gray-600 mb-8">
-              Let&apos;s set up and verify your information for seamless experience.
+              {storefrontUseCase === 'ticketing'
+                ? 'Add ticket types and prices the same way you would menu items — you can refine them anytime in your dashboard.'
+                : "Let's set up and verify your information for seamless experience."}
             </p>
+
+            <div className="rounded-xl border border-zuri-orange/30 bg-zuri-orange/5 px-4 py-3 mb-6">
+              <p className="text-xs font-semibold text-zuri-black mb-1.5">
+                Your plan today:{' '}
+                <span className="text-zuri-orange">{PLAN_LABELS[businessPlan] || 'Free'}</span>
+              </p>
+              <ul className="text-xs text-gray-700 space-y-1 list-disc pl-4">
+                {planHighlights(businessPlan).map((h, i) => (
+                  <li key={i}>{h}</li>
+                ))}
+              </ul>
+            </div>
 
             <div className="rounded-2xl border border-gray-200 bg-white p-6 mb-6">
               <div className="grid md:grid-cols-2 gap-4">
                 <div className="rounded-xl border border-gray-200 p-4">
                   <p className="font-semibold text-zuri-black text-sm mb-2">
-                    Upload your menu photo or PDF
+                    {storefrontUseCase === 'ticketing'
+                      ? 'Upload poster or ticket artwork'
+                      : 'Upload your menu photo or PDF'}
                   </p>
                   <p className="text-sm text-gray-600 mb-3">
-                    Our AI makes it editable in minutes.
+                    {storefrontUseCase === 'ticketing'
+                      ? 'We turn your image into a starter listing you can edit into ticket types.'
+                      : 'Our AI makes it editable in minutes.'}
                   </p>
                   <input
                     type="file"
@@ -638,18 +923,22 @@ function BusinessOnboarding(): JSX.Element {
                     className="w-full text-sm"
                   />
                   {!canUploadMenuPictures ? (
-                    <p className="text-xs text-gray-500 mt-2">Upgrade to Starter to upload menu photos.</p>
+                    <p className="text-xs text-gray-500 mt-2">
+                      {storefrontUseCase === 'ticketing'
+                        ? 'Upgrade to Starter to upload images for your ticket storefront.'
+                        : 'Upgrade to Starter to upload menu photos.'}
+                    </p>
                   ) : null}
                   {menuChoice === 'upload' ? (
-                    <p className="text-xs text-green-700 mt-2 font-semibold">Photo uploaded.</p>
+                    <p className="text-xs text-green-700 mt-2 font-semibold">Upload saved.</p>
                   ) : null}
                 </div>
 
                 <div className="rounded-xl border border-gray-200 p-4">
                   <p className="font-semibold text-zuri-black text-sm mb-2">
-                    Import from spread sheet
+                    {storefrontUseCase === 'ticketing' ? 'Import ticket types from CSV' : 'Import from spread sheet'}
                   </p>
-                  <p className="text-sm text-gray-600 mb-3">Only available for Pro and above.</p>
+                  <p className="text-sm text-gray-600 mb-3">Only available on Scale and enterprise.</p>
                   <input
                     type="file"
                     accept=".csv,text/csv"
@@ -665,10 +954,12 @@ function BusinessOnboarding(): JSX.Element {
                     href="/menu-sample-sheet.csv"
                     className="inline-block text-xs text-zuri-orange hover:underline mt-2"
                   >
-                    Download sample sheet
+                    {storefrontUseCase === 'ticketing'
+                      ? 'Download sample CSV (same columns — each row is a ticket type)'
+                      : 'Download sample sheet'}
                   </a>
                   {!canImportSpreadsheet ? (
-                    <p className="text-xs text-gray-500 mt-2">Upgrade to Pro to import a CSV spreadsheet.</p>
+                    <p className="text-xs text-gray-500 mt-2">Upgrade to Scale to import a CSV spreadsheet.</p>
                   ) : null}
                   {menuChoice === 'spreadsheet' ? (
                     <p className="text-xs text-green-700 mt-2 font-semibold">Spreadsheet imported.</p>
@@ -678,9 +969,13 @@ function BusinessOnboarding(): JSX.Element {
                 <div className="rounded-xl border border-gray-200 p-4 md:col-span-2">
                   <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                     <div>
-                      <p className="font-semibold text-zuri-black text-sm">Create a sample menu</p>
+                      <p className="font-semibold text-zuri-black text-sm">
+                        {storefrontUseCase === 'ticketing' ? 'Create sample tickets' : 'Create a sample menu'}
+                      </p>
                       <p className="text-sm text-gray-600 mt-1">
-                        Generate a sample menu to streamline the setup process
+                        {storefrontUseCase === 'ticketing'
+                          ? 'Adds admission tiers and an add-on so you can preview checkout right away.'
+                          : 'Generate a sample menu to streamline the setup process'}
                       </p>
                     </div>
                     <button
@@ -689,11 +984,17 @@ function BusinessOnboarding(): JSX.Element {
                       disabled={menuSetupLoading}
                       className="px-5 py-2.5 rounded-xl font-semibold text-sm bg-zuri-orange text-white hover:bg-zuri-orange-dark transition disabled:opacity-50"
                     >
-                      {menuSetupLoading ? 'Working…' : 'Create a sample menu'}
+                      {menuSetupLoading
+                        ? 'Working…'
+                        : storefrontUseCase === 'ticketing'
+                          ? 'Create sample tickets'
+                          : 'Create a sample menu'}
                     </button>
                   </div>
                   {menuChoice === 'sample' ? (
-                    <p className="text-xs text-green-700 mt-3 font-semibold">Sample menu created.</p>
+                    <p className="text-xs text-green-700 mt-3 font-semibold">
+                      {storefrontUseCase === 'ticketing' ? 'Sample tickets created.' : 'Sample menu created.'}
+                    </p>
                   ) : null}
                 </div>
               </div>
@@ -717,27 +1018,223 @@ function BusinessOnboarding(): JSX.Element {
                   Skip for now
                 </button>
                 <div className="text-xs text-gray-500">
-                  Your menu can be edited anytime in your dashboard.
+                  {storefrontUseCase === 'ticketing'
+                    ? 'Ticket types can be edited anytime in your dashboard.'
+                    : 'Your menu can be edited anytime in your dashboard.'}
                 </div>
               </div>
             </div>
           </div>
         )}
 
-        {/* Step 4: You're all set */}
-        {step === 4 && (
+        {/* Step 5: You're all set */}
+        {step === 5 && (
           <div className="animate-fadeIn text-center">
             <div className="w-16 h-16 rounded-2xl bg-zuri-orange/20 flex items-center justify-center mx-auto mb-6">
               <svg className="w-8 h-8 text-zuri-orange" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
             </div>
             <h1 className="text-2xl md:text-3xl font-bold text-zuri-black mb-2">
-              {menuChoice === null || menuChoice === 'empty' ? 'Start with empty menu' : "You're all set"}
+              {hasVerifiedBankAccount ? "You're all set" : 'Verify your payout account'}
             </h1>
-            <p className="text-gray-600 mb-8">
-              {menuChoice === null || menuChoice === 'empty'
-                ? 'We&apos;ll create your dashboard with an empty menu so you can add categories and items next.'
-                : 'Head to your dashboard and start taking orders.'}
+            <p className="text-gray-600 mb-8 max-w-2xl mx-auto">
+              {hasVerifiedBankAccount
+                ? 'Your payout bank is ready. You can head straight to the dashboard and start taking payments.'
+                : 'Add your bank and account number now. ZURI checks the account name via Paystack, then asks for your ZURI password before saving so payout details cannot be changed by accident.'}
             </p>
+
+            <div className="max-w-2xl mx-auto rounded-2xl border border-gray-200 bg-white p-6 text-left shadow-sm">
+              <div className="rounded-xl border border-zuri-orange/25 bg-zuri-orange/5 p-4 mb-5">
+                <p className="text-sm font-semibold text-zuri-black">Current transaction fee</p>
+                <p className="text-xs text-gray-600 mt-1">
+                  {formatModeTransactionFee(storefrontUseCase === 'ticketing' ? 'ticketing' : 'menu')}
+                </p>
+              </div>
+
+              {banks.length === 0 ? (
+                <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 p-4">
+                  <p className="text-sm font-semibold text-amber-900">Bank list unavailable</p>
+                  <p className="text-xs text-amber-800 mt-1">
+                    We couldn&apos;t load Nigerian banks from Paystack right now. You can continue onboarding and verify your payout account later in Payment &amp; pricing.
+                  </p>
+                </div>
+              ) : null}
+
+              {hasVerifiedBankAccount && !showBankForm ? (
+                <div className="rounded-xl border border-zuri-orange/30 bg-zuri-orange/10 p-5">
+                  <p className="font-semibold text-zuri-black text-sm">Verified payout account</p>
+                  <p className="text-gray-600 text-sm mt-1">
+                    {business?.bankAccount?.bankName} — {business?.bankAccount?.accountNumberMasked}
+                  </p>
+                  <p className="text-gray-600 text-sm">{business?.bankAccount?.accountName}</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowBankForm(true)
+                      setBankForm({ bankCode: '', bankName: '', accountNumber: '', accountName: '' })
+                      setBankResolveError(null)
+                      setBankFormError(null)
+                      setBankPassword('')
+                    }}
+                    className="mt-3 text-sm font-semibold text-zuri-orange hover:underline"
+                  >
+                    Change bank details
+                  </button>
+                </div>
+              ) : null}
+
+              {showBankForm ? (
+                <form
+                  onSubmit={async (e) => {
+                    e.preventDefault()
+                    setBankFormError(null)
+                    if (!businessId || !bankForm.bankCode || !bankForm.bankName || !bankForm.accountNumber.trim() || !bankForm.accountName.trim()) {
+                      setBankFormError('Select a bank, enter your account number, and verify so the account name appears before saving.')
+                      return
+                    }
+                    if (!bankPassword.trim()) {
+                      setBankFormError('Enter your ZURI business password to confirm this payout account.')
+                      return
+                    }
+                    setBankSaving(true)
+                    try {
+                      await axios.patch(
+                        `/api/business/${businessId}`,
+                        {
+                          bank_code: bankForm.bankCode,
+                          bank_name: bankForm.bankName,
+                          account_number: bankForm.accountNumber.trim(),
+                          account_name: bankForm.accountName.trim(),
+                          password: bankPassword.trim()
+                        },
+                        { headers: getAuthHeaders() }
+                      )
+                      const { data } = await axios.get<Business>(`/api/business/${businessId}`, { headers: getAuthHeaders() })
+                      setBusiness(data)
+                      setBankForm({ bankCode: '', bankName: '', accountNumber: '', accountName: '' })
+                      setBankPassword('')
+                      setShowBankForm(false)
+                      setBankFormError(null)
+                      setBankResolveError(null)
+                    } catch (err) {
+                      if (axios.isAxiosError(err) && err.response?.status === 401) {
+                        setBankFormError(
+                          formatUserFacingError(err.response?.data, 'That password doesn’t match your ZURI business account. Try again.')
+                        )
+                      } else if (axios.isAxiosError(err)) {
+                        setBankFormError(formatUserFacingError(err.response?.data, 'Couldn’t save bank details. Check your connection and try again.'))
+                      } else {
+                        setBankFormError('Couldn’t save bank details. Check your connection and try again.')
+                      }
+                    } finally {
+                      setBankSaving(false)
+                    }
+                  }}
+                  className="space-y-4"
+                >
+                  <div>
+                    <label className="block text-sm font-semibold text-zuri-black mb-2">Bank</label>
+                    <CustomDropdown
+                      options={banks.map((b) => ({ value: b.code, label: b.name }))}
+                      value={bankForm.bankCode}
+                      onChange={(val, label) => {
+                        setBankForm((f) => ({ ...f, bankCode: val, bankName: label }))
+                        setBankFormError(null)
+                        setBankResolveError(null)
+                      }}
+                      placeholder="Select bank"
+                      searchable
+                      disabled={banks.length === 0 || bankSaving}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-zuri-black mb-2">Account number</label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={bankForm.accountNumber}
+                      onChange={(e) => {
+                        setBankForm((f) => ({ ...f, accountNumber: e.target.value.replace(/\D/g, '').slice(0, 16) }))
+                        setBankFormError(null)
+                        setBankResolveError(null)
+                      }}
+                      placeholder="8–16 digits (usually 10 for NUBAN)"
+                      maxLength={16}
+                      className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50 focus:border-zuri-orange"
+                    />
+                  </div>
+                  <div>
+                    <button
+                      type="button"
+                      disabled={!bankForm.bankCode || !bankForm.accountNumber.trim() || bankForm.accountNumber.trim().length < 8 || bankForm.accountNumber.trim().length > 16 || bankResolving}
+                      onClick={async () => {
+                        setBankResolveError(null)
+                        setBankResolving(true)
+                        try {
+                          const { data } = await axios.get<{ account_name: string }>('/api/banks/resolve', {
+                            params: { bank_code: bankForm.bankCode, account_number: bankForm.accountNumber.trim() }
+                          })
+                          setBankForm((f) => ({ ...f, accountName: data.account_name || '' }))
+                        } catch (err: unknown) {
+                          const ax = err as { response?: { data?: { error?: string } } }
+                          const msg = formatUserFacingError(ax.response?.data, '')
+                          setBankResolveError(
+                            msg ||
+                              'Paystack could not match this account. Double-check the bank and NUBAN, then try Verify again.'
+                          )
+                        } finally {
+                          setBankResolving(false)
+                        }
+                      }}
+                      className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-zuri-black text-white text-sm font-semibold hover:bg-gray-800 transition disabled:opacity-50"
+                    >
+                      {bankResolving ? 'Verifying…' : 'Verify account'}
+                    </button>
+                    {bankResolveError ? (
+                      <p className="text-xs text-red-600 mt-2">{bankResolveError}</p>
+                    ) : bankForm.accountName ? (
+                      <p className="text-xs text-green-700 mt-2 font-semibold">Account name: {bankForm.accountName}</p>
+                    ) : (
+                      <p className="text-xs text-gray-500 mt-2">Paystack will return the account name before you save.</p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-zuri-black mb-2">Confirm with your ZURI password</label>
+                    <input
+                      type="password"
+                      value={bankPassword}
+                      onChange={(e) => {
+                        setBankPassword(e.target.value)
+                        setBankFormError(null)
+                      }}
+                      placeholder="Your business login password"
+                      className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50 focus:border-zuri-orange"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      We use your ZURI password here instead of OTP to stop unauthorized payout changes.
+                    </p>
+                  </div>
+                  {bankFormError ? <p className="text-sm text-red-600 font-semibold">{bankFormError}</p> : null}
+                  <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
+                    <button
+                      type="submit"
+                      disabled={bankSaving}
+                      className="px-5 py-2.5 rounded-xl font-semibold text-sm bg-zuri-orange text-white hover:bg-zuri-orange-dark transition disabled:opacity-50"
+                    >
+                      {bankSaving ? 'Saving…' : 'Save payout account'}
+                    </button>
+                    {hasVerifiedBankAccount ? (
+                      <button
+                        type="button"
+                        onClick={() => setShowBankForm(false)}
+                        className="px-5 py-2.5 rounded-xl font-semibold text-sm border border-gray-200 text-gray-700 hover:bg-gray-50 transition"
+                      >
+                        Cancel
+                      </button>
+                    ) : null}
+                  </div>
+                </form>
+              ) : null}
+            </div>
           </div>
         )}
 
@@ -753,10 +1250,14 @@ function BusinessOnboarding(): JSX.Element {
           <button
             type="button"
             onClick={handleNext}
-            disabled={!canProceed && step < 2}
+            disabled={!canProceed && step < 3}
             className="px-6 py-2.5 rounded-xl font-semibold text-sm bg-zuri-orange text-white hover:bg-zuri-orange-dark transition disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {step === 4 ? (menuChoice === null || menuChoice === 'empty' ? 'Start with empty menu' : 'Go to dashboard') : 'Continue'}
+            {step === 5
+              ? (hasVerifiedBankAccount
+                ? 'Go to dashboard'
+                : 'Skip for now')
+              : 'Continue'}
           </button>
         </div>
       </div>

@@ -23,32 +23,69 @@ async function getOrCreateNetworkCustomer(email) {
   const norm = normalizeEmail(email);
   if (!norm) return {};
   const supabase = getDb();
-  const { data: existing, error: selErr } = await supabase
-    .from('zuri_network_customers')
-    .select('id')
-    .eq('email', norm)
-    .maybeSingle();
-  if (selErr) {
-    console.error('getOrCreateNetworkCustomer select:', selErr);
-    return {};
+  // Prefer querying `email_normalized` when available (newer schema), otherwise fall back to `email`.
+  let existing = null;
+  {
+    const { data, error } = await supabase
+      .from('zuri_network_customers')
+      .select('id')
+      .eq('email_normalized', norm)
+      .maybeSingle();
+    if (!error) {
+      existing = data;
+    } else {
+      const { data: data2, error: error2 } = await supabase
+        .from('zuri_network_customers')
+        .select('id')
+        .eq('email', norm)
+        .maybeSingle();
+      if (error2) {
+        console.error('getOrCreateNetworkCustomer select:', error2);
+        return {};
+      }
+      existing = data2;
+    }
   }
   if (existing?.id) return { id: existing.id };
 
   const id = uuidv4();
-  const { data: created, error: insErr } = await supabase
-    .from('zuri_network_customers')
-    .insert({ id, email: norm })
-    .select('id')
-    .single();
+  // Insert both columns when `email_normalized` exists; retry without it for older schemas.
+  let created = null;
+  let insErr = null;
+  {
+    const attempt = await supabase
+      .from('zuri_network_customers')
+      .insert({ id, email: norm, email_normalized: norm })
+      .select('id')
+      .single();
+    created = attempt.data;
+    insErr = attempt.error;
+    if (insErr) {
+      const retry = await supabase
+        .from('zuri_network_customers')
+        .insert({ id, email: norm })
+        .select('id')
+        .single();
+      created = retry.data;
+      insErr = retry.error;
+    }
+  }
 
   if (!insErr && created?.id) return { id: created.id };
 
   const { data: again } = await supabase
     .from('zuri_network_customers')
     .select('id')
-    .eq('email', norm)
+    .eq('email_normalized', norm)
     .maybeSingle();
   if (again?.id) return { id: again.id };
+
+  const { data: again2 } = await supabase
+    .from('zuri_network_customers')
+    .select('id')
+    .eq('email', norm)
+    .maybeSingle();
+  if (again2?.id) return { id: again2.id };
 
   if (insErr) console.error('getOrCreateNetworkCustomer insert:', insErr);
   return {};

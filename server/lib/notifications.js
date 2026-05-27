@@ -33,7 +33,15 @@ async function sendBusinessEmail({ businessId, subject, text }) {
   return { skipped: false }
 }
 
+/** Fire-and-forget: never block HTTP handlers on SMTP (slow/hanging mail servers freeze the UI). */
+function queueBusinessEmail(args) {
+  setImmediate(() => {
+    sendBusinessEmail(args).catch((err) => console.error('Business email queue error:', err))
+  })
+}
+
 module.exports = {
-  sendBusinessEmail
+  sendBusinessEmail,
+  queueBusinessEmail
 }
 

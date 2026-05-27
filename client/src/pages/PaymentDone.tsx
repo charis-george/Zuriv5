@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useSearchParams, Link } from 'react-router-dom'
 import axios from 'axios'
 import { PaperPlaneLoader } from '../components/PaperPlaneLoader'
+import { formatUserFacingError } from '../lib/formatApiError'
 
 function PaymentDone(): JSX.Element {
   const [searchParams] = useSearchParams()
@@ -74,8 +75,11 @@ function PaymentDone(): JSX.Element {
       setReviewComment('')
       setReviewRating(0)
     } catch (err) {
-      if (axios.isAxiosError(err)) setReviewError(err.response?.data?.error || 'Failed to submit review')
-      else setReviewError('Failed to submit review')
+      if (axios.isAxiosError(err)) {
+        setReviewError(formatUserFacingError(err.response?.data, 'Failed to submit review'))
+      } else {
+        setReviewError('Failed to submit review')
+      }
     } finally {
       setReviewSubmitting(false)
     }

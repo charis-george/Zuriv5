@@ -1,6 +1,14 @@
-# Railway / Nixpacks: install deps from server/package.json (root package.json does not include socket.io, etc.)
+# Railway: deploy from repo root (not `server/` only).
+# Root `package.json` declares `packageManager` so Nixpacks selects npm explicitly.
+providers = ["node"]
+
+# npm 10+ "production" warning: NODE_ENV=development only for `npm ci`; `--omit=dev` skips dev deps.
+
 [phases.install]
-cmds = ["cd server && npm ci"]
+cmds = ["cd server && NODE_ENV=development npm ci --omit=dev"]
+
+[phases.build]
+cmds = ["cd client && NODE_ENV=development npm ci --omit=dev && npm run build"]
 
 [start]
 cmd = "cd server && npm start"

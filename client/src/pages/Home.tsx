@@ -1,38 +1,17 @@
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { useState, FormEvent, useEffect, useRef } from 'react'
 import { apiUrl } from '../lib/apiBase'
+import { organizationJsonLd, usePageSeo, websiteJsonLd } from '../lib/seo'
 import { PLAN_PRICES, PLAN_PRICES_YEARLY_AS_MONTHLY, YEARLY_DISCOUNT_PCT, type BillingInterval } from '../types'
+import { LazyImage } from '../components/LazyImage'
+import { HomeKeyFeatures } from '../components/landing/HomeKeyFeatures'
+import { TRANSACTION_FEE_SUMMARY_COPY } from '../lib/transactionFees'
 
 const CONTACT_EMAIL = 'info@zuriqo.com'
 
-function useScrollReveal(): [React.RefObject<HTMLDivElement>, boolean] {
-  const ref = useRef<HTMLDivElement>(null)
-  const [visible, setVisible] = useState(false)
-
-  useEffect(() => {
-    const node = ref.current
-    if (!node) return
-
-    const observer = new IntersectionObserver(
-      entries => {
-        entries.forEach(entry => {
-          if (entry.isIntersecting) {
-            setVisible(true)
-            observer.unobserve(entry.target)
-          }
-        })
-      },
-      { threshold: 0.18 }
-    )
-
-    observer.observe(node)
-    return () => observer.disconnect()
-  }, [])
-
-  return [ref, visible]
-}
-
 function Home(): JSX.Element {
+  const location = useLocation()
+  const isPricingPage = location.pathname === '/pricing'
   const [showBetaForm, setShowBetaForm] = useState<boolean>(false)
   const [formSource] = useState<'beta' | 'enterprise'>('beta')
   const [billingInterval, setBillingInterval] = useState<BillingInterval>('monthly')
@@ -41,10 +20,57 @@ function Home(): JSX.Element {
   const [submitMessage, setSubmitMessage] = useState<string | null>(null)
   const [headerHidden, setHeaderHidden] = useState<boolean>(false)
 
-  const PERFECT_FOR_WORDS = ['Restaurants', 'Cafes', 'Hotels', 'Fast food', 'Bakeries', 'You']
+  const PERFECT_FOR_WORDS = ['Restaurants', 'Concerts', 'Hotels', 'Food halls', 'Pop-ups', 'You']
   const [perfectForIndex, setPerfectForIndex] = useState<number>(0)
   const [perfectForFading, setPerfectForFading] = useState<boolean>(false)
   const perfectForTimeoutRef = useRef<number | null>(null)
+
+  usePageSeo({
+    title: isPricingPage
+      ? 'ZURI Pricing | AI Menus, Ordering & Ticketing for Venues'
+      : 'ZURI | AI-Personalised Menus, Ordering & Ticketing for African Venues',
+    description: isPricingPage
+      ? 'Compare ZURI plans for AI-assisted menus and storefronts, personalised ordering, events ticketing, Zuri Tap, and Naira payouts for hospitality across Africa.'
+      : 'ZURI is the AI-personalised menu, ordering, and ticketing platform for restaurants, hotels, and events in Africa — less guest friction, faster service, payouts to your bank.',
+    path: isPricingPage ? '/pricing' : '/',
+    jsonLd: [
+      organizationJsonLd,
+      websiteJsonLd,
+      {
+        '@context': 'https://schema.org',
+        '@type': 'SoftwareApplication',
+        name: 'ZURI Quick Order',
+        applicationCategory: 'BusinessApplication',
+        operatingSystem: 'Web',
+        url: 'https://zuriqo.com/',
+        image: 'https://zuriqo.com/ZURI.png',
+        description: 'AI-personalised menus and storefronts, QR and Tap ordering, events ticketing, payments, and live AI operations for hospitality businesses in Africa.',
+        publisher: {
+          '@type': 'Organization',
+          name: 'ZURI',
+          logo: 'https://zuriqo.com/ZURI.png'
+        },
+        offers: {
+          '@type': 'OfferCatalog',
+          name: 'ZURI pricing plans',
+          itemListElement: [
+            { '@type': 'Offer', name: 'Free', price: '0', priceCurrency: 'NGN' },
+            { '@type': 'Offer', name: 'Starter', price: '9900', priceCurrency: 'NGN' },
+            { '@type': 'Offer', name: 'Growth', price: '24900', priceCurrency: 'NGN' },
+            { '@type': 'Offer', name: 'Scale', price: '59900', priceCurrency: 'NGN' }
+          ]
+        }
+      }
+    ]
+  })
+
+  useEffect(() => {
+    if (!isPricingPage) return
+    const id = window.setTimeout(() => {
+      document.getElementById('pricing')?.scrollIntoView({ block: 'start' })
+    }, 0)
+    return () => window.clearTimeout(id)
+  }, [isPricingPage])
 
   useEffect(() => {
     const onScroll = (): void => {
@@ -72,12 +98,119 @@ function Home(): JSX.Element {
     }
   }, [])
 
-  const [heroRef, heroVisible] = useScrollReveal()
-  const [featuresRef, featuresVisible] = useScrollReveal()
-  const [howItWorksRef, howItWorksVisible] = useScrollReveal()
-  const [pricingRef, pricingVisible] = useScrollReveal()
-  const [faqRef, faqVisible] = useScrollReveal()
-  const [ctaRef, ctaVisible] = useScrollReveal()
+  const howItWorksRef = useRef<HTMLDivElement>(null)
+  const HOW_IT_WORKS_TOTAL_STEPS = 3 as const
+  const HOW_IT_WORKS_STEP_MS = 2600 as const
+  /** User must have the section in view (~28% visible) and hold for this long before auto-advance starts */
+  const HOW_IT_WORKS_DWELL_MS = 1700 as const
+  const HOW_IT_WORKS_ENGAGED_RATIO = 0.28 as const
+  const howItWorksAutoProgressRef = useRef(0)
+  const howItWorksReadyRef = useRef(false)
+  const [howItWorksReadyForAuto, setHowItWorksReadyForAuto] = useState(false)
+  const [howItWorksAutoStep, setHowItWorksAutoStep] = useState<number>(0)
+  const [howItWorksAutoDone, setHowItWorksAutoDone] = useState<boolean>(false)
+
+  useEffect(() => {
+    const el = howItWorksRef.current
+    if (!el) return
+
+    let dwellTimer: ReturnType<typeof window.setTimeout> | null = null
+    const clearDwell = (): void => {
+      if (dwellTimer !== null) {
+        window.clearTimeout(dwellTimer)
+        dwellTimer = null
+      }
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (howItWorksReadyRef.current) return
+        const engaged = entry.isIntersecting && entry.intersectionRatio >= HOW_IT_WORKS_ENGAGED_RATIO
+        if (engaged) {
+          if (dwellTimer === null) {
+            dwellTimer = window.setTimeout(() => {
+              dwellTimer = null
+              howItWorksReadyRef.current = true
+              setHowItWorksReadyForAuto(true)
+            }, HOW_IT_WORKS_DWELL_MS)
+          }
+        } else {
+          clearDwell()
+        }
+      },
+      {
+        root: null,
+        rootMargin: '0px',
+        threshold: [0, 0.1, 0.15, 0.2, 0.25, 0.28, 0.32, 0.38, 0.45, 0.55, 0.7, 1]
+      }
+    )
+
+    observer.observe(el)
+    return () => {
+      observer.disconnect()
+      clearDwell()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!howItWorksReadyForAuto) return
+    if (howItWorksAutoDone) return
+
+    setHowItWorksAutoStep(0)
+    howItWorksAutoProgressRef.current = 0
+
+    let step = 0
+    const id = window.setInterval(() => {
+      step += 1
+      if (step >= HOW_IT_WORKS_TOTAL_STEPS) {
+        window.clearInterval(id)
+        setHowItWorksAutoDone(true)
+        const pricingEl = document.getElementById('pricing')
+        if (pricingEl) pricingEl.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        return
+      }
+      setHowItWorksAutoStep(step)
+    }, HOW_IT_WORKS_STEP_MS)
+
+    return () => window.clearInterval(id)
+  }, [howItWorksReadyForAuto, howItWorksAutoDone])
+
+  const howItWorksSteps = [
+    {
+      label: 'Step 1',
+      title: 'Scan',
+      description: 'Guests scan your QR code from their table. The experience opens instantly in browser with no app download.',
+      image: '/QR (Laptop).png',
+      alt: 'QR code view on a laptop screen',
+      phone: true
+    },
+    {
+      label: 'Step 2',
+      title: 'Browse your AI-ready menu',
+      description: 'Guests see a fast, visual menu or ticket flow — personalised layout, photos on paid plans, and instant updates from your dashboard.',
+      image: '/Menu (Laptop).png',
+      alt: 'Zuri menu page shown on a laptop',
+      phone: true
+    },
+    {
+      label: 'Step 3',
+      title: 'Order & pay',
+      description: 'Customers confirm payment on their phone while your dashboard receives the order instantly. You focus on service, and payouts go to your bank.',
+      image: '/Order Page (Phone).png',
+      alt: 'Order submitted page on a phone screen',
+      phone: true
+    }
+  ] as const
+  const activeHowItWorksStep = Math.min(HOW_IT_WORKS_TOTAL_STEPS - 1, howItWorksAutoStep)
+  const activeHowItWorks = howItWorksSteps[activeHowItWorksStep]
+
+  const howItWorksProgressHeight = `${Math.round(((activeHowItWorksStep + 1) / HOW_IT_WORKS_TOTAL_STEPS) * 100)}%`
+
+  useEffect(() => {
+    const nextIdx = (activeHowItWorksStep + 1) % HOW_IT_WORKS_TOTAL_STEPS
+    const img = new Image()
+    img.src = howItWorksSteps[nextIdx].image
+  }, [activeHowItWorksStep])
 
   const handleBetaSubmit = async (e: FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault()
@@ -119,7 +252,7 @@ function Home(): JSX.Element {
   }
 
   return (
-      <div className="min-h-screen bg-[#fefbf5]">
+      <div className="min-h-screen bg-zuri-light text-zuri-black font-normal antialiased">
       <header className="sticky top-0 z-50 bg-transparent">
         <div
           className={`max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 transition-opacity duration-300 ease-out ${
@@ -128,7 +261,7 @@ function Home(): JSX.Element {
         >
           <div className="flex items-center justify-between h-10">
             <Link to="/" className="flex items-center gap-2.5 shrink-0">
-              <img src="/ZURI.png" alt="" className="h-8 w-auto object-contain" />
+              <img src="/ZURI.png" alt="ZURI logo" className="h-8 w-auto object-contain" width={120} height={32} decoding="async" fetchPriority="high" />
               <span className="text-[11px] tracking-[0.32em] text-zuri-black uppercase">Z U R I</span>
             </Link>
             <nav className="hidden md:flex items-center gap-6">
@@ -141,9 +274,9 @@ function Home(): JSX.Element {
               <Link to="/business/login" className="text-sm text-gray-600 hover:text-zuri-orange transition-colors">
                 For Businesses
               </Link>
-              <a href="#pricing" className="text-sm text-gray-600 hover:text-zuri-orange transition-colors">
+              <Link to="/pricing" className="text-sm text-gray-600 hover:text-zuri-orange transition-colors">
                 Pricing
-              </a>
+              </Link>
             </nav>
             <div className="flex items-center gap-1.5">
               <a
@@ -165,46 +298,44 @@ function Home(): JSX.Element {
         </div>
       </header>
 
-      {/* Hero - Orange/yellow branded, alive */}
-      <section
-        ref={heroRef}
-        className={`relative pt-16 pb-24 md:pt-20 md:pb-32 overflow-hidden transition-all duration-700 ease-out ${
-          heroVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
-        }`}
-      >
-        <div className="absolute inset-0 bg-gradient-to-br from-zuri-light via-zuri-orange/10 to-zuri-orange/15" />
-        <div className="absolute inset-0 bg-[length:64px_64px] bg-[linear-gradient(to_right,rgba(255,189,89,0.06)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,189,89,0.06)_1px,transparent_1px)]" />
-        <div className="absolute top-20 right-0 w-72 h-72 bg-zuri-orange/10 rounded-full blur-3xl -translate-y-1/2" />
-        <div className="absolute bottom-20 left-0 w-96 h-96 bg-zuri-yellow/20 rounded-full blur-3xl translate-y-1/2" />
+      {/* Hero — Tsenta-style headline rhythm: eyebrow → stacked lines → one-liner subcopy */}
+      <section className="relative pt-20 pb-20 md:pt-28 md:pb-28 overflow-hidden">
+        <div className="absolute inset-0 bg-zuri-light" />
+        <div className="absolute inset-0 bg-[length:72px_72px] bg-[linear-gradient(to_right,rgba(0,0,0,0.025)_1px,transparent_1px),linear-gradient(to_bottom,rgba(0,0,0,0.025)_1px,transparent_1px)]" aria-hidden />
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[min(90vw,42rem)] h-48 bg-zuri-orange/[0.07] blur-[80px] rounded-full pointer-events-none" aria-hidden />
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
-          <div className="text-center max-w-3xl mx-auto">
-            <h1 className="text-3xl sm:text-4xl md:text-5xl font-semibold text-zuri-black tracking-tight leading-[1.1] mb-6">
-              One QR. All your orders. Get paid.
-            </h1>
-            <p className="text-lg md:text-xl text-gray-700 mb-10 leading-relaxed">
-              Open a free account in minutes. Let guests scan, order, and pay from their phone—you get paid straight to your bank.
+          <div className="text-center max-w-[42rem] md:max-w-[48rem] mx-auto">
+            <p className="text-[13px] sm:text-sm text-gray-500 font-medium tracking-wide mb-8 md:mb-10">
+              AI menus · Smart ordering · Events ticketing
             </p>
-            <div className="flex flex-wrap justify-center gap-2">
+            <h1 className="text-zuri-black font-medium tracking-[-0.045em] leading-[1.02] text-[2.75rem] sm:text-6xl md:text-7xl lg:text-8xl lg:leading-[0.98]">
+              <span className="block">Personalise every guest journey,</span>
+              <span className="block mt-1 sm:mt-2 md:mt-3 text-zuri-orange">from menu to payout.</span>
+            </h1>
+            <p className="mt-10 md:mt-12 text-base sm:text-lg md:text-xl text-gray-600 font-normal leading-relaxed max-w-md md:max-w-lg mx-auto">
+              ZURI pairs AI-assisted menus and storefronts with lightning-fast ordering and ticketing
+            </p>
+            <div className="mt-12 md:mt-14 flex flex-wrap items-center justify-center gap-3">
               <Link
                 to="/business/login"
-                className="bg-zuri-orange text-white text-sm rounded-lg px-3 py-1.5 hover:bg-zuri-orange-dark transition-colors"
+                className="inline-flex items-center justify-center bg-zuri-black text-white text-sm font-medium rounded-full px-7 py-3 hover:bg-neutral-800 transition-colors"
               >
                 Get started
               </Link>
-              <a
-                href="#pricing"
-                className="inline-flex items-center gap-1.5 text-sm rounded-lg px-3 py-1.5 bg-white text-zuri-black border border-zuri-orange hover:bg-zuri-orange hover:text-white transition-colors"
+              <Link
+                to="/pricing"
+                className="inline-flex items-center gap-2 text-sm font-medium rounded-full px-7 py-3 text-zuri-black border border-gray-300 bg-white/80 hover:border-zuri-orange hover:text-zuri-orange transition-colors"
               >
                 View pricing
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" /></svg>
-              </a>
+                <svg className="w-4 h-4 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" /></svg>
+              </Link>
             </div>
           </div>
           {/* Hero visual: phone + QR scan + order/payment */}
-          <div className="mt-16 md:mt-20 flex justify-center">
+          <div className="mt-20 md:mt-24 lg:mt-28 flex justify-center">
             <div className="relative w-full max-w-2xl flex flex-col md:flex-row items-center justify-center gap-8 md:gap-12">
               <div className="relative">
-                <div className="w-44 md:w-52 h-[280px] md:h-[320px] rounded-[2.5rem] bg-zuri-black border-[10px] border-zuri-black border-gray-800 flex flex-col overflow-hidden">
+                <div className="w-44 md:w-52 h-[280px] md:h-[320px] rounded-[2.5rem] bg-zuri-black border-[10px] border-zuri-black flex flex-col overflow-hidden">
                   <div className="h-8 bg-zuri-black flex items-end justify-center pb-2">
                     <div className="w-20 h-1.5 rounded-full bg-gray-700" />
                   </div>
@@ -214,8 +345,8 @@ function Home(): JSX.Element {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
                       </svg>
                     </div>
-                    <p className="text-white font-bold text-sm text-center">Scan to order</p>
-                    <p className="text-white/80 text-xs">No app needed</p>
+                    <p className="text-white font-medium text-sm text-center">Open · Order · Tickets</p>
+                    <p className="text-white/80 text-xs">AI-ready guest link</p>
                   </div>
                 </div>
                 <div className="absolute -top-2 -right-2 w-16 h-16 rounded-2xl bg-zuri-yellow flex items-center justify-center border border-white transform rotate-12">
@@ -223,36 +354,41 @@ function Home(): JSX.Element {
                 </div>
               </div>
               <div className="flex flex-col gap-4">
-                <div className="bg-white rounded-2xl border border-zuri-yellow/50 p-5 transform rotate-[-2deg] hover:rotate-0 transition-transform">
+                <div className="bg-white rounded-2xl border border-gray-200/90 p-5 shadow-sm">
                   <div className="flex items-center gap-3 mb-3">
-                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-zuri-yellow to-zuri-orange flex items-center justify-center">
-                      <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" /></svg>
+                    <div className="w-12 h-12 rounded-xl bg-white border border-gray-200 flex items-center justify-center shrink-0">
+                      <img
+                        src="/ZURI.png"
+                        alt=""
+                        className="h-6 w-auto max-h-6 object-contain"
+                        aria-hidden
+                      />
                     </div>
                     <div>
-                      <p className="font-bold text-zuri-black">Digital menu & orders</p>
-                      <p className="text-xs text-gray-500">Scan QR · Order · Pay</p>
+                      <p className="font-medium text-zuri-black text-sm">Smart storefront</p>
+                      <p className="text-xs text-gray-500">Menu or ticketing · One link</p>
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
-                    <div className="bg-zuri-orange/10 rounded-xl p-3 border border-zuri-orange/30">
-                      <p className="text-xs text-gray-500 uppercase">Today</p>
-                      <p className="text-xl font-bold text-zuri-orange">₦0</p>
-                      <p className="text-xs text-gray-500">Orders</p>
+                    <div className="bg-zuri-orange/10 rounded-xl p-3 border border-zuri-orange/20">
+                      <p className="text-xs text-gray-500 uppercase tracking-wide">Assist</p>
+                      <p className="text-xl font-medium text-zuri-orange tabular-nums">On</p>
+                      <p className="text-xs text-gray-500">Signals</p>
                     </div>
-                    <div className="bg-zuri-light rounded-xl p-3 border-2 border-zuri-yellow/50">
-                      <p className="text-xs text-gray-500 uppercase">Payout</p>
-                      <p className="text-sm font-bold text-zuri-black">Bank account</p>
-                      <p className="text-xs text-green-600 font-medium">Ready</p>
+                    <div className="bg-zuri-light rounded-xl p-3 border border-zuri-yellow/40">
+                      <p className="text-xs text-gray-500 uppercase tracking-wide">Payout</p>
+                      <p className="text-sm font-medium text-zuri-black leading-tight">Bank account</p>
+                      <p className="text-xs text-green-700 font-medium">Ready</p>
                     </div>
                   </div>
                 </div>
-                <div className="bg-zuri-black rounded-2xl p-4 flex items-center gap-3 transform rotate-[1deg]">
+                <div className="bg-zuri-black rounded-2xl p-4 flex items-center gap-3 border border-white/10">
                   <div className="w-10 h-10 rounded-lg bg-white/10 flex items-center justify-center">
                     <svg className="w-5 h-5 text-zuri-yellow" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>
                   </div>
                   <div>
-                    <p className="text-white font-semibold text-sm">Pay by card or saved card</p>
-                    <p className="text-gray-400 text-xs">You get the order in real time</p>
+                    <p className="text-white font-medium text-sm">Zuri Tap + cards</p>
+                    <p className="text-gray-400 text-xs">Guests check out in seconds</p>
                   </div>
                 </div>
               </div>
@@ -261,89 +397,86 @@ function Home(): JSX.Element {
         </div>
       </section>
 
-      {/* Everyday needs - Orange accent */}
-      <section
-        ref={featuresRef}
-        className={`py-16 md:py-20 bg-white transition-all duration-700 ease-out ${
-          featuresVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
-        }`}
-      >
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-          <p className="text-sm font-medium text-zuri-orange uppercase tracking-wider text-center mb-3">For your business</p>
-          <h2 className="text-3xl md:text-4xl font-bold text-zuri-black text-center mb-4">
-            Run operations smarter every day
+      {/* Intro — same rhythm as hero */}
+      <section className="relative py-20 md:py-28 bg-white overflow-hidden">
+        <div className="absolute inset-0 bg-[length:72px_72px] bg-[linear-gradient(to_right,rgba(0,0,0,0.02)_1px,transparent_1px),linear-gradient(to_bottom,rgba(0,0,0,0.02)_1px,transparent_1px)] pointer-events-none" aria-hidden />
+        <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 text-center relative">
+          <p className="text-[13px] sm:text-sm text-gray-500 font-medium tracking-wide mb-8 md:mb-10">
+            For your business
+          </p>
+          <h2 className="text-3xl sm:text-4xl md:text-5xl font-medium text-zuri-black tracking-[-0.035em] leading-[1.08] mb-8 md:mb-10">
+            <span className="block">Less friction at the table,</span>
+            <span className="block mt-1 sm:mt-2 md:mt-3 text-zuri-orange">more flow at the back.</span>
           </h2>
-          <p className="text-lg text-gray-600 text-center max-w-2xl mx-auto">
-            Track orders and payments in one place. Get payouts to your bank—no payment gateway setup required.
+          <p className="text-base sm:text-lg text-gray-600 font-normal leading-relaxed max-w-xl mx-auto">
+            Bring the polish of global hospitality tech to your venue — with local payouts, ticketing, and AI copilots your
+            team can trust.
           </p>
         </div>
       </section>
 
-      {/* Feature cards - Orange/yellow, slim CTAs */}
-      <section className="py-12 md:py-16 bg-gradient-to-b from-zuri-orange/10 to-zuri-light">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid md:grid-cols-3 gap-6">
-            <div className="md:col-span-2 bg-white rounded-2xl p-8 border border-zuri-orange/30 hover:border-zuri-orange/40 transition-colors">
-              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-zuri-yellow to-zuri-orange flex items-center justify-center mb-6">
-                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <HomeKeyFeatures />
+
+      {/* Feature cards — operations */}
+      <section className="relative py-16 md:py-24 bg-zuri-light overflow-hidden">
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[min(90vw,40rem)] h-40 bg-zuri-orange/[0.06] blur-[72px] rounded-full pointer-events-none" aria-hidden />
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 relative">
+          <div className="grid md:grid-cols-2 gap-5 md:gap-6">
+            <div className="bg-white rounded-2xl p-8 md:p-10 border border-gray-200/90 shadow-sm">
+              <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-zuri-yellow/90 to-zuri-orange flex items-center justify-center mb-6">
+                <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
                 </svg>
               </div>
-              <h3 className="text-xl font-bold text-zuri-black mb-2">Orders & payments in one place</h3>
-              <p className="text-gray-600 mb-6">
-                Guests scan your QR, browse the menu, and pay from their phone. You see every order and payment in your dashboard—no extra hardware.
+              <h3 className="text-lg md:text-xl font-medium text-zuri-black tracking-tight mb-3">One hub for orders &amp; payouts</h3>
+              <p className="text-gray-600 text-sm md:text-base leading-relaxed mb-6 font-normal">
+                QR, Tap, or ticketing — every basket lands in the same operations view with real-time status and Naira-ready
+                settlement workflows.
               </p>
-              <Link to="/scan" className="inline-flex items-center gap-1.5 text-sm rounded-lg px-3 py-1.5 bg-zuri-orange text-white hover:bg-zuri-orange-dark transition-colors w-fit">
-                How it works
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" /></svg>
+              <Link to="/scan" className="inline-flex items-center gap-2 text-sm font-medium rounded-full bg-zuri-black text-white px-6 py-2.5 hover:bg-neutral-800 transition-colors">
+                See the guest flow
+                <svg className="w-4 h-4 opacity-80" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" /></svg>
               </Link>
             </div>
-            <div className="bg-gradient-to-br from-zuri-black to-gray-900 text-white rounded-2xl p-8 border border-zuri-orange/20">
-              <div className="w-12 h-12 rounded-xl bg-zuri-orange/90 flex items-center justify-center mb-6">
-                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            <div className="bg-zuri-black text-white rounded-2xl p-8 md:p-10 border border-white/10">
+              <div className="w-11 h-11 rounded-xl bg-white/10 flex items-center justify-center mb-6">
+                <svg className="w-5 h-5 text-zuri-yellow" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.055 13H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               </div>
-              <h3 className="text-xl font-bold mb-2">Analytics & insights</h3>
-              <p className="text-gray-300 text-sm">
-                Sales trends, popular items, peak hours—so you can run your business with data, not guesswork.
+              <h3 className="text-lg font-medium tracking-tight mb-3">Built for Africa&apos;s front-of-house reality</h3>
+              <p className="text-gray-400 text-sm leading-relaxed font-normal">
+                Peak-hour noise, shared tables, events with thousands of guests — ZURI is designed for the pace of African
+                cities while keeping reconciliation simple for finance teams.
               </p>
-            </div>
-            <div className="bg-white rounded-2xl p-8 border border-zuri-yellow/50 hover:border-zuri-yellow transition-colors">
-              <div className="w-12 h-12 rounded-xl bg-zuri-yellow/80 flex items-center justify-center mb-6">
-                <svg className="w-6 h-6 text-zuri-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v2m9 0V7a2 2 0 01-2 2H9a2 2 0 01-2-2V9a2 2 0 012-2h2a2 2 0 012 2z" />
-                </svg>
-              </div>
-              <h3 className="text-xl font-bold text-zuri-black mb-2">Plans that scale</h3>
-              <p className="text-gray-600 text-sm">
-                From free to Pro and Zuri AI. Simple pricing, no lock-in. Upgrade when you’re ready.
-              </p>
-              <a href="#pricing" className="inline-flex items-center gap-1.5 text-sm rounded-lg px-3 py-1.5 bg-zuri-orange text-white hover:bg-zuri-orange-dark transition-colors w-fit mt-4">
-                View pricing
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" /></svg>
-              </a>
             </div>
           </div>
-          <div className="mt-6 bg-gradient-to-r from-zuri-orange/10 to-zuri-yellow/10 rounded-2xl p-6 md:p-8 border-2 border-zuri-orange/30">
-            <h3 className="text-lg font-bold text-zuri-black mb-2">No POS. No fintech devices. No physical menus.</h3>
-            <p className="text-gray-700 text-sm">
-              We've solved all that. One QR code gives you a digital menu, orders, and payments. Your guests use their phones—you get paid to your bank. No extra hardware, no printed menus to reorder.
-            </p>
+          <div className="mt-5 rounded-2xl border border-gray-200/90 bg-white/80 px-6 py-6 md:px-8 md:py-7 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div>
+              <h3 className="text-base md:text-lg font-medium text-zuri-black tracking-tight mb-1">Plans that scale with your AI ambition</h3>
+              <p className="text-gray-600 text-sm leading-relaxed font-normal">
+                From free menus to analytics and Zuri Assist — upgrade to Scale when you want full ops AI and a guest menu tuned for African languages and local taste.
+              </p>
+            </div>
+            <Link to="/pricing" className="shrink-0 inline-flex items-center gap-2 text-sm font-medium rounded-full border border-gray-300 text-zuri-black px-6 py-2.5 hover:border-zuri-orange hover:text-zuri-orange transition-colors">
+              View pricing
+              <svg className="w-4 h-4 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" /></svg>
+            </Link>
           </div>
         </div>
       </section>
 
-      {/* Trust strip - Orange accent */}
-      <section className="py-14 md:py-20 bg-white border-y border-zuri-orange/30">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-          <p className="text-center mb-6 leading-none">
-            <span className="text-zuri-black font-semibold text-4xl md:text-7xl leading-none tracking-tight">
+      {/* Perfect for */}
+      <section className="py-16 md:py-24 bg-white border-y border-gray-200/80">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+          <p className="text-[13px] sm:text-sm text-gray-500 font-medium tracking-wide mb-10 md:mb-12">Built for</p>
+          <p className="leading-[1.05] tracking-[-0.03em]">
+            <span className="text-zuri-black font-medium text-4xl sm:text-5xl md:text-6xl lg:text-7xl">
               Perfect for{' '}
             </span>
             <span
-              className={`text-zuri-orange font-semibold text-4xl md:text-7xl transition-all duration-300 will-change-transform ${
-                perfectForFading ? 'opacity-0 scale-95' : 'opacity-100 scale-100'
+              className={`text-zuri-orange font-medium text-4xl sm:text-5xl md:text-6xl lg:text-7xl inline-block transition-all duration-300 ${
+                perfectForFading ? 'opacity-0 translate-y-1' : 'opacity-100 translate-y-0'
               }`}
             >
               {PERFECT_FOR_WORDS[perfectForIndex]}
@@ -352,72 +485,77 @@ function Home(): JSX.Element {
         </div>
       </section>
 
-      {/* How It Works - Orange/yellow steps (process-style animation) */}
-      <section
-        ref={howItWorksRef}
-        className={`py-20 md:py-24 bg-gradient-to-b from-white to-zuri-orange/10 transition-all duration-700 ease-out ${
-          howItWorksVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
-        }`}
-      >
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-          <p className="text-sm font-medium text-zuri-orange uppercase tracking-wider text-center mb-3">Simple flow</p>
-          <h2 className="text-2xl md:text-3xl font-semibold text-zuri-black text-center mb-4">
-            How it works
-          </h2>
-          <p className="text-lg text-gray-600 text-center max-w-xl mx-auto mb-16">
-            Three steps from scan to served.
-          </p>
-          <div className="grid md:grid-cols-3 gap-10">
-            <div
-              className={`text-center transform transition-all duration-700 ${
-                howItWorksVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
-              }`}
-              style={{ transitionDelay: howItWorksVisible ? '40ms' : '0ms' }}
-            >
-              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-zuri-yellow to-zuri-orange flex items-center justify-center mx-auto mb-5">
-                <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
-                </svg>
+      {/* How It Works - Screenshot-led story */}
+      <section ref={howItWorksRef} className="relative py-20 md:py-28 bg-zuri-light overflow-hidden">
+        <div className="absolute inset-0 bg-[length:72px_72px] bg-[linear-gradient(to_right,rgba(0,0,0,0.02)_1px,transparent_1px),linear-gradient(to_bottom,rgba(0,0,0,0.02)_1px,transparent_1px)] pointer-events-none" aria-hidden />
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 relative">
+          <div className="max-w-2xl mx-auto text-center mb-16 md:mb-20">
+            <p className="text-[13px] sm:text-sm text-gray-500 font-medium tracking-wide mb-8 md:mb-10">Simple flow</p>
+            <h2 className="text-3xl sm:text-4xl md:text-5xl font-medium text-zuri-black tracking-[-0.035em] leading-[1.08] mb-6 md:mb-8">
+              How it works
+            </h2>
+            <p className="text-base sm:text-lg text-gray-600 font-normal leading-relaxed">
+              Three steps from guest link to payout — menu or tickets.
+            </p>
+          </div>
+          <div className="relative">
+            <div className="hidden md:grid md:grid-cols-[minmax(0,1fr),minmax(0,1.08fr)] gap-10">
+              <div className="relative">
+                <div className="pr-6">
+                  <div className="absolute left-0 top-0 bottom-0 w-px bg-zuri-orange/20" />
+                  <div
+                    className="absolute left-0 top-0 w-px bg-zuri-orange transition-[height] duration-300"
+                    style={{ height: howItWorksProgressHeight }}
+                  />
+                  <div className="space-y-20 md:space-y-24 pl-6">
+                    {howItWorksSteps.map((step, idx) => {
+                      const isActive = idx === activeHowItWorksStep
+                      return (
+                        <div
+                          key={step.title}
+                          className={`transition-all duration-500 ${
+                            isActive ? 'opacity-100 translate-y-0' : 'opacity-40 translate-y-2'
+                          }`}
+                        >
+                          <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">{step.label}</span>
+                          <h3 className="text-xl md:text-2xl font-medium text-zuri-black tracking-tight mt-2 mb-3">{step.title}</h3>
+                          <p className="text-gray-600 text-sm md:text-base leading-relaxed font-normal">{step.description}</p>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
               </div>
-              <span className="text-xs font-semibold text-zuri-orange uppercase tracking-wider">Step 1</span>
-              <h3 className="text-xl font-bold text-zuri-black mt-2 mb-3">Scan</h3>
-              <p className="text-gray-600 text-sm leading-relaxed">
-                Guests scan your QR code—no app download. Your digital menu opens instantly.
-              </p>
+
+              <div className="relative">
+                <div className="relative h-[420px] lg:h-[480px] rounded-3xl overflow-hidden sticky top-24">
+                  <div className="absolute inset-0 flex items-center justify-center p-4">
+                    <LazyImage
+                      key={activeHowItWorks.image}
+                      src={activeHowItWorks.image}
+                      alt={activeHowItWorks.alt}
+                      className="w-auto max-h-[380px] lg:max-h-[440px] object-contain mx-auto drop-shadow-[0_20px_34px_rgba(0,0,0,0.22)]"
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
-            <div
-              className={`text-center transform transition-all duration-700 ${
-                howItWorksVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
-              }`}
-              style={{ transitionDelay: howItWorksVisible ? '140ms' : '0ms' }}
-            >
-              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-zuri-yellow to-zuri-orange flex items-center justify-center mx-auto mb-5">
-                <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-                </svg>
-              </div>
-              <span className="text-xs font-semibold text-zuri-orange uppercase tracking-wider">Step 2</span>
-              <h3 className="text-xl font-bold text-zuri-black mt-2 mb-3">Order & pay</h3>
-              <p className="text-gray-600 text-sm leading-relaxed">
-                Browse menu, add to cart, pay by card or saved card. You get the order in real time.
-              </p>
-            </div>
-            <div
-              className={`text-center transform transition-all duration-700 ${
-                howItWorksVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
-              }`}
-              style={{ transitionDelay: howItWorksVisible ? '240ms' : '0ms' }}
-            >
-              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-zuri-yellow to-zuri-orange flex items-center justify-center mx-auto mb-5">
-                <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-              <span className="text-xs font-semibold text-zuri-orange uppercase tracking-wider">Step 3</span>
-              <h3 className="text-xl font-bold text-zuri-black mt-2 mb-3">Enjoy</h3>
-              <p className="text-gray-600 text-sm leading-relaxed">
-                You focus on food and service. Payouts go to your bank—no payment gateway setup.
-              </p>
+
+            <div className="md:hidden space-y-7">
+              {howItWorksSteps.map((step) => (
+                <article key={step.title} className="bg-white border border-gray-200/90 rounded-2xl p-6 shadow-sm">
+                  <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">{step.label}</span>
+                  <h3 className="text-xl font-medium text-zuri-black tracking-tight mt-2 mb-3">{step.title}</h3>
+                  <p className="text-gray-600 text-sm leading-relaxed mb-4 font-normal">{step.description}</p>
+                  <div className="overflow-hidden rounded-xl">
+                    <LazyImage
+                      src={step.image}
+                      alt={step.alt}
+                      className="w-auto max-h-[340px] mx-auto object-contain"
+                    />
+                  </div>
+                </article>
+              ))}
             </div>
           </div>
         </div>
@@ -426,33 +564,31 @@ function Home(): JSX.Element {
       {/* Pricing - Orange accent with staggered cards */}
       <section
         id="pricing"
-        ref={pricingRef}
-        className={`py-20 md:py-24 bg-gradient-to-b from-zuri-orange/10 to-zuri-light transition-all duration-700 ease-out ${
-          pricingVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
-        }`}
+        className="relative py-20 md:py-28 bg-white overflow-hidden scroll-mt-24"
       >
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center mb-14">
-            <p className="text-sm font-medium text-zuri-orange uppercase tracking-wider mb-3">Plans</p>
-            <h2 className="text-2xl md:text-3xl font-semibold text-zuri-black mb-4">
+        <div className="absolute inset-0 bg-[length:72px_72px] bg-[linear-gradient(to_right,rgba(0,0,0,0.02)_1px,transparent_1px),linear-gradient(to_bottom,rgba(0,0,0,0.02)_1px,transparent_1px)] pointer-events-none" aria-hidden />
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 relative">
+          <div className="max-w-2xl mx-auto text-center mb-14 md:mb-16">
+            <p className="text-[13px] sm:text-sm text-gray-500 font-medium tracking-wide mb-8 md:mb-10">Plans</p>
+            <h2 className="text-3xl sm:text-4xl md:text-5xl font-medium text-zuri-black tracking-[-0.035em] leading-[1.08] mb-6 md:mb-8">
               Simple, transparent pricing
             </h2>
-            <p className="text-lg text-gray-600 max-w-xl mx-auto">
-              Choose the plan that fits your business. No hidden fees.
+            <p className="text-base sm:text-lg text-gray-600 font-normal leading-relaxed">
+              Choose what fits your business. No hidden fees.
             </p>
-            <div className="flex justify-center mt-6">
+            <div className="flex justify-center mt-10">
               <div
-                className="inline-flex rounded-lg border border-gray-200 bg-white p-0.5 gap-0.5"
+                className="inline-flex rounded-full border border-gray-200 bg-zuri-light/80 p-1 gap-1"
                 role="group"
                 aria-label="Billing period"
               >
                 <button
                   type="button"
                   onClick={() => setBillingInterval('monthly')}
-                  className={`px-4 py-1.5 text-sm rounded-md transition-colors ${
+                  className={`px-5 py-2 text-sm font-medium rounded-full transition-colors ${
                     billingInterval === 'monthly'
-                      ? 'bg-zuri-orange text-white'
-                      : 'text-gray-600 hover:text-zuri-black'
+                      ? 'bg-zuri-black text-white'
+                      : 'text-gray-500 hover:text-zuri-black'
                   }`}
                 >
                   Monthly
@@ -460,51 +596,49 @@ function Home(): JSX.Element {
                 <button
                   type="button"
                   onClick={() => setBillingInterval('yearly')}
-                  className={`px-4 py-1.5 text-sm rounded-md transition-colors ${
+                  className={`px-5 py-2 text-sm font-medium rounded-full transition-colors ${
                     billingInterval === 'yearly'
-                      ? 'bg-zuri-orange text-white'
-                      : 'text-gray-600 hover:text-zuri-black'
+                      ? 'bg-zuri-black text-white'
+                      : 'text-gray-500 hover:text-zuri-black'
                   }`}
                 >
                   Yearly
-                  <span className="ml-1.5 text-xs opacity-90">({YEARLY_DISCOUNT_PCT}% off)</span>
+                  <span className="ml-1.5 text-xs opacity-80">({YEARLY_DISCOUNT_PCT}% off)</span>
                 </button>
               </div>
             </div>
           </div>
-          <div className="grid md:grid-cols-2 lg:grid-cols-6 gap-6">
+          <div className="grid md:grid-cols-2 lg:grid-cols-5 gap-6">
             {/* Free */}
             <div
-              className={`bg-white rounded-2xl p-6 border border-gray-200 flex flex-col transform transition-all duration-700 ${
-                pricingVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
-              }`}
-              style={{ transitionDelay: pricingVisible ? '40ms' : '0ms' }}
+              className="bg-white rounded-2xl p-6 border border-gray-200 flex flex-col"
+              style={{ transitionDelay: '40ms' }}
             >
               <div className="text-center mb-6">
-                <h3 className="text-xl font-bold text-zuri-black">Free</h3>
-                <p className="text-2xl font-bold text-zuri-black mt-2">₦0</p>
+                <h3 className="text-lg font-medium text-zuri-black">Free</h3>
+                <p className="text-2xl font-medium text-zuri-black mt-2 tabular-nums tracking-tight">₦0</p>
                 <p className="text-sm text-gray-500 mt-1">Forever</p>
               </div>
               <ul className="space-y-3 text-sm text-gray-700 flex-1">
                 <li className="flex items-start">
                   <span className="text-zuri-yellow mr-2">✓</span>
-                  QR code & digital menu
+                  QR code &amp; text menu — guests order in browser
                 </li>
                 <li className="flex items-start">
                   <span className="text-zuri-yellow mr-2">✓</span>
-                  Orders management
+                  Orders &amp; payments to your bank
                 </li>
                 <li className="flex items-start text-gray-400">
                   <span className="mr-2">✗</span>
-                  No deep analytics
+                  No business logo or menu photos
                 </li>
                 <li className="flex items-start text-gray-400">
                   <span className="mr-2">✗</span>
-                  No menu images
+                  No analytics dashboard
                 </li>
                 <li className="flex items-start text-gray-400">
                   <span className="mr-2">✗</span>
-                  No Zuri Tap
+                  No Zuri Tap or storefront themes
                 </li>
               </ul>
               <Link to="/business/login" className="mt-6 flex justify-center">
@@ -514,17 +648,15 @@ function Home(): JSX.Element {
               </Link>
             </div>
 
-            {/* Starter – green */}
+            {/* Starter */}
             <div
-              className={`bg-white rounded-2xl p-6 border border-green-400 flex flex-col transform transition-all duration-700 ${
-                pricingVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
-              }`}
-              style={{ transitionDelay: pricingVisible ? '120ms' : '0ms' }}
+              className="bg-white rounded-2xl p-6 border border-green-400 flex flex-col"
+              style={{ transitionDelay: '120ms' }}
             >
               <div className="text-center mb-6">
                 <span className="inline-block w-3 h-3 rounded-full bg-green-500 mb-2" aria-hidden />
-                <h3 className="text-xl font-bold text-zuri-black">Starter</h3>
-                <p className="text-2xl font-bold text-zuri-black mt-2">
+                <h3 className="text-lg font-medium text-zuri-black">Starter</h3>
+                <p className="text-2xl font-medium text-zuri-black mt-2 tabular-nums tracking-tight">
                   {billingInterval === 'monthly' ? PLAN_PRICES.starter : PLAN_PRICES_YEARLY_AS_MONTHLY.starter}
                 </p>
                 <p className="text-sm text-gray-500 mt-1">/month</p>
@@ -532,23 +664,23 @@ function Home(): JSX.Element {
               <ul className="space-y-3 text-sm text-gray-700 flex-1">
                 <li className="flex items-start">
                   <span className="text-green-500 mr-2">✓</span>
-                  Basic storefront
+                  Menu item photos &amp; business logo
                 </li>
                 <li className="flex items-start">
                   <span className="text-green-500 mr-2">✓</span>
-                  Orders
+                  QR ordering, orders &amp; payouts (same as Free)
+                </li>
+                <li className="flex items-start">
+                  <span className="text-green-500 mr-2">✓</span>
+                  Default customer storefront (no theme editor)
                 </li>
                 <li className="flex items-start text-gray-400">
                   <span className="mr-2">✗</span>
-                  No deep analytics
+                  No analytics dashboard
                 </li>
                 <li className="flex items-start text-gray-400">
                   <span className="mr-2">✗</span>
-                  Limited uploads
-                </li>
-                <li className="flex items-start text-gray-400">
-                  <span className="mr-2">✗</span>
-                  No Zuri Tap
+                  No Zuri Tap, customizer, or CSV import
                 </li>
               </ul>
               <div className="mt-4 flex justify-center">
@@ -561,17 +693,12 @@ function Home(): JSX.Element {
               </div>
             </div>
 
-            {/* Growth – blue */}
-            <div
-              className={`bg-white rounded-2xl p-6 border border-blue-400 flex flex-col transform transition-all duration-700 ${
-                pricingVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
-              }`}
-              style={{ transitionDelay: pricingVisible ? '200ms' : '0ms' }}
-            >
+            {/* Growth */}
+            <div className="bg-white rounded-2xl p-6 border border-blue-400 flex flex-col">
               <div className="text-center mb-6">
                 <span className="inline-block w-3 h-3 rounded-full bg-blue-500 mb-2" aria-hidden />
-                <h3 className="text-xl font-bold text-zuri-black">Growth</h3>
-                <p className="text-2xl font-bold text-zuri-black mt-2">
+                <h3 className="text-lg font-medium text-zuri-black">Growth</h3>
+                <p className="text-2xl font-medium text-zuri-black mt-2 tabular-nums tracking-tight">
                   {billingInterval === 'monthly' ? PLAN_PRICES.growth : PLAN_PRICES_YEARLY_AS_MONTHLY.growth}
                 </p>
                 <p className="text-sm text-gray-500 mt-1">/month</p>
@@ -579,19 +706,27 @@ function Home(): JSX.Element {
               <ul className="space-y-3 text-sm text-gray-700 flex-1">
                 <li className="flex items-start">
                   <span className="text-blue-500 mr-2">✓</span>
-                  Full analytics
+                  Analytics: sales, trends, popular items &amp; peak hours
                 </li>
                 <li className="flex items-start">
                   <span className="text-blue-500 mr-2">✓</span>
-                  Menu images
+                  Profit margins (when you add item costs)
                 </li>
                 <li className="flex items-start">
                   <span className="text-blue-500 mr-2">✓</span>
-                  Order management
+                  Storefront customizer (layout, colours, hero)
                 </li>
                 <li className="flex items-start">
                   <span className="text-blue-500 mr-2">✓</span>
-                  Zuri Tap
+                  Zuri Tap — pay-by-code for saved-card customers
+                </li>
+                <li className="flex items-start">
+                  <span className="text-blue-500 mr-2">✓</span>
+                  Zuri Assist on the guest menu — trending, upsells, taste sort, Hausa · Yorùbá · Igbo
+                </li>
+                <li className="flex items-start">
+                  <span className="text-blue-500 mr-2">✓</span>
+                  Everything in Starter (photos, logo, QR orders)
                 </li>
               </ul>
               <div className="mt-4 flex justify-center">
@@ -604,109 +739,61 @@ function Home(): JSX.Element {
               </div>
             </div>
 
-            {/* Pro – purple, Recommended */}
+            {/* Scale flagship tier */}
             <div
-              className={`bg-zuri-black text-white rounded-2xl p-6 border border-purple-400 flex flex-col relative transform transition-all duration-700 ${
-                pricingVisible ? 'opacity-100 translate-y-0 scale-[1.02]' : 'opacity-0 translate-y-6 scale-95'
-              }`}
-              style={{ transitionDelay: pricingVisible ? '280ms' : '0ms' }}
+              className="bg-zuri-black text-white rounded-2xl p-6 border border-purple-400 flex flex-col relative scale-[1.02]"
+              style={{ transitionDelay: '280ms' }}
             >
               <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-zuri-yellow text-zuri-black text-xs font-semibold px-2.5 py-0.5 rounded-lg">
                 Recommended
               </div>
               <div className="text-center mb-6">
                 <span className="inline-block w-3 h-3 rounded-full bg-purple-400 mb-2" aria-hidden />
-                <h3 className="text-xl font-bold">Pro</h3>
-                <p className="text-2xl font-bold text-zuri-yellow mt-2">
-                  {billingInterval === 'monthly' ? PLAN_PRICES.pro : PLAN_PRICES_YEARLY_AS_MONTHLY.pro}
+                <h3 className="text-lg font-medium">Scale</h3>
+                <p className="text-2xl font-medium text-zuri-yellow mt-2 tabular-nums tracking-tight">
+                  {billingInterval === 'monthly' ? PLAN_PRICES.scale : PLAN_PRICES_YEARLY_AS_MONTHLY.scale}
                 </p>
                 <p className="text-sm text-gray-400 mt-1">/month</p>
               </div>
               <ul className="space-y-3 text-sm text-gray-300 flex-1">
                 <li className="flex items-start">
                   <span className="text-purple-300 mr-2">✓</span>
-                  Premium analytics
+                  Everything in Growth — including guest AI menu controls
                 </li>
                 <li className="flex items-start">
                   <span className="text-purple-300 mr-2">✓</span>
-                  Ticketing fee options
+                  Zuri Assist — revenue insights, forecasts, promo ideas, CSV import
                 </li>
                 <li className="flex items-start">
                   <span className="text-purple-300 mr-2">✓</span>
-                  Advanced reporting
+                  Market intelligence — anonymous Zuri network benchmarks
                 </li>
                 <li className="flex items-start">
                   <span className="text-purple-300 mr-2">✓</span>
-                  Zuri Tap
+                  Live ops — daily briefing, rush signals, slow hours, low-stock flags
+                </li>
+                <li className="flex items-start">
+                  <span className="text-purple-300 mr-2">✓</span>
+                  AI storefront regenerations without Growth caps
                 </li>
               </ul>
               <div className="mt-4 flex justify-center">
                 <Link
-                  to={`/subscribe/pro?interval=${billingInterval}&autopay=1`}
+                  to={`/subscribe/scale?interval=${billingInterval}&autopay=1`}
                   className="bg-white text-zuri-black py-1.5 rounded-md text-xs border border-zuri-orange hover:bg-zuri-orange hover:text-white transition px-3"
                 >
-                  Get Pro
+                  Get Scale
                 </Link>
               </div>
             </div>
 
-            {/* Zuri AI – red */}
-            <div
-              className={`bg-white rounded-2xl p-6 border border-red-400 flex flex-col transform transition-all duration-700 ${
-                pricingVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
-              }`}
-              style={{ transitionDelay: pricingVisible ? '360ms' : '0ms' }}
+            {/* Enterprise */}            <div
+              className="bg-white rounded-2xl p-6 border border-gray-200 flex flex-col"
+              style={{ transitionDelay: '360ms' }}
             >
               <div className="text-center mb-6">
-                <span className="inline-block w-3 h-3 rounded-full bg-red-500 mb-2" aria-hidden />
-                <h3 className="text-xl font-bold text-zuri-black">Zuri AI</h3>
-                <p className="text-2xl font-bold text-zuri-black mt-2">
-                  {billingInterval === 'monthly' ? PLAN_PRICES.zuri_plus : PLAN_PRICES_YEARLY_AS_MONTHLY.zuri_plus}
-                </p>
-                <p className="text-sm text-gray-500 mt-1">/month</p>
-              </div>
-              <ul className="space-y-3 text-sm text-gray-700 flex-1">
-                <li className="flex items-start">
-                  <span className="text-red-500 mr-2">✓</span>
-                  AI insights
-                </li>
-                <li className="flex items-start">
-                  <span className="text-red-500 mr-2">✓</span>
-                  Optimization
-                </li>
-                <li className="flex items-start">
-                  <span className="text-red-500 mr-2">✓</span>
-                  Forecasting
-                </li>
-                <li className="flex items-start">
-                  <span className="text-red-500 mr-2">✓</span>
-                  Storefront intelligence
-                </li>
-                <li className="flex items-start">
-                  <span className="text-red-500 mr-2">✓</span>
-                  Zuri Tap
-                </li>
-              </ul>
-              <div className="mt-4 flex justify-center">
-                <Link
-                  to={`/subscribe/zuri_plus?interval=${billingInterval}&autopay=1`}
-                  className="bg-white text-zuri-black py-1.5 rounded-md text-xs border border-zuri-orange hover:bg-zuri-orange hover:text-white transition px-3"
-                >
-                  Get Zuri AI
-                </Link>
-              </div>
-            </div>
-
-            {/* Enterprise */}
-            <div
-              className={`bg-white rounded-2xl p-6 border border-gray-200 flex flex-col transform transition-all duration-700 ${
-                pricingVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
-              }`}
-              style={{ transitionDelay: pricingVisible ? '440ms' : '0ms' }}
-            >
-              <div className="text-center mb-6">
-                <h3 className="text-xl font-bold text-zuri-black">Enterprise</h3>
-                <p className="text-2xl font-bold text-zuri-black mt-2">Custom</p>
+                <h3 className="text-lg font-medium text-zuri-black">Enterprise</h3>
+                <p className="text-2xl font-medium text-zuri-black mt-2 tracking-tight">Custom</p>
                 <p className="text-sm text-gray-500 mt-1">Book a demo</p>
               </div>
               <ul className="space-y-3 text-sm text-gray-700 flex-1">
@@ -737,77 +824,66 @@ function Home(): JSX.Element {
               </div>
             </div>
           </div>
-          <p className="text-center text-gray-500 text-sm mt-10">
-            A 1.5% transaction fee applies on every customer purchase.
+          <p className="text-center text-gray-500 text-sm font-normal mt-12 max-w-md mx-auto leading-relaxed">
+            {TRANSACTION_FEE_SUMMARY_COPY}
           </p>
         </div>
       </section>
 
       {/* FAQ - Clean cards with soft reveal */}
-      <section
-        ref={faqRef}
-        className={`py-20 md:py-24 bg-white transition-all duration-700 ease-out ${
-          faqVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
-        }`}
-      >
-        <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
-          <p className="text-sm font-medium text-zuri-orange uppercase tracking-wider text-center mb-3">Support</p>
-          <h2 className="text-2xl md:text-3xl font-semibold text-zuri-black text-center mb-14">
-            Frequently asked questions
-          </h2>
-          <div className="space-y-4">
+      <section className="relative py-20 md:py-28 bg-zuri-light overflow-hidden">
+        <div className="absolute inset-0 bg-[length:72px_72px] bg-[linear-gradient(to_right,rgba(0,0,0,0.02)_1px,transparent_1px),linear-gradient(to_bottom,rgba(0,0,0,0.02)_1px,transparent_1px)] pointer-events-none" aria-hidden />
+        <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 relative">
+          <div className="text-center mb-14 md:mb-16">
+            <p className="text-[13px] sm:text-sm text-gray-500 font-medium tracking-wide mb-8 md:mb-10">Support</p>
+            <h2 className="text-3xl sm:text-4xl md:text-5xl font-medium text-zuri-black tracking-[-0.035em] leading-[1.08]">
+              Frequently asked questions
+            </h2>
+          </div>
+          <div className="space-y-3">
             <div
-              className={`bg-zuri-orange/10 rounded-xl p-6 border border-zuri-orange/30 transform transition-all duration-700 ${
-                faqVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
-              }`}
-              style={{ transitionDelay: faqVisible ? '40ms' : '0ms' }}
+              className="bg-white rounded-2xl p-6 md:p-7 border border-gray-200/90 shadow-sm"
+              style={{ transitionDelay: '40ms' }}
             >
-              <h3 className="text-lg font-bold text-zuri-black mb-2">What is ZURI?</h3>
-              <p className="text-gray-600 text-sm leading-relaxed">
-                ZURI is a QR-based ordering and payments platform. Guests scan a code to open your menu, order, and pay from their phone. You get orders in real time and payouts to your bank.
+              <h3 className="text-base font-medium text-zuri-black mb-2 tracking-tight">What is ZURI?</h3>
+              <p className="text-gray-600 text-sm leading-relaxed font-normal">
+                ZURI is an AI-personalised menu, ordering, and ticketing platform for hospitality and events. Guests open your
+                link to order food or buy tickets; you operate from one dashboard with payouts to your Nigerian bank.
               </p>
             </div>
             <div
-              className={`bg-zuri-orange/10 rounded-xl p-6 border border-zuri-orange/30 transform transition-all duration-700 ${
-                faqVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
-              }`}
-              style={{ transitionDelay: faqVisible ? '120ms' : '0ms' }}
+              className="bg-white rounded-2xl p-6 md:p-7 border border-gray-200/90 shadow-sm"
+              style={{ transitionDelay: '120ms' }}
             >
-              <h3 className="text-lg font-bold text-zuri-black mb-2">Do customers need to download an app?</h3>
-              <p className="text-gray-600 text-sm leading-relaxed">
+              <h3 className="text-base font-medium text-zuri-black mb-2 tracking-tight">Do customers need to download an app?</h3>
+              <p className="text-gray-600 text-sm leading-relaxed font-normal">
                 No. They scan the QR code with their phone camera and the menu opens in the browser. No app required.
               </p>
             </div>
             <div
-              className={`bg-zuri-orange/10 rounded-xl p-6 border border-zuri-orange/30 transform transition-all duration-700 ${
-                faqVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
-              }`}
-              style={{ transitionDelay: faqVisible ? '200ms' : '0ms' }}
+              className="bg-white rounded-2xl p-6 md:p-7 border border-gray-200/90 shadow-sm"
+              style={{ transitionDelay: '200ms' }}
             >
-              <h3 className="text-lg font-bold text-zuri-black mb-2">How do I get paid?</h3>
-              <p className="text-gray-600 text-sm leading-relaxed">
+              <h3 className="text-base font-medium text-zuri-black mb-2 tracking-tight">How do I get paid?</h3>
+              <p className="text-gray-600 text-sm leading-relaxed font-normal">
                 Add your Nigerian bank account in your dashboard. We verify the account name and pay out to you—no Paystack or gateway setup required.
               </p>
             </div>
             <div
-              className={`bg-zuri-orange/10 rounded-xl p-6 border border-zuri-orange/30 transform transition-all duration-700 ${
-                faqVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
-              }`}
-              style={{ transitionDelay: faqVisible ? '280ms' : '0ms' }}
+              className="bg-white rounded-2xl p-6 md:p-7 border border-gray-200/90 shadow-sm"
+              style={{ transitionDelay: '280ms' }}
             >
-              <h3 className="text-lg font-bold text-zuri-black mb-2">Can I customize my menu?</h3>
-              <p className="text-gray-600 text-sm leading-relaxed">
+              <h3 className="text-base font-medium text-zuri-black mb-2 tracking-tight">Can I customize my menu?</h3>
+              <p className="text-gray-600 text-sm leading-relaxed font-normal">
                 Yes. Update items, prices, photos (on paid plans), and categories anytime from your dashboard.
               </p>
             </div>
             <div
-              className={`bg-zuri-orange/10 rounded-xl p-6 border border-zuri-orange/30 transform transition-all duration-700 ${
-                faqVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
-              }`}
-              style={{ transitionDelay: faqVisible ? '360ms' : '0ms' }}
+              className="bg-white rounded-2xl p-6 md:p-7 border border-gray-200/90 shadow-sm"
+              style={{ transitionDelay: '360ms' }}
             >
-              <h3 className="text-lg font-bold text-zuri-black mb-2">Who is ZURI for?</h3>
-              <p className="text-gray-600 text-sm leading-relaxed">
+              <h3 className="text-base font-medium text-zuri-black mb-2 tracking-tight">Who is ZURI for?</h3>
+              <p className="text-gray-600 text-sm leading-relaxed font-normal">
                 Restaurants, cafés, hotels, fast food, bakeries—and you. Simple QR ordering and payments with minimal setup.
               </p>
             </div>
@@ -815,85 +891,85 @@ function Home(): JSX.Element {
         </div>
       </section>
 
-      {/* CTA - Orange gradient strip */}
-      <section
-        ref={ctaRef}
-        className={`py-20 md:py-24 bg-gradient-to-r from-zuri-orange via-zuri-orange to-zuri-orange-dark text-white relative overflow-hidden transition-all duration-700 ease-out ${
-          ctaVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'
-        }`}
-      >
-        <div className="absolute inset-0 bg-[length:48px_48px] bg-[linear-gradient(to_right,rgba(255,255,255,0.06)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.06)_1px,transparent_1px)]" />
-        <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 text-center relative z-10">
-          <h2 className="text-3xl md:text-4xl font-bold mb-4">
-            Ready to get started?
+      {/* CTA */}
+      <section className="relative py-20 md:py-28 bg-zuri-black text-white overflow-hidden">
+        <div className="absolute inset-0 bg-[length:72px_72px] bg-[linear-gradient(to_right,rgba(255,255,255,0.04)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.04)_1px,transparent_1px)] opacity-60" aria-hidden />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[min(100%,28rem)] h-48 bg-zuri-orange/20 blur-[90px] rounded-full pointer-events-none" aria-hidden />
+        <div className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 text-center relative z-10">
+          <p className="text-[13px] sm:text-sm text-gray-400 font-medium tracking-wide mb-8 md:mb-10">ZURI</p>
+          <h2 className="text-3xl sm:text-4xl md:text-5xl font-medium tracking-[-0.035em] leading-[1.08] mb-6 md:mb-8">
+            Ready when you are.
           </h2>
-          <p className="text-white/90 mb-8">
-            Join businesses already using ZURI for orders and payments.
+          <p className="text-gray-400 text-base sm:text-lg font-normal leading-relaxed mb-10 md:mb-12 max-w-md mx-auto">
+            Join venues using ZURI to personalise menus, launch ticketing, and move service lines faster across Africa.
           </p>
           <Link
             to="/business/login"
-            className="inline-block bg-white text-zuri-orange text-sm rounded-lg px-4 py-1.5 hover:bg-zuri-light transition-colors border border-white/80"
+            className="inline-flex items-center justify-center gap-2 bg-white text-zuri-black text-sm font-medium rounded-full px-8 py-3.5 hover:bg-zuri-yellow transition-colors"
           >
             Get started
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" /></svg>
           </Link>
         </div>
       </section>
 
       {/* Footer */}
-      <footer className="bg-[#0a0a0a] text-white py-14">
+      <footer className="bg-[#080808] text-white py-16 md:py-20 border-t border-white/[0.06]">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid md:grid-cols-4 gap-10 mb-12">
+          <div className="grid md:grid-cols-4 gap-10 md:gap-12 mb-14">
             <div>
-              <div className="flex items-center gap-2 mb-4">
-                <img src="/ZURI.png" alt="ZURI" className="h-9 w-auto object-contain" />
-                <span className="text-lg font-bold">ZURI</span>
+              <div className="flex items-center gap-2.5 mb-4">
+                <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-white border border-white/10">
+                  <img src="/ZURI.png" alt="ZURI logo" className="h-6 w-auto object-contain" />
+                </span>
+                <span className="text-base font-medium tracking-wide">ZURI</span>
               </div>
-              <p className="text-gray-500 text-sm">
+              <p className="text-gray-500 text-sm font-normal leading-relaxed">
                 Orders and payments for modern businesses.
               </p>
             </div>
             <div>
-              <h4 className="font-semibold mb-4">Product</h4>
-              <ul className="space-y-2 text-gray-400 text-sm">
-                <li><Link to="/scan" className="hover:text-zuri-yellow transition">How It Works</Link></li>
-                <li><a href="#pricing" className="hover:text-zuri-yellow transition">Pricing</a></li>
-                <li><a href="#" className="hover:text-zuri-yellow transition">Features</a></li>
+              <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-4">Product</h4>
+              <ul className="space-y-2.5 text-gray-400 text-sm font-normal">
+                <li><Link to="/scan" className="hover:text-white transition-colors">How it works</Link></li>
+                <li><Link to="/pricing" className="hover:text-white transition-colors">Pricing</Link></li>
+                <li><Link to="/waitlist" className="hover:text-white transition-colors">Waitlist</Link></li>
               </ul>
             </div>
             <div>
-              <h4 className="font-semibold mb-4">Company</h4>
-              <ul className="space-y-2 text-gray-400 text-sm">
-                <li><a href="#" className="hover:text-zuri-yellow transition">About</a></li>
-                <li><a href="#" className="hover:text-zuri-yellow transition">Blog</a></li>
-                <li><a href="#" className="hover:text-zuri-yellow transition">Careers</a></li>
+              <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-4">Company</h4>
+              <ul className="space-y-2.5 text-gray-400 text-sm font-normal">
+                <li><a href="#" className="hover:text-white transition-colors">About</a></li>
+                <li><a href="#" className="hover:text-white transition-colors">Blog</a></li>
+                <li><a href="#" className="hover:text-white transition-colors">Careers</a></li>
               </ul>
             </div>
             <div>
-              <h4 className="font-semibold mb-4">Legal</h4>
-              <ul className="space-y-2 text-gray-400 text-sm">
-                <li><Link to="/privacy" className="hover:text-zuri-yellow transition">Terms & Privacy</Link></li>
-                <li><a href={`mailto:${CONTACT_EMAIL}`} className="hover:text-zuri-yellow transition">Contact Us</a></li>
+              <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-4">Legal</h4>
+              <ul className="space-y-2.5 text-gray-400 text-sm font-normal">
+                <li><Link to="/privacy" className="hover:text-white transition-colors">Terms &amp; Privacy</Link></li>
+                <li><a href={`mailto:${CONTACT_EMAIL}`} className="hover:text-white transition-colors">Contact</a></li>
               </ul>
             </div>
           </div>
-          <div className="border-t border-gray-800 pt-8 text-center">
-            <p className="text-gray-400 text-sm">© 2026 ZURI HOLDINGS LIMITED. All rights reserved.</p>
+          <div className="border-t border-white/[0.08] pt-8 text-center">
+            <p className="text-gray-500 text-sm font-normal">© 2026 ZURI TECHNOLOGIES LIMITED. All rights reserved.</p>
           </div>
         </div>
       </footer>
 
-      {/* Beta / Contact Form Modal */}
+
       {showBetaForm && (
-        <div 
+        <div
           className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fadeIn"
           onClick={() => setShowBetaForm(false)}
         >
-          <div 
+          <div
             className="bg-white rounded-2xl border border-gray-200 p-8 max-w-md w-full transform animate-scaleIn"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex justify-between items-center mb-6">
-              <h3 className="text-2xl font-bold text-zuri-black">
+              <h3 className="text-xl font-medium text-zuri-black tracking-tight">
                 {formSource === 'enterprise' ? 'Get in touch' : 'Join the Beta'}
               </h3>
               <button
@@ -905,7 +981,7 @@ function Home(): JSX.Element {
                 </svg>
               </button>
             </div>
-            <p className="text-gray-700 mb-6">
+            <p className="text-gray-600 text-sm leading-relaxed mb-6 font-normal">
               {formSource === 'enterprise'
                 ? 'Tell us about your business and we\'ll get back to you.'
                 : 'Be among the first businesses to try ZURI. We\'ll be in touch soon!'}
@@ -928,14 +1004,14 @@ function Home(): JSX.Element {
                   type="button"
                   onClick={() => setShowBetaForm(false)}
                   disabled={sending}
-                  className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-50 transition disabled:opacity-70"
+                  className="flex-1 px-3 py-2.5 border border-gray-300 rounded-full text-sm font-medium text-gray-700 hover:bg-gray-50 transition disabled:opacity-70"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={sending}
-                  className="flex-1 px-3 py-2 bg-zuri-black text-white rounded-lg text-sm hover:bg-gray-800 transition disabled:opacity-70"
+                  className="flex-1 px-3 py-2.5 bg-zuri-black text-white rounded-full text-sm font-medium hover:bg-neutral-800 transition disabled:opacity-70"
                 >
                   {sending ? 'Sending…' : (formSource === 'enterprise' ? 'Send' : 'Join')}
                 </button>

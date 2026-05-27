@@ -3,6 +3,11 @@ import { useParams, useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import { SavedCard } from '../types'
 import { PaperPlaneLoader } from '../components/PaperPlaneLoader'
+import { apiUrl } from '../lib/apiBase'
+import { clearTapToken, getTapToken } from '../lib/tapAuthStorage'
+import { formatUserFacingError } from '../lib/formatApiError'
+import { preloadPaystackInline, startZuriPayment } from '../lib/paystackZuri'
+import { usePageSeo } from '../lib/seo'
 
 interface TapSession {
   token: string
@@ -25,6 +30,20 @@ function TapPayPage(): JSX.Element {
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null)
   const [charging, setCharging] = useState(false)
   const [paid, setPaid] = useState(false)
+  const businessName = session?.businessName?.trim() || 'Tap Payment'
+
+  usePageSeo({
+    title: `ZURI | ${businessName}`,
+    description: session
+      ? `Pay ${session.businessName} securely with Zuri Tap.`
+      : 'Complete a secure Zuri Tap payment.',
+    path: token ? `/tap/pay/${token}` : '/tap/pay',
+    noindex: true,
+  })
+
+  useEffect(() => {
+    preloadPaystackInline()
+  }, [])
 
   useEffect(() => {
     if (!token) {
@@ -32,25 +51,25 @@ function TapPayPage(): JSX.Element {
       setLoading(false)
       return
     }
-    axios.get<TapSession>(`/api/tap/session/${token}`)
+    axios.get<TapSession>(apiUrl(`/api/tap/session/${token}`))
       .then(res => setSession(res.data))
       .catch(err => {
-        setError(err.response?.data?.error || 'Session expired or not found')
+        setError(formatUserFacingError(err.response?.data, 'Session expired or not found'))
       })
       .finally(() => setLoading(false))
   }, [token])
 
   useEffect(() => {
-    const t = localStorage.getItem('zuri_tap_token')
+    const t = getTapToken()
     if (!t) return
-    axios.get('/api/tap-auth/me', { headers: { Authorization: `Bearer ${t}` } })
+    axios.get(apiUrl('/api/tap-auth/me'), { headers: { Authorization: `Bearer ${t}` } })
       .then(res => setTapUser(res.data))
-      .catch(() => localStorage.removeItem('zuri_tap_token'))
+      .catch(() => clearTapToken())
   }, [])
 
   useEffect(() => {
     if (!tapUser || !session) return
-    axios.get<SavedCard[]>(`/api/payment/saved-cards?email=${encodeURIComponent(tapUser.email)}&businessId=${session.businessId}`)
+    axios.get<SavedCard[]>(apiUrl(`/api/payment/saved-cards?email=${encodeURIComponent(tapUser.email)}&businessId=${session.businessId}`))
       .then(res => {
         const cards = res.data || []
         setSavedCards(cards)
@@ -63,7 +82,7 @@ function TapPayPage(): JSX.Element {
     if (!session || !tapUser || !selectedCardId || savedCards.length === 0) return
     setCharging(true)
     try {
-      await axios.post('/api/payment/charge-saved', {
+      await axios.post(apiUrl('/api/payment/charge-saved'), {
         email: tapUser.email,
         businessId: session.businessId,
         orderId: session.orderId,
@@ -71,29 +90,43 @@ function TapPayPage(): JSX.Element {
         saved_card_id: selectedCardId
       })
       setPaid(true)
-      axios.delete(`/api/tap/session/${session.token}`).catch(() => {})
+      axios.delete(apiUrl(`/api/tap/session/${session.token}`)).catch(() => {})
     } catch (err) {
-      alert(axios.isAxiosError(err) ? (err.response?.data?.error || 'Payment failed') : 'Payment failed')
+      alert(axios.isAxiosError(err) ? formatUserFacingError(err.response?.data, 'Payment failed') : 'Payment failed')
     } finally {
       setCharging(false)
     }
   }
 
-  const handlePayWithNewCard = (): void => {
+  const handlePayWithNewCard = async (): Promise<void> => {
     if (!session || !tapUser) return
-    axios.post('/api/payment/initialize', {
-      email: tapUser.email,
-      amount: session.amount,
-      orderId: session.orderId,
-      businessId: session.businessId,
-      saveCard: true,
-      callbackUrl: `${window.location.origin}/payment-done?tap=1`
-    })
-      .then(res => {
-        if (res.data?.authorizationUrl) window.location.href = res.data.authorizationUrl
-        else alert('Could not start payment')
+    try {
+      const res = await axios.post<{ authorizationUrl: string; accessCode?: string; reference: string }>(apiUrl('/api/payment/initialize'), {
+        email: tapUser.email,
+        amount: session.amount,
+        orderId: session.orderId,
+        businessId: session.businessId,
+        saveCard: true,
+        callbackUrl: `${window.location.origin}/payment-done?reference=${session.orderId}&tap=1`
       })
-      .catch(() => alert('Could not start payment'))
+      await startZuriPayment(
+        {
+          authorizationUrl: res.data.authorizationUrl,
+          accessCode: res.data.accessCode,
+          reference: res.data.reference || session.orderId,
+        },
+        {
+          successPath: `${window.location.origin}/payment-done?reference=${encodeURIComponent(session.orderId)}&tap=1`,
+          onError: (msg) => alert(msg || 'Could not start payment'),
+        },
+      )
+    } catch (err: unknown) {
+      if (axios.isAxiosError(err)) {
+        alert(formatUserFacingError(err.response?.data, 'Could not start payment'))
+        return
+      }
+      alert('Could not start payment')
+    }
   }
 
   if (loading) {

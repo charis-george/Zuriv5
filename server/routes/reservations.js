@@ -2,7 +2,7 @@ const express = require('express')
 const router = express.Router()
 const { getDb } = require('../database')
 const { requireBusinessAuth } = require('../middleware/auth')
-const { sendBusinessEmail } = require('../lib/notifications')
+const { queueBusinessEmail } = require('../lib/notifications')
 
 const supabase = getDb()
 
@@ -62,9 +62,9 @@ router.post('/', async (req, res) => {
     const io = req.app.get('io')
     if (io) io.to(`business-${businessId}`).emit('new-reservation', reservation)
 
-    // Email notification to business (best effort)
+    // Email notification to business (best effort, non-blocking)
     const humanWhen = new Date(iso).toLocaleString()
-    await sendBusinessEmail({
+    queueBusinessEmail({
       businessId,
       subject: `New table reservation request (${humanWhen})`,
       text: [

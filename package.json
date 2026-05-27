@@ -3,14 +3,18 @@
   "version": "1.0.0",
   "description": "ZURI - QR-based digital ordering and analytics system",
   "main": "server/index.js",
+  "packageManager": "npm@10.9.2",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "cd server && npm run dev",
     "dev:client": "cd client && npm run dev",
-    "postinstall": "cd client && npm install --include=dev && cd ../server && npm ci",
-    "build": "cd client && npm install --include=dev && npm run build",
+    "build": "cd client && npm install && npm run build",
     "start": "cd server && node index.js",
-    "install:all": "npm install && cd server && npm install && cd ../client && npm install"
+    "install:all": "npm install && cd server && npm install && cd ../client && npm install",
+    "postinstall": "node scripts/postinstall.js"
   },
   "keywords": ["qr", "ordering", "restaurant", "pos"],
   "author": "",

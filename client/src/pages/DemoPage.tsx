@@ -1,8 +1,30 @@
 import { useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
+import axios from 'axios'
 import { apiUrl } from '../lib/apiBase'
+import { formatUserFacingError } from '../lib/formatApiError'
+import { CustomDropdown } from '../components/CustomDropdown'
+import { organizationJsonLd, usePageSeo } from '../lib/seo'
+
+const CONTACT_EMAIL = 'info@zuriqo.com'
 
 function DemoPage(): JSX.Element {
+  usePageSeo({
+    title: 'Book a ZURI Demo | QR Ordering for Food Businesses',
+    description: 'Book a ZURI demo to see QR ordering, digital menus, payments, reservations, storefront customization, and AI guest menu tools built for African venues.',
+    path: '/demo',
+    jsonLd: [
+      organizationJsonLd,
+      {
+        '@context': 'https://schema.org',
+        '@type': 'WebPage',
+        name: 'Book a ZURI Demo',
+        url: 'https://zuriqo.com/demo',
+        description: 'Demo request page for ZURI QR ordering and restaurant operations software.'
+      }
+    ]
+  })
+
   const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
   const [company, setCompany] = useState('')
@@ -19,29 +41,48 @@ function DemoPage(): JSX.Element {
     setSubmitting(true)
     setSuccess(null)
     setError(null)
-    try {
-      const details = [
-        fullName && `Full name: ${fullName}`,
-        company && `Company: ${company}`,
-        role && `Role: ${role}`,
-        teamSize && `Team size: ${teamSize}`,
-        message && `Notes: ${message}`,
-      ].filter(Boolean).join('\n')
+    const details = [
+      fullName && `Full name: ${fullName}`,
+      company && `Company: ${company}`,
+      role && `Role: ${role}`,
+      teamSize && `Team size: ${teamSize}`,
+      message && `Notes: ${message}`,
+    ].filter(Boolean).join('\n')
 
-      const res = await fetch(apiUrl('/api/contact'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim(), source: 'demo', message: details }),
-      })
-      const data = await res.json().catch(() => ({}))
-      if (res.ok && data?.success) {
+    try {
+      const { data } = await axios.post<{
+        success?: boolean
+        error?: string
+      }>(apiUrl('/api/contact'), { email: email.trim(), source: 'demo', message: details })
+      if (data?.success) {
         setSuccess('Thanks for booking a demo. We will reach out shortly.')
         setFullName(''); setCompany(''); setRole(''); setTeamSize(''); setMessage('')
       } else {
         setError(data?.error || 'Something went wrong. Please try again.')
       }
-    } catch {
-      setError('Something went wrong. Please try again.')
+    } catch (err) {
+      if (axios.isAxiosError(err) && err.response?.status === 503) {
+        const d = err.response.data as { fallbackMailto?: boolean; subject?: string }
+        if (d?.fallbackMailto) {
+          const subject = encodeURIComponent(d.subject || `ZURI Demo request: ${email.trim()}`)
+          const body = encodeURIComponent(`Email: ${email.trim()}\nSource: demo\n${details ? `Message:\n${details}` : ''}`)
+          window.location.href = `mailto:${CONTACT_EMAIL}?subject=${subject}&body=${body}`
+          setSuccess('Your email app will open so you can send the request to us. Thanks!')
+          return
+        }
+      }
+      if (axios.isAxiosError(err) && err.response?.status === 404) {
+        setError('We could not submit your request right now. Please try again in a moment.')
+        return
+      }
+      if (axios.isAxiosError(err) && err.response?.data && typeof (err.response.data as { error?: string }).error === 'string') {
+        setError(formatUserFacingError(err.response.data, 'We could not submit your request right now. Please try again.'))
+        return
+      }
+      const subject = encodeURIComponent(`ZURI Demo request: ${email.trim()}`)
+      const body = encodeURIComponent(`Email: ${email.trim()}\nSource: demo${details ? `\n${details}` : ''}`)
+      window.location.href = `mailto:${CONTACT_EMAIL}?subject=${subject}&body=${body}`
+      setSuccess('Your email app will open so you can send the request to us. Thanks!')
     } finally {
       setSubmitting(false)
     }
@@ -82,13 +123,18 @@ function DemoPage(): JSX.Element {
               <input type="text" value={company} onChange={(e) => setCompany(e.target.value)} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm" placeholder="Business name" />
               <input type="text" value={role} onChange={(e) => setRole(e.target.value)} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm" placeholder="Role" />
             </div>
-            <select value={teamSize} onChange={(e) => setTeamSize(e.target.value)} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
-              <option value="">Team size</option>
-              <option value="1-5">1–5 people</option>
-              <option value="6-20">6–20 people</option>
-              <option value="21-50">21–50 people</option>
-              <option value="51+">51+ people</option>
-            </select>
+            <CustomDropdown
+              options={[
+                { value: '1-5', label: '1–5 people' },
+                { value: '6-20', label: '6–20 people' },
+                { value: '21-50', label: '21–50 people' },
+                { value: '51+', label: '51+ people' },
+              ]}
+              value={teamSize}
+              onChange={(val) => setTeamSize(val)}
+              placeholder="Team size"
+              size="sm"
+            />
             <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={4} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm resize-none" placeholder="Anything specific you want to see?" />
             {error && <p className="text-xs text-red-600">{error}</p>}
             {success && <p className="text-xs text-green-600">{success}</p>}
