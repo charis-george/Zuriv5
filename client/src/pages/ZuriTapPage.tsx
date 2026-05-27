@@ -1,13 +1,31 @@
 import { Link } from 'react-router-dom'
+import { organizationJsonLd, usePageSeo } from '../lib/seo'
 
 function ZuriTapPage(): JSX.Element {
+  usePageSeo({
+    title: 'Zuri Tap | Fast Customer Payments Without QR Scans',
+    description: 'Zuri Tap lets customers pay a business with a short code and saved card, while businesses send payment requests from their ZURI dashboard.',
+    path: '/zuri-tap',
+    jsonLd: [
+      organizationJsonLd,
+      {
+        '@context': 'https://schema.org',
+        '@type': 'WebPage',
+        name: 'Zuri Tap',
+        url: 'https://zuriqo.com/zuri-tap',
+        description: 'Pay ZURI businesses with a short Tap code without scanning a QR code.',
+        primaryImageOfPage: 'https://zuriqo.com/ZURI.png'
+      }
+    ]
+  })
+
   return (
     <div className="min-h-screen bg-[#fefbf5]">
       <header className="sticky top-0 z-50 bg-transparent">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-2">
           <div className="flex items-center justify-between h-10">
             <Link to="/" className="flex items-center gap-2">
-              <img src="/ZURI.png" alt="" className="h-8 w-auto object-contain" />
+              <img src="/ZURI.png" alt="ZURI logo" className="h-8 w-auto object-contain" />
               <span className="text-[11px] tracking-[0.32em] text-zuri-black uppercase">Z U R I</span>
             </Link>
             <nav className="hidden md:flex items-center gap-6 text-sm text-gray-600">

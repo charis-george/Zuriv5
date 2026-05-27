@@ -3,6 +3,10 @@ import { useNavigate, useParams, useSearchParams, Link } from 'react-router-dom'
 import axios from 'axios'
 import { PLAN_LABELS, PLAN_PRICES, PLAN_PRICES_YEARLY, type PlanId, type BillingInterval, type Business } from '../types'
 import { PaperPlaneLoader } from '../components/PaperPlaneLoader'
+import { apiUrl } from '../lib/apiBase'
+import { preloadPaystackInline, startZuriPayment } from '../lib/paystackZuri'
+import { formatUserFacingError } from '../lib/formatApiError'
+import { preloadPaystackInline, startZuriPayment } from '../lib/paystackZuri'
 
 function parseAmount(plan: PlanId, interval: BillingInterval): { display: string; numeric: number } {
   const table = interval === 'yearly' ? PLAN_PRICES_YEARLY : PLAN_PRICES
@@ -25,7 +29,7 @@ function SubscriptionSummary(): JSX.Element {
 
   const plan: PlanId | null = useMemo(() => {
     const p = (planParam || '').toLowerCase()
-    const allowed: PlanId[] = ['starter', 'growth', 'pro', 'zuri_plus']
+    const allowed: PlanId[] = ['starter', 'growth', 'scale']
     return allowed.includes(p as PlanId) ? (p as PlanId) : null
   }, [planParam])
 
@@ -45,7 +49,7 @@ function SubscriptionSummary(): JSX.Element {
     }
     setLoading(true)
     try {
-      const { data: business } = await axios.get<Business>(`/api/business/${businessId}`, {
+      const { data: business } = await axios.get<Business>(apiUrl(`/api/business/${businessId}`), {
         headers: { Authorization: `Bearer ${token}` }
       })
       if (!business?.email) {
@@ -60,22 +64,32 @@ function SubscriptionSummary(): JSX.Element {
         callbackUrl: `${window.location.origin}/upgrade-done`,
         interval
       }
-      const { data } = await axios.post<{ authorizationUrl: string }>('/api/subscription/initialize', body, {
+      const { data } = await axios.post<{ authorizationUrl: string; accessCode?: string; reference: string }>(apiUrl('/api/subscription/initialize'), body, {
         headers: { Authorization: `Bearer ${token}` }
       })
-      if (data?.authorizationUrl) {
-        window.location.href = data.authorizationUrl
-      } else {
-        setError('Could not start payment. Please try again.')
-      }
+      await startZuriPayment(
+        {
+          authorizationUrl: data.authorizationUrl,
+          accessCode: data.accessCode,
+          reference: data.reference,
+        },
+        {
+          successPath: `${window.location.origin}/upgrade-done`,
+          onError: (msg) => setError(msg || 'Could not start payment. Please try again.'),
+        },
+      )
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
         if (err.response?.status === 401 || err.response?.status === 403) {
           setError('Please log in to your business dashboard to subscribe to a plan.')
           localStorage.removeItem('zuri_business_token')
           localStorage.removeItem('zuri_business_id')
+        } else if (err.response?.status === 404) {
+          setError('Subscription is temporarily unavailable. Please try again shortly.')
+        } else if (err.response?.status === 422) {
+          setError(formatUserFacingError(err.response?.data, 'Your business account could not be loaded. Try logging out and back in.'))
         } else {
-          setError(err.response?.data?.error || 'Failed to start subscription payment.')
+          setError(formatUserFacingError(err.response?.data, 'Failed to start subscription payment.'))
         }
       } else {
         setError('Failed to start subscription payment.')
@@ -84,6 +98,10 @@ function SubscriptionSummary(): JSX.Element {
       setLoading(false)
     }
   }, [plan, interval])
+
+  useEffect(() => {
+    preloadPaystackInline()
+  }, [])
 
   useEffect(() => {
     if (!autopay || !plan || autopayStarted.current) return
@@ -118,7 +136,7 @@ function SubscriptionSummary(): JSX.Element {
           <h1 className="text-lg font-semibold text-zuri-black mb-2">Plan not found</h1>
           <p className="text-gray-500 text-sm mb-6">Please go back to the pricing section and choose a valid plan.</p>
           <Link
-            to="/#pricing"
+            to="/pricing"
             className="inline-block bg-zuri-orange text-white px-3 py-1.5 rounded-lg text-sm hover:bg-zuri-orange-dark transition"
           >
             Back to pricing

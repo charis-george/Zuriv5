@@ -1,4 +1,15 @@
-import type { StorefrontConfig } from '../types'
+import type { AiGuestStorefrontConfig, StorefrontConfig } from '../types'
+
+export const DEFAULT_AI_GUEST: AiGuestStorefrontConfig = {
+  trendingOnMenu: true,
+  intelligentUpsell: true,
+  personalisedRecs: true,
+  tasteSortEnabled: true,
+  translationsEnabled: true,
+  dietaryPromptEnabled: true,
+  localPaymentHints: true,
+  sharedTableHints: false
+}
 
 /** Single source of truth for storefront defaults (customer menu + customizer). */
 export const DEFAULT_STOREFRONT_CONFIG: StorefrontConfig = {
@@ -9,8 +20,10 @@ export const DEFAULT_STOREFRONT_CONFIG: StorefrontConfig = {
   fontFamily: 'sans',
   titleSize: 32,
   menuItemFontScale: 1,
+  menuTemplate: 'classic',
   layout: 'grid',
   gridStyle: 'two_col',
+  cardLayout: 'stacked',
   showPhotos: true,
   showDescriptions: true,
   showCalories: false,
@@ -36,7 +49,10 @@ export type StorefrontThemeColors = {
 }
 
 export function mergeStorefrontConfig(partial?: Partial<StorefrontConfig> | null): StorefrontConfig {
-  return { ...DEFAULT_STOREFRONT_CONFIG, ...(partial ?? {}) }
+  const merged = { ...DEFAULT_STOREFRONT_CONFIG, ...(partial ?? {}) }
+  merged.aiGuest = { ...DEFAULT_AI_GUEST, ...(partial?.aiGuest ?? {}) }
+  if (!merged.cardLayout) merged.cardLayout = 'stacked'
+  return merged
 }
 
 export function getStorefrontTheme(config: StorefrontConfig): StorefrontThemeColors {
@@ -55,6 +71,19 @@ export function storefrontFontFamily(config: StorefrontConfig): string {
   return 'Inter, system-ui, sans-serif'
 }
 
+function hexToRgba(hex: string, alpha: number): string {
+  const h = hex.replace('#', '')
+  const full = h.length === 3 ? h.split('').map((x) => x + x).join('') : h
+  if (full.length !== 6 || Number.isNaN(parseInt(full, 16))) {
+    return `rgba(249, 115, 22, ${alpha})`
+  }
+  const n = parseInt(full, 16)
+  const r = (n >> 16) & 255
+  const g = (n >> 8) & 255
+  const b = n & 255
+  return `rgba(${r},${g},${b},${alpha})`
+}
+
 export function getHeroBackground(config: StorefrontConfig): string {
   const c = config.brandColor
   switch (config.heroOverlay) {
@@ -67,6 +96,23 @@ export function getHeroBackground(config: StorefrontConfig): string {
     case 'gradient':
     default:
       return `linear-gradient(135deg, ${c}, #111827)`
+  }
+}
+
+/** Scrim over a hero photo so title/tagline stay readable; follows `heroOverlay`. */
+export function getHeroBannerScrim(config: StorefrontConfig): string {
+  const c = config.brandColor
+  const tint = hexToRgba(c, 0.5)
+  switch (config.heroOverlay) {
+    case 'solid':
+      return `linear-gradient(180deg, ${hexToRgba(c, 0.35)} 0%, ${hexToRgba(c, 0.72)} 100%)`
+    case 'dim':
+      return 'linear-gradient(180deg, rgba(0,0,0,0.2) 0%, rgba(0,0,0,0.78) 100%)'
+    case 'split':
+      return `linear-gradient(110deg, ${tint} 0%, ${tint} 44%, rgba(15,23,42,0.88) 44%, rgba(15,23,42,0.92) 100%)`
+    case 'gradient':
+    default:
+      return `linear-gradient(135deg, ${tint} 0%, rgba(17,24,39,0.88) 100%)`
   }
 }
 

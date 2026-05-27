@@ -1,0 +1,1 @@
+function E(N,t){const e=Number(N);return!Number.isFinite(e)||e<=0?0:e*(4/100)+50}function n(N,t){const e=Number(N);return!Number.isFinite(e)||e<=0?0:Math.max(0,e-E(e))}function T(N){return N==="ticketing"?"4% + ₦50 per successful sale":`${1.5}% per successful sale`}const A=`Ticketing: ${T("ticketing")}. Menu orders: ${T("menu")}.`;export{A as T,n as a,E as c,T as f};

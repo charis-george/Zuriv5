@@ -8,9 +8,45 @@ const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../database');
 const { getBusinessPlan, canAddBusinessLogo } = require('../lib/plans');
 const { signBusinessToken, requireBusinessAuth } = require('../middleware/auth');
-const { getTransporter } = require('../lib/email');
+const { getTransporter, sendMailWithTimeout } = require('../lib/email');
+const { queueBusinessWelcomeEmail } = require('../lib/welcomeEmail');
 
 const supabase = getDb();
+
+const RESEND_FROM =
+  process.env.RESEND_FROM || process.env.SMTP_FROM || 'ZURI <onboarding@resend.dev>';
+
+function getResendApiKey() {
+  const key = process.env.RESEND_API_KEY;
+  if (!key || typeof key !== 'string' || !key.trim()) return null;
+  return key.trim();
+}
+
+async function sendViaResendApi(apiKey, payload, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      const err = new Error(
+        `Resend API ${response.status}${text ? `: ${text.slice(0, 300)}` : ''}`
+      );
+      err.code = `RESEND_HTTP_${response.status}`;
+      throw err;
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function normalizeBusinessEmail(email) {
   if (email == null || typeof email !== 'string') return '';
@@ -18,7 +54,15 @@ function normalizeBusinessEmail(email) {
 }
 
 function isGrowthPlus(plan) {
-  return plan === 'growth' || plan === 'pro' || plan === 'zuri_plus' || plan === 'enterprise' || plan === 'basic' || plan === 'advanced';
+  return (
+    plan === 'growth' ||
+    plan === 'scale' ||
+    plan === 'pro' ||
+    plan === 'zuri_plus' ||
+    plan === 'enterprise' ||
+    plan === 'basic' ||
+    plan === 'advanced'
+  );
 }
 
 // In-memory store for password reset tokens (use DB + email in production)
@@ -41,10 +85,21 @@ const logoUpload = multer({
   }
 });
 
+const bannerUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 4 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ok = /^image\/(jpeg|jpg|png|gif|webp)$/i.test(file.mimetype);
+    cb(ok ? null : new Error('Only images allowed'), ok);
+  }
+});
+
 // Register business
 router.post('/register', async (req, res) => {
   try {
-    const { name, email, password, phone, address } = req.body;
+    const { name, email, password, phone, address, businessMode } = req.body;
+    const normalizedBusinessMode = businessMode === 'ticketing' ? 'ticketing' : 'menu';
+
 
     if (!name || !email || !password) {
       return res.status(400).json({ error: 'Name, email, and password are required' });
@@ -78,7 +133,8 @@ router.post('/register', async (req, res) => {
         email: emailNorm,
         password: hashedPassword,
         phone: phone || null,
-        address: address || null
+        address: address || null,
+        business_mode: normalizedBusinessMode
       })
       .select()
       .single();
@@ -88,10 +144,13 @@ router.post('/register', async (req, res) => {
       return res.status(500).json({ error: 'Failed to register business' });
     }
 
+    queueBusinessWelcomeEmail({ email: data.email, name: data.name });
+
     res.json({
       id: data.id,
       name: data.name,
       email: data.email,
+      businessMode: data.business_mode || 'menu',
       message: 'Business registered successfully'
     });
   } catch (error) {
@@ -141,10 +200,10 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Remove password from response
-    const { password: _, ...businessData } = business;
+    // Remove password from response; expose camelCase for clients
+    const { password: _, business_mode, ...businessData } = business;
     const token = signBusinessToken(business.id);
-    res.json({ ...businessData, token });
+    res.json({ ...businessData, businessMode: business_mode || 'menu', token });
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Database error' });
@@ -158,11 +217,12 @@ router.post('/forgot-password', async (req, res) => {
     if (!email || typeof email !== 'string' || !email.trim()) {
       return res.status(400).json({ error: 'Email is required' });
     }
+    const toEmail = email.trim().toLowerCase();
 
     const { data: business, error } = await supabase
       .from('businesses')
       .select('id')
-      .eq('email', email.trim().toLowerCase())
+      .eq('email', toEmail)
       .single();
 
     if (error || !business) {
@@ -176,22 +236,42 @@ router.post('/forgot-password', async (req, res) => {
     const baseUrl = req.get('origin') || process.env.BASE_URL || process.env.FRONTEND_URL || 'http://localhost:5173';
     const resetLink = `${baseUrl}/business/reset-password?token=${token}`;
 
-    const transporter = getTransporter();
-    if (transporter) {
-      try {
-        await transporter.sendMail({
-          from: process.env.SMTP_FROM || process.env.SMTP_USER,
-          to: email.trim().toLowerCase(),
-          subject: 'Reset your ZURI business password',
-          text: `You requested a password reset for your ZURI business account. Click the link below to set a new password (valid for 1 hour):\n\n${resetLink}\n\nIf you didn't request this, you can ignore this email.`,
-          html: `<p>You requested a password reset for your ZURI business account.</p><p><a href="${resetLink}">Set a new password</a> (link valid for 1 hour).</p><p>If you didn't request this, you can ignore this email.</p>`
-        });
-      } catch (err) {
-        console.error('Password reset email error:', err);
-        return res.status(500).json({ error: 'Failed to send reset email. Please try again later.' });
+    const subject = 'Reset your ZURI business password';
+    const text = `You requested a password reset for your ZURI business account. Click the link below to set a new password (valid for 1 hour):\n\n${resetLink}\n\nIf you didn't request this, you can ignore this email.`;
+    const html = `<p>You requested a password reset for your ZURI business account.</p><p><a href="${resetLink}">Set a new password</a> (link valid for 1 hour).</p><p>If you didn't request this, you can ignore this email.</p>`;
+
+    // Best-effort: send email async; never block the HTTP response.
+    setImmediate(() => {
+      const resendApiKey = getResendApiKey();
+      if (resendApiKey) {
+        sendViaResendApi(
+          resendApiKey,
+          { from: RESEND_FROM, to: [toEmail], subject, text, html },
+          8000
+        ).catch((err) => console.error('Password reset email error (resend):', err));
+        return;
       }
-      return res.json({ success: true, message: 'If an account exists with this email, you will receive reset instructions.' });
-    }
+
+      const transporter = getTransporter();
+      if (!transporter) {
+        console.warn('[ZURI] Password reset email skipped: set RESEND_API_KEY or SMTP_* env vars.');
+        return;
+      }
+
+      sendMailWithTimeout(
+        transporter,
+        {
+          from: process.env.SMTP_FROM || process.env.SMTP_USER,
+          to: toEmail,
+          subject,
+          text,
+          html
+        },
+        8000
+      ).catch((err) => console.error('Password reset email error (smtp):', err));
+    });
+
+    return res.json({ success: true, message: 'If an account exists with this email, you will receive reset instructions.' });
 
     // No SMTP configured: return reset link for dev/testing only (do not expose in production)
     if (process.env.NODE_ENV !== 'production') {
@@ -245,7 +325,7 @@ router.get('/:id', async (req, res) => {
 
     const { data: business, error } = await supabase
       .from('businesses')
-      .select('id, name, email, phone, address, created_at, plan, paystack_public_key, bank_code, bank_name, account_number, account_name, logo_url, storefront_config, storefront_details')
+      .select('id, name, email, phone, address, created_at, plan, paystack_public_key, bank_code, bank_name, account_number, account_name, logo_url, storefront_config, storefront_details, business_mode, storefront_ai_generations, business_group_id')
       .eq('id', id)
       .single();
 
@@ -265,7 +345,10 @@ router.get('/:id', async (req, res) => {
       paystackPublicKey,
       logoUrl: business.logo_url || null,
       storefrontConfig: business.storefront_config || null,
-      storefrontDetails: business.storefront_details || null
+      storefrontDetails: business.storefront_details || null,
+      businessMode: business.business_mode || 'menu',
+      storefrontAiGenerations: Number(business.storefront_ai_generations || 0),
+      businessGroupId: business.business_group_id || null
     };
     if (business.bank_name || business.account_name) {
       payload.bankAccount = {
@@ -288,8 +371,14 @@ router.patch('/:id', requireBusinessAuth, async (req, res) => {
     if (id !== req.businessId) {
       return res.status(403).json({ error: 'You can only update your own business' });
     }
-    const { bank_code, bank_name, account_number, account_name, logo_url, password } = req.body;
+    const { bank_code, bank_name, account_number, account_name, logo_url, password, name, businessMode, businessGroupId } = req.body;
     const updates = {};
+    if (name !== undefined) {
+      const trimmed = typeof name === 'string' ? name.trim() : '';
+      if (!trimmed) return res.status(400).json({ error: 'Business name cannot be empty' });
+      if (trimmed.length > 80) return res.status(400).json({ error: 'Business name is too long' });
+      updates.name = trimmed;
+    }
     if (bank_code !== undefined) updates.bank_code = bank_code || null;
     if (bank_name !== undefined) updates.bank_name = bank_name || null;
     if (account_number !== undefined) updates.account_number = account_number ? String(account_number).trim() : null;
@@ -322,18 +411,47 @@ router.patch('/:id', requireBusinessAuth, async (req, res) => {
       if (!canAddBusinessLogo(plan)) return res.status(403).json({ error: 'Business logo is available on Starter plan and above.' });
       updates.logo_url = logo_url || null;
     }
+    if (businessMode !== undefined) {
+      if (businessMode !== 'menu' && businessMode !== 'ticketing') {
+        return res.status(400).json({ error: 'Invalid business mode' });
+      }
+      updates.business_mode = businessMode;
+    }
+    if (businessGroupId !== undefined) {
+      const v = businessGroupId && String(businessGroupId).trim() ? String(businessGroupId).trim().slice(0, 80) : null;
+      updates.business_group_id = v;
+    }
     if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No fields to update' });
 
-    const { data, error } = await supabase.from('businesses').update(updates).eq('id', id).select('id, bank_name, bank_code, account_number, account_name, logo_url').single();
+    const { data, error } = await supabase
+      .from('businesses')
+      .update(updates)
+      .eq('id', id)
+      .select('id, name, bank_name, bank_code, account_number, account_name, logo_url, business_mode, business_group_id')
+      .single();
     if (error) return res.status(500).json({ error: 'Update failed' });
+    try {
+      const io = req.app && req.app.get ? req.app.get('io') : null;
+      if (io && updates.business_mode !== undefined) {
+        io.to(`storefront-${id}`).emit('storefront-updated', {
+          businessId: id,
+          businessMode: data.business_mode || 'menu'
+        });
+      }
+    } catch (e) {
+      console.error('Storefront businessMode broadcast error:', e);
+    }
     res.json({
       id: data.id,
+      name: data.name,
       bankAccount: data.account_number ? {
         bankName: data.bank_name,
         accountNumberMasked: `****${String(data.account_number).slice(-4)}`,
         accountName: data.account_name
       } : null,
-      logoUrl: data.logo_url || null
+      logoUrl: data.logo_url || null,
+      businessMode: data.business_mode || 'menu',
+      businessGroupId: data.business_group_id || null
     });
   } catch (error) {
     console.error('Update business error:', error);
@@ -414,6 +532,126 @@ router.post('/:id/upload-logo', requireBusinessAuth, logoUpload.single('logo'), 
   }
 });
 
+// Upload storefront hero banner (Growth+) — merges `heroBannerUrl` into storefront_config
+router.post(
+  '/:id/upload-storefront-banner',
+  requireBusinessAuth,
+  bannerUpload.single('banner'),
+  async (req, res) => {
+    try {
+      const { id: businessId } = req.params;
+      if (businessId !== req.businessId) {
+        return res.status(403).json({ error: 'You can only update your own business' });
+      }
+      const plan = await getBusinessPlan(businessId);
+      if (!isGrowthPlus(plan)) {
+        return res.status(403).json({ error: 'Hero banner is available on Growth plan and above.' });
+      }
+      if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'No image file provided' });
+
+      const ext = path.extname(req.file.originalname) || '.jpg';
+      const safeExt = /^\.(jpe?g|png|gif|webp)$/i.test(ext) ? ext : '.jpg';
+      const filePath = `storefront-banners/${businessId}/${uuidv4()}${safeExt}`;
+
+      const { error: uploadError } = await supabase.storage.from(BUCKET).upload(filePath, req.file.buffer, {
+        contentType: req.file.mimetype,
+        upsert: false
+      });
+      if (uploadError) {
+        console.error('Banner upload error:', uploadError);
+        return res.status(500).json({ error: uploadError.message || 'Failed to upload banner' });
+      }
+
+      const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(filePath);
+      const bannerUrl = urlData.publicUrl;
+
+      const { data: row, error: fetchErr } = await supabase
+        .from('businesses')
+        .select('storefront_config')
+        .eq('id', businessId)
+        .single();
+      if (fetchErr || !row) return res.status(500).json({ error: 'Could not load storefront settings' });
+
+      const prevCfg = row.storefront_config && typeof row.storefront_config === 'object' ? row.storefront_config : {};
+      const nextCfg = { ...prevCfg, heroBannerUrl: bannerUrl };
+
+      const { data: updated, error: updateError } = await supabase
+        .from('businesses')
+        .update({ storefront_config: nextCfg })
+        .eq('id', businessId)
+        .select('storefront_config')
+        .single();
+      if (updateError) return res.status(500).json({ error: 'Failed to save banner' });
+
+      try {
+        const io = req.app && req.app.get ? req.app.get('io') : null;
+        if (io) {
+          io.to(`storefront-${businessId}`).emit('storefront-updated', {
+            businessId,
+            config: updated.storefront_config || null
+          });
+        }
+      } catch (e) {
+        console.error('Storefront socket broadcast error:', e);
+      }
+
+      res.json({ heroBannerUrl: bannerUrl, storefrontConfig: updated.storefront_config || nextCfg });
+    } catch (err) {
+      if (err.message && err.message.includes('Only images')) return res.status(400).json({ error: err.message });
+      console.error('Upload storefront banner error:', err);
+      res.status(500).json({ error: 'Failed to upload banner' });
+    }
+  }
+);
+
+router.delete('/:id/storefront-banner', requireBusinessAuth, async (req, res) => {
+  try {
+    const { id: businessId } = req.params;
+    if (businessId !== req.businessId) {
+      return res.status(403).json({ error: 'You can only update your own business' });
+    }
+    const plan = await getBusinessPlan(businessId);
+    if (!isGrowthPlus(plan)) {
+      return res.status(403).json({ error: 'Hero banner is available on Growth plan and above.' });
+    }
+
+    const { data: row, error: fetchErr } = await supabase
+      .from('businesses')
+      .select('storefront_config')
+      .eq('id', businessId)
+      .single();
+    if (fetchErr || !row) return res.status(404).json({ error: 'Business not found' });
+
+    const prevCfg = row.storefront_config && typeof row.storefront_config === 'object' ? { ...row.storefront_config } : {};
+    delete prevCfg.heroBannerUrl;
+
+    const { data: updated, error: updateError } = await supabase
+      .from('businesses')
+      .update({ storefront_config: prevCfg })
+      .eq('id', businessId)
+      .select('storefront_config')
+      .single();
+    if (updateError) return res.status(500).json({ error: 'Failed to remove banner' });
+
+    try {
+      const io = req.app && req.app.get ? req.app.get('io') : null;
+      if (io) {
+        io.to(`storefront-${businessId}`).emit('storefront-updated', {
+          businessId,
+          config: updated.storefront_config || null
+        });
+      }
+    } catch (e) {
+      console.error('Storefront socket broadcast error:', e);
+    }
+
+    res.json({ success: true, storefrontConfig: updated.storefront_config || prevCfg });
+  } catch (err) {
+    console.error('Remove storefront banner error:', err);
+    res.status(500).json({ error: 'Something went wrong' });
+  }
+});
+
 // Storefront customizer (Growth+) — save published storefront config/details
 router.patch('/:id/storefront', requireBusinessAuth, async (req, res) => {
   try {
@@ -476,6 +714,84 @@ router.patch('/:id/storefront', requireBusinessAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('Storefront update error:', err);
+    res.status(500).json({ error: 'Something went wrong' });
+  }
+});
+
+// AI guest menu toggles + optional menu translations (Growth+) — merges into storefront JSON
+router.patch('/:id/ai-menu-settings', requireBusinessAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (id !== req.businessId) {
+      return res.status(403).json({ error: 'You can only update your own business' });
+    }
+    const { aiGuest, menuTranslations } = req.body || {};
+    if (aiGuest !== undefined && (typeof aiGuest !== 'object' || aiGuest === null)) {
+      return res.status(400).json({ error: 'aiGuest must be an object when provided' });
+    }
+    if (menuTranslations !== undefined && (typeof menuTranslations !== 'object' || menuTranslations === null)) {
+      return res.status(400).json({ error: 'menuTranslations must be an object when provided' });
+    }
+    if (aiGuest === undefined && menuTranslations === undefined) {
+      return res.status(400).json({ error: 'Provide aiGuest and/or menuTranslations' });
+    }
+
+    const plan = await getBusinessPlan(id);
+    if (!isGrowthPlus(plan || 'free')) {
+      return res.status(403).json({ error: 'Upgrade to Growth to use AI guest menu controls.' });
+    }
+
+    const { data: row, error: fetchErr } = await supabase
+      .from('businesses')
+      .select('storefront_config, storefront_details')
+      .eq('id', id)
+      .single();
+    if (fetchErr || !row) return res.status(404).json({ error: 'Business not found' });
+
+    const prevCfg = row.storefront_config && typeof row.storefront_config === 'object' ? row.storefront_config : {};
+    const prevDet = row.storefront_details && typeof row.storefront_details === 'object' ? row.storefront_details : {};
+
+    const nextCfg =
+      aiGuest !== undefined
+        ? { ...prevCfg, aiGuest: { ...(prevCfg.aiGuest && typeof prevCfg.aiGuest === 'object' ? prevCfg.aiGuest : {}), ...aiGuest } }
+        : prevCfg;
+    const nextDet =
+      menuTranslations !== undefined
+        ? { ...prevDet, menuTranslations: { ...(prevDet.menuTranslations || {}), ...menuTranslations } }
+        : prevDet;
+
+    const { data, error } = await supabase
+      .from('businesses')
+      .update({ storefront_config: nextCfg, storefront_details: nextDet })
+      .eq('id', id)
+      .select('storefront_config, storefront_details')
+      .single();
+
+    if (error) {
+      console.error('ai-menu-settings update error:', error);
+      return res.status(500).json({ error: 'Failed to save AI menu settings' });
+    }
+
+    try {
+      const io = req.app && req.app.get ? req.app.get('io') : null;
+      if (io) {
+        io.to(`storefront-${id}`).emit('storefront-updated', {
+          businessId: id,
+          config: data.storefront_config || null,
+          details: data.storefront_details || null
+        });
+      }
+    } catch (e) {
+      console.error('Storefront socket broadcast error:', e);
+    }
+
+    res.json({
+      success: true,
+      storefrontConfig: data.storefront_config || null,
+      storefrontDetails: data.storefront_details || null
+    });
+  } catch (err) {
+    console.error('ai-menu-settings error:', err);
     res.status(500).json({ error: 'Something went wrong' });
   }
 });

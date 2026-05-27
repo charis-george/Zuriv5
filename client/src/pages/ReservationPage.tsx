@@ -1,31 +1,34 @@
-import { useEffect, useMemo, useState, FormEvent } from 'react'
+import { useEffect, useState, FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import axios from 'axios'
 import { PaperPlaneLoader } from '../components/PaperPlaneLoader'
+import { ZuriDatePicker, toIsoDateLocal } from '../components/ZuriDatePicker'
 import type { Business } from '../types'
-
-function toDateInputValue(d: Date): string {
-  const yyyy = d.getFullYear()
-  const mm = String(d.getMonth() + 1).padStart(2, '0')
-  const dd = String(d.getDate()).padStart(2, '0')
-  return `${yyyy}-${mm}-${dd}`
-}
+import { usePageSeo } from '../lib/seo'
 
 function ReservationPage(): JSX.Element {
   const { businessId } = useParams<{ businessId: string }>()
   const [loading, setLoading] = useState(true)
   const [business, setBusiness] = useState<Business | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const now = useMemo(() => new Date(), [])
   const [customerName, setCustomerName] = useState('')
   const [customerPhone, setCustomerPhone] = useState('')
   const [partySize, setPartySize] = useState<number>(2)
-  const [reservationDate, setReservationDate] = useState(toDateInputValue(now))
+  const [reservationDate, setReservationDate] = useState(() => toIsoDateLocal(new Date()))
   const [reservationTime, setReservationTime] = useState('19:00')
   const [notes, setNotes] = useState('')
   const [requesting, setRequesting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
   const [submittedMessage, setSubmittedMessage] = useState<string | null>(null)
+  const businessName = business?.name?.trim() || 'Reservation'
+
+  usePageSeo({
+    title: `ZURI | ${businessName}`,
+    description: business
+      ? `Reserve a table at ${business.name} on ZURI. Choose your date, time, and party size online.`
+      : 'Reserve a table on ZURI.',
+    path: businessId ? `/reserve/${businessId}` : '/reserve',
+  })
 
   useEffect(() => {
     if (!businessId) return
@@ -127,8 +130,19 @@ function ReservationPage(): JSX.Element {
               <input value={customerName} onChange={(e) => setCustomerName(e.target.value)} className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm" placeholder="Your name" required />
               <input value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm" placeholder="Phone number" required />
               <div className="grid md:grid-cols-2 gap-4">
-                <input type="date" value={reservationDate} onChange={(e) => setReservationDate(e.target.value)} className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm" required />
-                <input type="time" value={reservationTime} onChange={(e) => setReservationTime(e.target.value)} className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm" required />
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">Date</label>
+                  <ZuriDatePicker
+                    value={reservationDate}
+                    onChange={setReservationDate}
+                    placeholder="Pick a date"
+                    allowClear={false}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">Time</label>
+                  <input type="time" value={reservationTime} onChange={(e) => setReservationTime(e.target.value)} className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50 focus:border-zuri-orange" required />
+                </div>
               </div>
               <input type="number" min={1} max={50} value={partySize} onChange={(e) => setPartySize(Math.max(1, Math.min(50, Number(e.target.value) || 1)))} className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm" required />
               <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm" placeholder="Notes (optional)" />

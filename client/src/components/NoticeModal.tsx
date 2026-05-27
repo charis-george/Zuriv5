@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 
-export type NoticeVariant = 'info' | 'success' | 'error'
+export type NoticeVariant = 'info' | 'success' | 'error' | 'warning'
 
 export interface NoticeModalProps {
   open: boolean
@@ -30,15 +30,17 @@ export function NoticeModal({
 
   if (!open) return null
 
-  const variantStyles = {
+  const variantStyles: Record<NoticeVariant, string> = {
     info: 'border-gray-200',
     success: 'border-green-200 bg-green-50/30',
-    error: 'border-red-200 bg-red-50/30'
+    error: 'border-red-200 bg-red-50/30',
+    warning: 'border-amber-200 bg-amber-50/30'
   }
-  const buttonStyles = {
+  const buttonStyles: Record<NoticeVariant, string> = {
     info: 'bg-zuri-orange hover:bg-zuri-orange-dark text-white',
     success: 'bg-green-600 hover:bg-green-700 text-white',
-    error: 'bg-red-600 hover:bg-red-700 text-white'
+    error: 'bg-red-600 hover:bg-red-700 text-white',
+    warning: 'bg-amber-600 hover:bg-amber-700 text-white'
   }
 
   return (

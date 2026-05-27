@@ -18,7 +18,18 @@ function getDb() {
 }
 
 async function init() {
-  getDb();
+  // Important: in some deploy environments Supabase env vars may not be present
+  // immediately. We don't want to crash the whole container; routes will fail
+  // gracefully (and index.js returns 503) until env is configured.
+  try {
+    const url = process.env.SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+    if (!url || !key) return;
+    getDb();
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[ZURI] Supabase init skipped:', err && err.message ? err.message : String(err));
+  }
 }
 
 module.exports = { getDb, init };

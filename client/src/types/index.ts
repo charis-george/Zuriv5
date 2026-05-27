@@ -1,7 +1,41 @@
 // Business Types
-export type PlanId = 'free' | 'starter' | 'growth' | 'pro' | 'zuri_plus' | 'enterprise' | 'basic' | 'advanced'
+export type PlanId =
+  | 'free'
+  | 'starter'
+  | 'growth'
+  | 'scale'
+  | 'enterprise'
+  | 'pro'
+  | 'zuri_plus'
+  | 'basic'
+  | 'advanced'
+
+/** Languages supported for guest menu copy (expand over time). */
+export type GuestMenuLang = 'en' | 'ha' | 'yo' | 'ig'
+
+export type AiGuestStorefrontConfig = {
+  /** Surface trending dishes on the guest menu (from recent sales). */
+  trendingOnMenu?: boolean
+  /** Suggest add-ons / pairs well hints. */
+  intelligentUpsell?: boolean
+  /** “Zuri picks” and personalised ordering hints. */
+  personalisedRecs?: boolean
+  /** Re-rank items using guest dietary prefs (session). */
+  tasteSortEnabled?: boolean
+  /** Use Hausa / Yoruba / Igbo strings from menu translations when present. */
+  translationsEnabled?: boolean
+  /** Show optional dietary preference chips for guests. */
+  dietaryPromptEnabled?: boolean
+  /** MoMo / bank-transfer nudges for African cash-heavy venues. */
+  localPaymentHints?: boolean
+  /** Nudge split-bill or shared-table behaviour. */
+  sharedTableHints?: boolean
+}
 
 export type BillingInterval = 'monthly' | 'yearly'
+
+/** Restaurant menu ordering vs event ticketing storefront */
+export type BusinessMode = 'menu' | 'ticketing'
 
 export interface Business {
   id: string
@@ -15,6 +49,14 @@ export interface Business {
   logoUrl?: string | null
   storefrontConfig?: StorefrontConfig | null
   storefrontDetails?: StorefrontDetails | null
+  /** Present when loaded from API (camelCase) */
+  businessMode?: BusinessMode
+  /** Public order page: Scale-tier image pills (For you / Reorder / Trending) */
+  scaleGuestMenuTags?: boolean
+  /** Optional chain / group id for cross-venue dish matching */
+  businessGroupId?: string | null
+  /** Number of AI storefront generations used by this business */
+  storefrontAiGenerations?: number
   bankAccount?: {
     bankName: string | null
     accountNumberMasked: string | null
@@ -26,6 +68,16 @@ export interface Business {
 export type StorefrontHeroOverlay = 'gradient' | 'solid' | 'dim' | 'split'
 export type StorefrontFontFamily = 'sans' | 'serif' | 'mono'
 export type StorefrontMenuLayout = 'grid' | 'list' | 'cards'
+export type StorefrontMenuTemplateId =
+  | 'classic'
+  | 'marketplace'
+  | 'bistro'
+  | 'night-market'
+  | 'express'
+  | 'premium-dark'
+  | 'minimal'
+  | 'editorial'
+export type StorefrontCardLayout = 'stacked' | 'horizontal'
 export type StorefrontCardImageShape = 'square' | 'rounded' | 'circle'
 export type StorefrontDividerStyle = 'none' | 'soft' | 'bold' | 'dotted'
 export type StorefrontPillShape = 'pill' | 'rectangle' | 'underline'
@@ -43,8 +95,11 @@ export type StorefrontConfig = {
   titleSize: number
   menuItemFontScale: number
 
+  /** Preset chosen in the customizer; `custom` means manual tweaks only */
+  menuTemplate?: StorefrontMenuTemplateId | 'custom'
   layout: StorefrontMenuLayout
   gridStyle: 'two_col' | 'row_list' | 'wide_cards'
+  cardLayout: StorefrontCardLayout
   showPhotos: boolean
   showDescriptions: boolean
   showCalories: boolean
@@ -61,20 +116,28 @@ export type StorefrontConfig = {
   shadowDepth: StorefrontShadowDepth
   categoryStripBorder: boolean
   heroHeight: number
+  /** Full-width hero photo (Growth+). Shown under text with overlay from `heroOverlay`. */
+  heroBannerUrl?: string | null
+  /** Guest-side AI menu behaviour (Growth+). Merged in `mergeStorefrontConfig`. */
+  aiGuest?: AiGuestStorefrontConfig
 }
 
 export type StorefrontDetails = {
   name: string
   tagline: string
   cuisineTags: string[]
+  /** Optional per–menu-item translations for African languages (by item id). */
+  menuTranslations?: Record<string, Partial<Record<'ha' | 'yo' | 'ig', string>>>
 }
 
 export const PLAN_LABELS: Record<PlanId, string> = {
   free: 'Free',
   starter: 'Starter',
   growth: 'Growth',
-  pro: 'Pro',
-  zuri_plus: 'Zuri AI',
+  scale: 'Scale',
+  /** Legacy slug; migrated to Scale in DB — label as Scale for operators. */
+  pro: 'Scale',
+  zuri_plus: 'Zuri Plus (legacy)',
   enterprise: 'Enterprise',
   basic: 'Basic',
   advanced: 'Advanced'
@@ -82,50 +145,78 @@ export const PLAN_LABELS: Record<PlanId, string> = {
 
 export const PLAN_PRICES: Record<PlanId, string> = {
   free: '₦0',
-  starter: '₦7,500',
-  growth: '₦20,000',
+  starter: '₦9,900',
+  growth: '₦24,900',
+  scale: '₦59,900',
   pro: '₦40,000',
   zuri_plus: '₦60,000',
   enterprise: 'Custom',
-  basic: '₦20,000',
-  advanced: '₦40,000'
+  basic: '₦24,900',
+  advanced: '₦59,900'
 }
 
 export const PLAN_PRICES_YEARLY: Record<PlanId, string> = {
   free: '₦0',
-  starter: '₦72,000',
-  growth: '₦192,000',
+  starter: '₦95,040',
+  growth: '₦239,040',
+  scale: '₦575,040',
   pro: '₦384,000',
   zuri_plus: '₦576,000',
   enterprise: 'Custom',
-  basic: '₦192,000',
-  advanced: '₦384,000'
+  basic: '₦239,040',
+  advanced: '₦575,040'
 }
 
 /** When billing yearly, show this monthly equivalent on pricing cards (total/12). Full total shown at checkout. */
 export const PLAN_PRICES_YEARLY_AS_MONTHLY: Record<PlanId, string> = {
   free: '₦0',
-  starter: '₦6,000',
-  growth: '₦16,000',
+  starter: '₦7,920',
+  growth: '₦19,920',
+  scale: '₦47,920',
   pro: '₦32,000',
   zuri_plus: '₦48,000',
   enterprise: 'Custom',
-  basic: '₦16,000',
-  advanced: '₦32,000'
+  basic: '₦19,920',
+  advanced: '₦47,920'
 }
 
 export const YEARLY_DISCOUNT_PCT = 20
 
 // Menu Types
+export type TicketPricingType = 'free' | 'paid' | 'invite_only'
+
 export interface MenuItem {
   id: string
   name: string
   description?: string
   price: number
   cost?: number
+  /**
+   * Average estimated prep/fulfillment time (minutes) for this item.
+   * Used to compute the expected prep time shown on the order.
+   */
+  estimatedPrepTime?: number
   imageUrl?: string
   available: boolean
   displayOrder?: number
+  /** Ticketing: max tickets a single buyer can purchase for this type (null = unlimited) */
+  maxPerUser?: number | null
+  /** Ticketing: tickets sold in groups of N (e.g. 2 = pairs only). null/1 = individual. */
+  groupSize?: number | null
+  /** Ticketing: minimum tickets per order for this type (null/1 = no minimum) */
+  minPerOrder?: number | null
+  /** Ticketing: free, paid, or invite-only */
+  pricingType?: TicketPricingType | null
+  /** Ticketing: list of perks/benefits included with this ticket */
+  perks?: string[] | null
+  /** Ticketing: total capacity (null = unlimited) — maps to stockOnHand in DB */
+  totalCapacity?: number | null
+  /** Shared catalog id for cross-venue exact match */
+  canonicalDishId?: string | null
+  /** Ingredient list for taste matching */
+  ingredients?: string[]
+  /** Structured tags: protein, course, cuisine, spice, allergens */
+  dishTags?: Record<string, string[]>
 }
 
 export interface MenuCategory {
@@ -265,7 +356,7 @@ export interface CustomerIntelligence {
   returnWithin10DaysPct: number
 }
 
-/** Business Graph (Phase 3): anonymous platform market insights – Pro+ only */
+/** Business Graph (Phase 3): anonymous platform market insights – Scale+ */
 export interface MarketInsights {
   platform: {
     totalOrders: number

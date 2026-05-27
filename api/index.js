@@ -53,6 +53,10 @@ const contactRoutes = require('../server/routes/contact');
 const subscriptionRoutes = require('../server/routes/subscription');
 const aiRoutes = require('../server/routes/ai');
 const banksRoutes = require('../server/routes/banks');
+const tapRoutes = require('../server/routes/tap');
+const tapAuthRoutes = require('../server/routes/tap-auth');
+const networkRoutes = require('../server/routes/network');
+const reservationRoutes = require('../server/routes/reservations');
 
 // Mount under /api so client calls like /api/business/login work
 app.use('/api/business', businessRoutes);
@@ -65,6 +69,10 @@ app.use('/api/payment', paymentRoutes);
 app.use('/api/contact', contactRoutes);
 app.use('/api/subscription', subscriptionRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/tap', tapRoutes);
+app.use('/api/tap-auth', tapAuthRoutes);
+app.use('/api/network', networkRoutes);
+app.use('/api/reservations', reservationRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -72,6 +80,14 @@ app.get('/api/health', (req, res) => {
     status: 'ok', 
     timestamp: new Date().toISOString(),
     environment: process.env.VERCEL ? 'vercel' : 'local'
+  });
+});
+
+// Explicit API 404 for serverless deploys (must be after /api/health and route mounts)
+app.use('/api', (req, res) => {
+  res.status(404).json({
+    error: 'API route not found',
+    path: req.originalUrl
   });
 });
 

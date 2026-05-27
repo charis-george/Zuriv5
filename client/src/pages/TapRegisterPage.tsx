@@ -2,6 +2,9 @@ import { useState, FormEvent } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import axios from 'axios'
 import { Link } from 'react-router-dom'
+import { apiUrl } from '../lib/apiBase'
+import { setTapToken } from '../lib/tapAuthStorage'
+import { formatUserFacingError } from '../lib/formatApiError'
 
 function TapRegisterPage(): JSX.Element {
   const [email, setEmail] = useState('')
@@ -18,16 +21,29 @@ function TapRegisterPage(): JSX.Element {
     setError('')
     setLoading(true)
     try {
-      const res = await axios.post<{ user: { id: string; email: string }; token: string }>('/api/tap-auth/register', {
+      const res = await axios.post<{ user: { id: string; email: string }; token: string }>(apiUrl('/api/tap-auth/register'), {
         email,
         password,
         name: name.trim() || undefined
       })
-      localStorage.setItem('zuri_tap_token', res.data.token)
+      const stored = setTapToken(res.data.token)
+      if (!stored) {
+        setError('Account created, but we could not keep your session in this browser. Please sign in again.')
+        setLoading(false)
+        return
+      }
       navigate(redirect)
       window.location.reload()
     } catch (err) {
-      setError(axios.isAxiosError(err) ? (err.response?.data?.error || 'Registration failed') : 'Registration failed')
+      if (axios.isAxiosError(err) && !err.response) {
+        setError('Unable to connect right now. Please check your internet and try again.')
+      } else {
+        setError(
+          axios.isAxiosError(err)
+            ? formatUserFacingError(err.response?.data, 'Sign up failed. Please try again.')
+            : 'Sign up failed. Please try again.'
+        )
+      }
     } finally {
       setLoading(false)
     }

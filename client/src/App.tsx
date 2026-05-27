@@ -5,6 +5,7 @@ import { PaperPlaneLoader } from './components/PaperPlaneLoader'
 
 // Lazy load pages for code splitting
 const Home = lazy(() => import('./pages/Home'))
+const PricingPage = lazy(() => import('./pages/PricingPage'))
 const OrderPage = lazy(() => import('./pages/OrderPage'))
 const PaymentDone = lazy(() => import('./pages/PaymentDone'))
 const UpgradeDone = lazy(() => import('./pages/UpgradeDone'))
@@ -18,6 +19,7 @@ const BusinessPaymentPage = lazy(() => import('./pages/BusinessPaymentPage'))
 const BusinessOnboarding = lazy(() => import('./pages/BusinessOnboarding'))
 const QRScanner = lazy(() => import('./pages/QRScanner'))
 const DemoPage = lazy(() => import('./pages/DemoPage'))
+const WaitlistPage = lazy(() => import('./pages/WaitlistPage'))
 const ZuriTapPage = lazy(() => import('./pages/ZuriTapPage'))
 const TapPayPage = lazy(() => import('./pages/TapPayPage'))
 const TapLoginPage = lazy(() => import('./pages/TapLoginPage'))
@@ -41,6 +43,7 @@ function AppRoutes(): JSX.Element {
     <Suspense fallback={<LoadingFallback />}>
       <Routes>
         <Route path="/" element={<Home />} />
+        <Route path="/pricing" element={<PricingPage />} />
         <Route path="/privacy" element={<PrivacyTermsPage />} />
         <Route path="/order/:businessId" element={<OrderPage />} />
         <Route path="/payment-done" element={<PaymentDone />} />
@@ -48,6 +51,7 @@ function AppRoutes(): JSX.Element {
         <Route path="/subscribe/:plan" element={<SubscriptionSummary />} />
         <Route path="/scan" element={<QRScanner />} />
         <Route path="/demo" element={<DemoPage />} />
+        <Route path="/waitlist" element={<WaitlistPage />} />
         <Route path="/reserve/:businessId" element={<ReservationPage />} />
         <Route path="/zuri-tap" element={<ZuriTapPage />} />
         <Route path="/tap/pay/:token" element={<TapPayPage />} />

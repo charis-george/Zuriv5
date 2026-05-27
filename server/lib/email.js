@@ -12,8 +12,28 @@ function getTransporter() {
     host,
     port: portNumber,
     secure,
-    auth: { user, pass }
+    auth: { user, pass },
+    connectionTimeout: 12_000,
+    greetingTimeout: 12_000,
+    socketTimeout: 25_000
   });
 }
 
-module.exports = { getTransporter };
+async function sendMailWithTimeout(transporter, mail, timeoutMs = 4500) {
+  if (!transporter) throw new Error('No transporter');
+  let timer = null;
+  try {
+    const timeoutPromise = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const err = new Error(`SMTP timeout after ${timeoutMs}ms`);
+        err.code = 'SMTP_TIMEOUT';
+        reject(err);
+      }, timeoutMs);
+    });
+    return await Promise.race([transporter.sendMail(mail), timeoutPromise]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+module.exports = { getTransporter, sendMailWithTimeout };

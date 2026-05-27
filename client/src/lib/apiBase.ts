@@ -5,7 +5,10 @@
 export const API_BASE_URL = (() => {
   const raw = import.meta.env.VITE_API_URL
   if (typeof raw !== 'string' || !raw.trim()) return ''
-  return raw.trim().replace(/\/$/, '')
+  const normalized = raw.trim().replace(/\/$/, '')
+  // Guard against common misconfiguration: VITE_API_URL already ending with /api.
+  // Our callers pass paths like /api/subscription/initialize.
+  return normalized.replace(/\/api$/i, '')
 })()
 
 /** Full URL for a path starting with /api/... */

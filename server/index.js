@@ -3,7 +3,19 @@ const cors = require('cors');
 const http = require('http');
 const socketIo = require('socket.io');
 const path = require('path');
+const fs = require('fs');
 require('dotenv').config();
+
+// Don’t crash the container on misconfig; start server and surface 503s instead.
+const SUPABASE_ENV_OK = Boolean(
+  process.env.SUPABASE_URL &&
+  (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY)
+);
+if (!SUPABASE_ENV_OK) {
+  console.error(
+    '[ZURI] Missing Supabase env. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY) in Railway → Variables.'
+  );
+}
 
 /** Comma-separated list, e.g. https://app.vercel.app,https://preview.vercel.app */
 function parseFrontendOrigins() {
@@ -15,6 +27,10 @@ function parseFrontendOrigins() {
 
 const app = express();
 const server = http.createServer(app);
+
+// Running behind Railway/Render/Nginx/etc: enables correct client IP detection
+// for rate limiting when X-Forwarded-For is present.
+app.set('trust proxy', process.env.TRUST_PROXY ? Number(process.env.TRUST_PROXY) : 1);
 
 const frontendOrigins =
   process.env.NODE_ENV === 'production' ? parseFrontendOrigins() : null;
@@ -45,6 +61,16 @@ app.use(cors(corsOriginOption ? { origin: corsOriginOption } : {}));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../client/dist')));
 
+if (!SUPABASE_ENV_OK) {
+  app.use('/api', (req, res, next) => {
+    if (req.path === '/health') return next();
+    res.status(503).json({
+      error: 'Server misconfigured: Supabase env missing',
+      missing: ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY)']
+    });
+  });
+}
+
 // Rate limiting: auth and payment routes (webhook excluded)
 const rateLimit = require('express-rate-limit');
 const authLimiter = rateLimit({
@@ -65,22 +91,41 @@ const paymentLimiter = rateLimit({
 app.use('/api/business', authLimiter);
 app.use('/api/payment', paymentLimiter);
 
+function safeRequireRoute(label, modulePath) {
+  try {
+    return require(modulePath);
+  } catch (e) {
+    console.error(`[ZURI] Route module failed to load: ${label}`, {
+      modulePath,
+      message: e && e.message ? e.message : String(e)
+    });
+    const router = express.Router();
+    router.use((_req, res) => {
+      res.status(503).json({ error: `Route temporarily unavailable: ${label}` });
+    });
+    return router;
+  }
+}
+
 // Import routes
-const businessRoutes = require('./routes/business');
-const menuRoutes = require('./routes/menu');
-const orderRoutes = require('./routes/order');
-const analyticsRoutes = require('./routes/analytics');
-const qrRoutes = require('./routes/qr');
-const paymentRoutes = require('./routes/payment');
-const contactRoutes = require('./routes/contact');
-const subscriptionRoutes = require('./routes/subscription');
-const aiRoutes = require('./routes/ai');
-const banksRoutes = require('./routes/banks');
-const tapRoutes = require('./routes/tap');
-const tapAuthRoutes = require('./routes/tap-auth');
-const networkRoutes = require('./routes/network');
-const reservationRoutes = require('./routes/reservations');
-const reviewRoutes = require('./routes/reviews');
+const businessRoutes = safeRequireRoute(
+  'business',
+  './routes/' + (fs.existsSync(path.join(__dirname, 'routes', 'business.js')) ? 'business.js' : 'Business.js')
+);
+const menuRoutes = safeRequireRoute('menu', './routes/menu');
+const orderRoutes = safeRequireRoute('order', './routes/order');
+const analyticsRoutes = safeRequireRoute('analytics', './routes/analytics');
+const qrRoutes = safeRequireRoute('qr', './routes/qr');
+const paymentRoutes = safeRequireRoute('payment', './routes/payment');
+const contactRoutes = safeRequireRoute('contact', './routes/contact');
+const subscriptionRoutes = safeRequireRoute('subscription', './routes/subscription');
+const aiRoutes = safeRequireRoute('ai', './routes/ai');
+const banksRoutes = safeRequireRoute('banks', './routes/banks');
+const tapRoutes = safeRequireRoute('tap', './routes/tap');
+const tapAuthRoutes = safeRequireRoute('tap-auth', './routes/tap-auth');
+const networkRoutes = safeRequireRoute('network', './routes/network');
+const reservationRoutes = safeRequireRoute('reservations', './routes/reservations');
+const reviewRoutes = safeRequireRoute('reviews', './routes/reviews');
 
 // Routes
 app.use('/api/business', businessRoutes);
@@ -98,6 +143,12 @@ app.use('/api/tap-auth', tapAuthRoutes);
 app.use('/api/network', networkRoutes);
 app.use('/api/reservations', reservationRoutes);
 app.use('/api/reviews', reviewRoutes);
+
+// Uptime / CORS check (register before SPA fallback)
+app.get('/api/health', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ ok: true, uptime: process.uptime() });
+});
 
 // Socket.io for real-time updates
 const { verifyBusinessToken } = require('./middleware/auth');
@@ -147,24 +198,46 @@ io.on('connection', (socket) => {
 // Make io available to routes
 app.set('io', io);
 
-// Serve React app for all other routes
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../client/dist/index.html'));
+// Unmatched /api/* → JSON 404 (avoid sending SPA HTML for mistaken GET /api/...; clarify real 404s in DevTools)
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api')) return next();
+  if (res.headersSent) return next();
+  res.status(404).json({
+    error: 'API route not found',
+    method: req.method,
+    path: req.originalUrl
+  });
 });
 
-// Initialize database and start server
-const db = require('./database');
-
-db.init()
-  .then(() => {
-    server.listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`);
-    });
-  })
-  .catch((error) => {
-    console.error('Failed to initialize database:', error);
-    process.exit(1);
+// Serve React app for all other routes (avoid hard crash if dist was not built)
+app.get('*', (req, res) => {
+  const indexPath = path.join(__dirname, '../client/dist/index.html');
+  res.sendFile(indexPath, (err) => {
+    if (err) {
+      console.error('[ZURI] Missing client/dist/index.html — build the client in deploy:', err.message);
+      res
+        .status(503)
+        .type('text')
+        .send('Frontend not built (client/dist missing). See Railway build logs and nixpacks.toml.');
+    }
   });
+});
+
+// Start server ASAP (Railway/containers may kill apps that don't bind quickly).
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server listening on 0.0.0.0:${PORT}`);
+  if (process.env.NODE_ENV === 'production' && !parseFrontendOrigins()?.length) {
+    console.warn(
+      'FRONTEND_URL is unset: set it to your Vercel origin(s) so browsers can call this API (CORS).'
+    );
+  }
+});
+
+// Initialize database in the background.
+const db = require('./database');
+db.init().catch((error) => {
+  console.error('Failed to initialize database:', error);
+});
 
 // Handle server errors gracefully
 server.on('error', (error) => {

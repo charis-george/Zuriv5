@@ -4,6 +4,8 @@ const crypto = require('crypto');
 const Paystack = require('@paystack/paystack-sdk');
 const { getDb } = require('../database');
 const { processOrderPayout, updatePayoutStatusFromWebhook } = require('../lib/paystack-transfer');
+const { buildOrderPaymentMetadata, paystackCheckoutExtras } = require('../lib/paystackCheckout');
+const { queueOrderReceiptOnce } = require('../lib/orderReceiptEmail');
 
 const supabase = getDb();
 const appPaystack = process.env.PAYSTACK_SECRET_KEY ? new Paystack(process.env.PAYSTACK_SECRET_KEY) : null;
@@ -77,6 +79,12 @@ router.post('/webhook', (req, res) => {
                 console.error('Paystack payout error', orderId, err)
               );
             });
+            // Send receipt (best-effort) once order is paid.
+            queueOrderReceiptOnce({
+              orderId,
+              paidAt: event.data.paid_at || null,
+              reference: reference || orderId
+            });
           });
       })
       .catch((err) => {
@@ -134,16 +142,21 @@ router.post('/initialize', async (req, res) => {
     if (!appPaystack) return res.status(503).json({ error: 'Payment not configured' });
 
     const amountInKobo = Math.round(orderTotal * 100);
-    const metadata = { orderId, businessId };
-    if (saveCard) metadata.save_card = 'true';
-    if (tap) metadata.tap = 'true';
+    const metadata = buildOrderPaymentMetadata({
+      orderId,
+      businessId,
+      saveCard: !!saveCard,
+      tap: !!tap
+    });
 
     const response = await appPaystack.transaction.initialize({
       email,
       amount: amountInKobo,
       reference: orderId,
       callback_url: callbackUrl || null,
-      metadata
+      currency: 'NGN',
+      metadata,
+      ...paystackCheckoutExtras()
     });
 
     if (response.status) {
@@ -208,6 +221,11 @@ router.get('/verify/:reference', async (req, res) => {
         processOrderPayout(reference, paystackAmountNaira).catch((err) =>
           console.error('Paystack payout error (verify)', reference, err)
         );
+      });
+      queueOrderReceiptOnce({
+        orderId: reference,
+        paidAt: response.data.paid_at || null,
+        reference: response.data.reference || reference
       });
     }
 
@@ -300,6 +318,11 @@ router.post('/charge-saved', async (req, res) => {
 
     if (response.status && response.data.status === 'success') {
       await supabase.from('orders').update({ payment_status: 'paid' }).eq('id', orderId).eq('business_id', businessId);
+      queueOrderReceiptOnce({
+        orderId,
+        paidAt: new Date().toISOString(),
+        reference: response.data.reference || orderId
+      });
       setImmediate(() => {
         processOrderPayout(orderId, orderTotal).catch((err) =>
           console.error('Paystack payout error (charge-saved)', orderId, err)

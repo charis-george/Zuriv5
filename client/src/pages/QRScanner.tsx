@@ -1,7 +1,9 @@
 import type { MutableRefObject } from 'react'
-import { useLayoutEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { Html5Qrcode } from 'html5-qrcode'
+import { organizationJsonLd, usePageSeo } from '../lib/seo'
+import { apiUrl } from '../lib/apiBase'
 
 /**
  * html5-qrcode (mebjas/html5-qrcode): only one active scanner should own a given DOM node.
@@ -19,6 +21,18 @@ function parseBusinessIdFromText(text: string): string | null {
   if (uuidLike.test(trimmed)) return trimmed
   if (trimmed.length === 36 && trimmed.includes('-')) return trimmed
   return null
+}
+
+function parseTicketTokenFromText(text: string): string | null {
+  const trimmed = text.trim()
+  if (!trimmed) return null
+  try {
+    const parsed = new URL(trimmed, 'https://zuriqo.com')
+    const token = parsed.searchParams.get('ticket')
+    return token && token.trim() ? token.trim() : null
+  } catch {
+    return null
+  }
 }
 
 type CameraArg = string | { facingMode: string }
@@ -115,6 +129,23 @@ async function decodeQrFromImageFile(fileAnchorId: string, file: File): Promise<
 }
 
 function QRScanner(): JSX.Element {
+  usePageSeo({
+    title: 'Scan a ZURI QR Code | Menu and Ticket Verification',
+    description: 'Scan a ZURI QR code to open a digital menu or, for logged-in businesses, verify a ticket receipt QR instantly.',
+    path: '/scan',
+    jsonLd: [
+      organizationJsonLd,
+      {
+        '@context': 'https://schema.org',
+        '@type': 'WebPage',
+        name: 'Scan a ZURI QR Code',
+        url: 'https://zuriqo.com/scan',
+        description: 'Scan ZURI menu QR codes and verify ticket receipt QR codes for paid entry.'
+      }
+    ]
+  })
+
+  const location = useLocation()
   const navigate = useNavigate()
   const readerIdRef = useRef<string | undefined>(undefined)
   if (!readerIdRef.current) {
@@ -135,8 +166,94 @@ function QRScanner(): JSX.Element {
   const [scanError, setScanError] = useState<string>('')
   const [cameraBootKey, setCameraBootKey] = useState(0)
   const [fileBusy, setFileBusy] = useState(false)
+  const [ticketVerification, setTicketVerification] = useState<{
+    status: 'pending' | 'confirmed' | 'used' | 'error'
+    title: string
+    message: string
+    meta?: string
+  } | null>(null)
+  const ticketFromQuery = new URLSearchParams(location.search).get('ticket')?.trim() || ''
+
+  const verifyTicketToken = async (token: string): Promise<void> => {
+    const businessToken = localStorage.getItem('zuri_business_token')
+    if (!businessToken) {
+      setTicketVerification({
+        status: 'error',
+        title: 'Business login required',
+        message: 'Log in with your ZURI business account on this device before verifying ticket receipts.'
+      })
+      return
+    }
+
+    setTicketVerification({
+      status: 'pending',
+      title: 'Verifying ticket receipt…',
+      message: 'Checking payment status and locking this QR if it is valid.'
+    })
+
+    try {
+      const res = await fetch(apiUrl('/api/qr/ticket-receipt/verify'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${businessToken}`
+        },
+        body: JSON.stringify({ token })
+      })
+
+      const data = await res.json().catch(() => ({}))
+      if (res.ok && data?.success) {
+        const amount = Number(data?.order?.totalAmount || 0)
+        setTicketVerification({
+          status: 'confirmed',
+          title: 'Ticket confirmed',
+          message: `${data?.order?.customerName || 'Guest'} has a valid paid ticket. This QR has now been locked and cannot be reused.`,
+          meta: `${amount > 0 ? `₦${amount.toFixed(2)}` : 'Paid'}${data?.business?.name ? ` · ${data.business.name}` : ''}`
+        })
+        return
+      }
+
+      if (res.status === 409 && data?.status === 'used') {
+        setTicketVerification({
+          status: 'used',
+          title: 'Ticket already used',
+          message: 'This receipt QR has already been scanned and cannot be used again.',
+          meta: data?.order?.scannedAt ? `First confirmed: ${new Date(data.order.scannedAt).toLocaleString()}` : undefined
+        })
+        return
+      }
+
+      setTicketVerification({
+        status: 'error',
+        title: 'Could not verify ticket',
+        message: data?.error || 'This QR is invalid, unpaid, or belongs to another business account.'
+      })
+    } catch {
+      setTicketVerification({
+        status: 'error',
+        title: 'Verification failed',
+        message: 'We could not verify this ticket right now. Check your connection and try again.'
+      })
+    }
+  }
+
+  useEffect(() => {
+    if (!ticketFromQuery) {
+      setTicketVerification(null)
+      return
+    }
+    void verifyTicketToken(ticketFromQuery)
+  }, [ticketFromQuery])
 
   useLayoutEffect(() => {
+    if (ticketFromQuery) {
+      clearScannerHostElement(readerElementId)
+      return () => {
+        cancelledRef.current = true
+        mountGenRef.current += 1
+      }
+    }
+
     const myGen = ++mountGenRef.current
     const isStale = (): boolean => myGen !== mountGenRef.current
 
@@ -159,6 +276,20 @@ function QRScanner(): JSX.Element {
     const onDecoded = (decodedText: string): void => {
       try {
         if (handledRef.current || cancelledRef.current || isStale()) return
+        const ticketToken = parseTicketTokenFromText(decodedText)
+        if (ticketToken) {
+          handledRef.current = true
+          const s = scannerRef.current
+          const go = (): void => {
+            if (!cancelledRef.current && !isStale()) void verifyTicketToken(ticketToken)
+          }
+          if (s) {
+            void s.stop().catch(() => {}).finally(go)
+          } else {
+            go()
+          }
+          return
+        }
         const id = parseBusinessIdFromText(decodedText)
         if (!id) return
         handledRef.current = true
@@ -210,7 +341,7 @@ function QRScanner(): JSX.Element {
         clearScannerHostElement(readerElementId)
       })
     }
-  }, [navigate, readerElementId, cameraBootKey])
+  }, [navigate, readerElementId, cameraBootKey, ticketFromQuery])
 
   const onPickImage = (): void => {
     fileInputRef.current?.click()
@@ -230,6 +361,11 @@ function QRScanner(): JSX.Element {
       clearScannerHostElement(readerElementId)
 
       const text = await decodeQrFromImageFile(fileHostElementId, file)
+      const ticketToken = parseTicketTokenFromText(text)
+      if (ticketToken) {
+        await verifyTicketToken(ticketToken)
+        return
+      }
       const id = parseBusinessIdFromText(text)
       if (id) {
         navigate(`/order/${id}`)
@@ -257,7 +393,11 @@ function QRScanner(): JSX.Element {
         <div className="bg-white rounded-2xl border border-gray-200 p-8">
           <div className="text-center mb-6">
             <h1 className="text-2xl font-semibold text-zuri-black mb-2">Scan QR Code</h1>
-            <p className="text-gray-600 text-sm">Point your camera at the QR code on the table</p>
+            <p className="text-gray-600 text-sm">
+              {ticketFromQuery
+                ? 'Checking this ticket receipt for a logged-in business account.'
+                : 'Point your camera at a menu QR code or a ticket receipt QR.'}
+            </p>
           </div>
 
           {scanError && (
@@ -266,9 +406,31 @@ function QRScanner(): JSX.Element {
             </div>
           )}
 
-          <div className="relative mb-4 w-full min-h-[240px] rounded-xl border border-gray-100 overflow-hidden bg-zuri-black/5">
-            <div id={readerElementId} className="w-full min-h-[240px]" />
-          </div>
+          {ticketVerification ? (
+            <div
+              className={`mb-4 rounded-xl px-4 py-4 text-center border ${
+                ticketVerification.status === 'confirmed'
+                  ? 'border-green-200 bg-green-50/80'
+                  : ticketVerification.status === 'used'
+                    ? 'border-amber-200 bg-amber-50/80'
+                    : ticketVerification.status === 'pending'
+                      ? 'border-zuri-orange/30 bg-zuri-orange/5'
+                      : 'border-red-200 bg-red-50/80'
+              }`}
+            >
+              <p className="text-sm font-semibold text-zuri-black">{ticketVerification.title}</p>
+              <p className="text-sm text-gray-700 mt-1">{ticketVerification.message}</p>
+              {ticketVerification.meta ? (
+                <p className="text-xs text-gray-500 mt-2">{ticketVerification.meta}</p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {!ticketFromQuery ? (
+            <div className="relative mb-4 w-full min-h-[240px] rounded-xl border border-gray-100 overflow-hidden bg-zuri-black/5">
+              <div id={readerElementId} className="w-full min-h-[240px]" />
+            </div>
+          ) : null}
 
           <input
             ref={fileInputRef}
@@ -290,6 +452,27 @@ function QRScanner(): JSX.Element {
             </button>
             <p className="text-[11px] text-zuri-black/50 mt-2">PNG or JPG — include the full code in frame.</p>
           </div>
+
+          {ticketVerification ? (
+            <div className="text-center mt-4">
+              <button
+                type="button"
+                onClick={() => {
+                  if (ticketFromQuery) {
+                    navigate('/scan')
+                    return
+                  }
+                  handledRef.current = false
+                  setTicketVerification(null)
+                  setScanError('')
+                  setCameraBootKey((k) => k + 1)
+                }}
+                className="text-sm font-medium text-zuri-orange hover:text-zuri-orange-dark transition"
+              >
+                Verify another QR
+              </button>
+            </div>
+          ) : null}
 
           <div className="text-center mt-6">
             <button

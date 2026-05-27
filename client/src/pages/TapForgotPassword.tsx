@@ -1,6 +1,8 @@
 import { useState, FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import axios from 'axios'
+import { apiUrl } from '../lib/apiBase'
+import { formatUserFacingError } from '../lib/formatApiError'
 
 function TapForgotPassword(): JSX.Element {
   const [email, setEmail] = useState('')
@@ -17,13 +19,17 @@ function TapForgotPassword(): JSX.Element {
     setResetLink(null)
     try {
       const { data } = await axios.post<{ success: boolean; message?: string; resetLink?: string }>(
-        '/api/tap-auth/forgot-password',
+        apiUrl('/api/tap-auth/forgot-password'),
         { email: email.trim() }
       )
       setSent(true)
       if (data.resetLink) setResetLink(data.resetLink)
     } catch (err) {
-      setError(axios.isAxiosError(err) ? (err.response?.data?.error || 'Something went wrong') : 'Something went wrong')
+      setError(
+        axios.isAxiosError(err)
+          ? formatUserFacingError(err.response?.data, 'Unable to send reset link. Please try again.')
+          : 'Unable to send reset link. Please try again.'
+      )
     } finally {
       setLoading(false)
     }

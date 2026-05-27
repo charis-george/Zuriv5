@@ -4,42 +4,85 @@ const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../database');
 const { requireBusinessAuth } = require('../middleware/auth');
 const { getOrCreateNetworkCustomer, updateCustomerStats, getStatsByEmail, getStatsForCustomerIds } = require('../lib/zuri-network');
-const { sendBusinessEmail } = require('../lib/notifications')
+const { queueBusinessEmail } = require('../lib/notifications');
+const { resolveActivePresetId, matchesPreset } = require('../lib/menuPresets');
 
 const supabase = getDb();
+
+function normalizeCatalogMode(value) {
+  return value === 'ticketing' ? 'ticketing' : 'menu';
+}
 
 // Create order
 router.post('/', async (req, res) => {
   try {
-    const { businessId, customerName, customerPhone, customerEmail, items, estimatedPrepTime } = req.body;
+    const { businessId, customerName, customerPhone, customerEmail, guestToken, items } = req.body;
 
     if (!businessId || !items || items.length === 0) {
       return res.status(400).json({ error: 'Business ID and items are required' });
     }
+
+    const { data: business } = await supabase
+      .from('businesses')
+      .select('business_mode')
+      .eq('id', businessId)
+      .maybeSingle();
+    const activeMode = normalizeCatalogMode(business?.business_mode);
+    const activePresetId = await resolveActivePresetId(businessId, activeMode);
 
     const menuItemIds = [...new Set(items.map(item => item.menuItemId).filter(Boolean))];
     if (menuItemIds.length === 0) {
       return res.status(400).json({ error: 'Valid menu item IDs are required' });
     }
 
-    const { data: menuItems, error: menuError } = await supabase
-      .from('menu_items')
-      .select('id, name, price')
-      .eq('business_id', businessId)
-      .in('id', menuItemIds);
-
-    if (menuError) {
-      console.error('Menu fetch error:', menuError);
-      return res.status(500).json({ error: 'Failed to load menu' });
+    let menuItems = [];
+    let menuError = null;
+    try {
+      const resMenu = await supabase
+        .from('menu_items')
+          .select('id, name, price, estimated_prep_time, item_mode, preset_id')
+        .eq('business_id', businessId)
+        .in('id', menuItemIds);
+      menuItems = resMenu.data || [];
+      menuError = resMenu.error || null;
+    } catch (e) {
+      menuError = e;
     }
 
-    const menuMap = (menuItems || []).reduce((acc, m) => ({ ...acc, [m.id]: m }), {});
+    if (menuError) {
+      const msg = String(menuError?.message || menuError || '').toLowerCase()
+      if (msg.includes('estimated_prep_time')) {
+        // Backward compatibility: older DBs may not have this column yet.
+        const resMenuFallback = await supabase
+          .from('menu_items')
+          .select('id, name, price, item_mode')
+          .eq('business_id', businessId)
+          .in('id', menuItemIds);
+        if (resMenuFallback.error) {
+          console.error('Menu fetch error (fallback):', resMenuFallback.error);
+          return res.status(500).json({ error: 'Failed to load menu' });
+        }
+        menuItems = resMenuFallback.data || [];
+      } else {
+        console.error('Menu fetch error:', menuError);
+        return res.status(500).json({ error: 'Failed to load menu' });
+      }
+    }
+
+    const scopedItems = (menuItems || []).filter(
+      (m) =>
+        (!m.item_mode || normalizeCatalogMode(m.item_mode) === activeMode) &&
+        matchesPreset(m, activePresetId)
+    );
+    const menuMap = scopedItems.reduce((acc, m) => ({ ...acc, [m.id]: m }), {});
     const missingIds = menuItemIds.filter(id => !menuMap[id]);
     if (missingIds.length > 0) {
       return res.status(400).json({ error: 'One or more items are not on the menu or do not belong to this business' });
     }
 
     let totalAmount = 0;
+    let estimatedPrepTimeWeightedSum = 0;
+    let estimatedPrepTimeWeightedQty = 0;
     const orderItems = [];
     for (const item of items) {
       const menuItem = menuMap[item.menuItemId];
@@ -47,6 +90,12 @@ router.post('/', async (req, res) => {
       const qty = Math.min(99, Math.max(1, parseInt(item.quantity, 10) || 1));
       const price = Number(menuItem.price) || 0;
       totalAmount += price * qty;
+
+      const itemPrep = Number(menuItem.estimated_prep_time)
+      const safeItemPrep = Number.isFinite(itemPrep) ? itemPrep : 15
+      estimatedPrepTimeWeightedSum += safeItemPrep * qty;
+      estimatedPrepTimeWeightedQty += qty;
+
       orderItems.push({
         id: uuidv4(),
         order_id: null,
@@ -65,9 +114,12 @@ router.post('/', async (req, res) => {
     orderItems.forEach(oi => { oi.order_id = orderId; });
 
     let zuriCustomerId = null;
+    const { resolveGuestCustomerId } = require('../lib/guest-personalization');
     if (customerEmail && String(customerEmail).trim()) {
       const resolved = await getOrCreateNetworkCustomer(customerEmail);
       if (resolved.id) zuriCustomerId = resolved.id;
+    } else if (guestToken && String(guestToken).trim()) {
+      zuriCustomerId = await resolveGuestCustomerId({ guestToken: String(guestToken).trim() });
     }
 
     const orderPayload = {
@@ -78,7 +130,8 @@ router.post('/', async (req, res) => {
       customer_email: customerEmail || null,
       status: 'pending',
       total_amount: totalAmount,
-      estimated_prep_time: estimatedPrepTime || 15,
+      estimated_prep_time:
+        estimatedPrepTimeWeightedQty > 0 ? Math.round(estimatedPrepTimeWeightedSum / estimatedPrepTimeWeightedQty) : 15,
       payment_status: 'pending'
     };
     if (zuriCustomerId) orderPayload.zuri_customer_id = zuriCustomerId;
@@ -139,27 +192,22 @@ router.post('/', async (req, res) => {
 
     // Email notification to business (best effort)
     const itemLines = (orderItemsWithNames || []).map(it => `- ${it.quantity}× ${it.menuItemName} (${it.price.toFixed ? it.price.toFixed(2) : it.price})`).join('\n')
-    try {
-      await sendBusinessEmail({
-        businessId,
-        subject: `New order received (${orderResponse.status})`,
-        text: [
-          `You received a new order from ${orderResponse.customer_name || 'a guest'}.`,
-          ``,
-          `Order: #${String(orderResponse.id).slice(0, 8).toUpperCase()}`,
-          `Total: ₦${Number(orderResponse.total_amount || orderResponse.totalAmount || 0).toFixed(2)}`,
-          `Phone: ${orderResponse.customer_phone || '—'}`,
-          ``,
-          `Items:`,
-          itemLines || '(no items)',
-          ``,
-          `Open your dashboard to start preparing.`
-        ].join('\n')
-      })
-    } catch (e) {
-      // Don't break ordering if SMTP isn't configured
-      console.error('Order email notification error:', e)
-    }
+    queueBusinessEmail({
+      businessId,
+      subject: `New order received (${orderResponse.status})`,
+      text: [
+        `You received a new order from ${orderResponse.customer_name || 'a guest'}.`,
+        ``,
+        `Order: #${String(orderResponse.id).slice(0, 8).toUpperCase()}`,
+        `Total: ₦${Number(orderResponse.total_amount || orderResponse.totalAmount || 0).toFixed(2)}`,
+        `Phone: ${orderResponse.customer_phone || '—'}`,
+        ``,
+        `Items:`,
+        itemLines || '(no items)',
+        ``,
+        `Open your dashboard to start preparing.`
+      ].join('\n')
+    })
 
     res.json(orderResponse);
   } catch (error) {
@@ -355,25 +403,21 @@ router.patch('/:id/status', requireBusinessAuth, async (req, res) => {
       io.to(`business-${order.business_id}`).emit('order-updated', order);
     }
 
-    // Email notification on meaningful updates
+    // Email notification on meaningful updates (non-blocking)
     if (order && ['preparing', 'ready', 'completed'].includes(order.status)) {
-      try {
-        const itemCount = Array.isArray(order.items) ? order.items.length : undefined
-        await sendBusinessEmail({
-          businessId: order.business_id,
-          subject: `Order status updated: ${order.status}`,
-          text: [
-            `Order status changed: ${order.status}`,
-            ``,
-            `Order: #${String(order.id).slice(0, 8).toUpperCase()}`,
-            `Total: ₦${Number(order.total_amount || 0).toFixed(2)}`,
-            `Customer: ${order.customer_name || 'Guest'} (${order.customer_phone || '—'})`,
-            itemCount != null ? `Items: ${itemCount}` : null
-          ].filter(Boolean).join('\n')
-        })
-      } catch (e) {
-        console.error('Order status email notification error:', e)
-      }
+      const itemCount = Array.isArray(order.items) ? order.items.length : undefined
+      queueBusinessEmail({
+        businessId: order.business_id,
+        subject: `Order status updated: ${order.status}`,
+        text: [
+          `Order status changed: ${order.status}`,
+          ``,
+          `Order: #${String(order.id).slice(0, 8).toUpperCase()}`,
+          `Total: ₦${Number(order.total_amount || 0).toFixed(2)}`,
+          `Customer: ${order.customer_name || 'Guest'} (${order.customer_phone || '—'})`,
+          itemCount != null ? `Items: ${itemCount}` : null
+        ].filter(Boolean).join('\n')
+      })
     }
 
     res.json(order);

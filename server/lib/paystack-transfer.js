@@ -3,7 +3,8 @@
  * Used after successful order payment to send business share to their bank account.
  *
  * Env (optional): PAYSTACK_SECRET_KEY (required for transfers),
- * TRANSFER_PLATFORM_FEE_PERCENT (e.g. 5 for 5%), TRANSFER_PLATFORM_FEE_NAIRA (fixed Naira),
+ * TRANSFER_MENU_FEE_PERCENT / TRANSFER_MENU_FEE_NAIRA,
+ * TRANSFER_TICKETING_FEE_PERCENT / TRANSFER_TICKETING_FEE_NAIRA,
  * TRANSFER_MIN_NAIRA (min transfer after fees, default 50).
  */
 
@@ -12,14 +13,19 @@ const { getDb } = require('../database');
 const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY || '';
 const PAYSTACK_BASE = 'https://api.paystack.co';
 
-// Platform fee: either percentage (e.g. 5 for 5%) or fixed Naira. Prefer percentage if both set.
-const FEE_PERCENT = process.env.TRANSFER_PLATFORM_FEE_PERCENT != null
-  ? Math.max(0, Math.min(100, Number(process.env.TRANSFER_PLATFORM_FEE_PERCENT)))
-  : null;
-const FEE_NAIRA = process.env.TRANSFER_PLATFORM_FEE_NAIRA != null
-  ? Math.max(0, Number(process.env.TRANSFER_PLATFORM_FEE_NAIRA))
-  : null;
 const MIN_TRANSFER_NAIRA = Math.max(1, Number(process.env.TRANSFER_MIN_NAIRA) || 50);
+const MENU_FEE_PERCENT = process.env.TRANSFER_MENU_FEE_PERCENT != null
+  ? Math.max(0, Math.min(100, Number(process.env.TRANSFER_MENU_FEE_PERCENT)))
+  : null;
+const MENU_FEE_NAIRA = process.env.TRANSFER_MENU_FEE_NAIRA != null
+  ? Math.max(0, Number(process.env.TRANSFER_MENU_FEE_NAIRA))
+  : null;
+const TICKETING_FEE_PERCENT = process.env.TRANSFER_TICKETING_FEE_PERCENT != null
+  ? Math.max(0, Math.min(100, Number(process.env.TRANSFER_TICKETING_FEE_PERCENT)))
+  : null;
+const TICKETING_FEE_NAIRA = process.env.TRANSFER_TICKETING_FEE_NAIRA != null
+  ? Math.max(0, Number(process.env.TRANSFER_TICKETING_FEE_NAIRA))
+  : null;
 
 async function paystackPost(path, body) {
   const res = await fetch(`${PAYSTACK_BASE}${path}`, {
@@ -83,19 +89,35 @@ async function getOrCreateRecipient(supabase, businessId) {
  * @param { number } orderTotalNaira
  * @returns { number } amount in kobo, or 0 if below minimum
  */
-/** Default platform fee when no TRANSFER_PLATFORM_FEE_* env is set (matches customer-facing copy). */
-const DEFAULT_FEE_PERCENT = 1.5;
+/** Default platform fee when no TRANSFER_* env is set (matches customer-facing copy). */
+const DEFAULT_MENU_FEE_PERCENT = 1.5;
+const DEFAULT_MENU_FEE_NAIRA = 0;
+const DEFAULT_TICKETING_FEE_PERCENT = 4.0;
+const DEFAULT_TICKETING_FEE_NAIRA = 50;
 
-function computeTransferAmountKobo(orderTotalNaira) {
+function feeConfigForMode(businessMode = 'menu') {
+  if (businessMode === 'ticketing') {
+    return {
+      percent: TICKETING_FEE_PERCENT != null ? TICKETING_FEE_PERCENT : DEFAULT_TICKETING_FEE_PERCENT,
+      flatNaira: TICKETING_FEE_NAIRA != null ? TICKETING_FEE_NAIRA : DEFAULT_TICKETING_FEE_NAIRA
+    };
+  }
+  return {
+    percent: MENU_FEE_PERCENT != null ? MENU_FEE_PERCENT : DEFAULT_MENU_FEE_PERCENT,
+    flatNaira: MENU_FEE_NAIRA != null ? MENU_FEE_NAIRA : DEFAULT_MENU_FEE_NAIRA
+  };
+}
+
+function computeTransferAmountKobo(
+  orderTotalNaira,
+  feePercent = DEFAULT_MENU_FEE_PERCENT,
+  feeNaira = DEFAULT_MENU_FEE_NAIRA
+) {
   let naira = Number(orderTotalNaira);
   if (!Number.isFinite(naira) || naira <= 0) return 0;
-  if (FEE_PERCENT != null && FEE_PERCENT > 0) {
-    naira = naira * (1 - FEE_PERCENT / 100);
-  } else if (FEE_NAIRA != null && FEE_NAIRA > 0) {
-    naira = Math.max(0, naira - FEE_NAIRA);
-  } else {
-    naira = naira * (1 - DEFAULT_FEE_PERCENT / 100);
-  }
+  const safePercent = Number.isFinite(Number(feePercent)) ? Number(feePercent) : DEFAULT_MENU_FEE_PERCENT;
+  const safeFlatFee = Number.isFinite(Number(feeNaira)) ? Number(feeNaira) : DEFAULT_MENU_FEE_NAIRA;
+  naira = Math.max(0, naira - (naira * (safePercent / 100)) - safeFlatFee);
   if (naira < MIN_TRANSFER_NAIRA) return 0;
   return Math.round(naira * 100);
 }
@@ -132,6 +154,17 @@ async function processOrderPayout(orderId, amountPaidNaira) {
   }
 
   const businessId = order.business_id;
+  let businessMode = 'menu';
+  try {
+    const { data: biz } = await supabase
+      .from('businesses')
+      .select('business_mode')
+      .eq('id', businessId)
+      .single();
+    if (biz?.business_mode === 'ticketing') businessMode = 'ticketing';
+  } catch (e) {
+    console.error('processOrderPayout: failed to read business mode', e);
+  }
   const recipientResult = await getOrCreateRecipient(supabase, businessId);
   if (recipientResult.error) {
     await supabase
@@ -144,7 +177,8 @@ async function processOrderPayout(orderId, amountPaidNaira) {
     return { ok: false, error: recipientResult.error };
   }
 
-  const amountKobo = computeTransferAmountKobo(amountPaidNaira);
+  const feeConfig = feeConfigForMode(businessMode);
+  const amountKobo = computeTransferAmountKobo(amountPaidNaira, feeConfig.percent, feeConfig.flatNaira);
   if (amountKobo < 100) {
     await supabase
       .from('orders')

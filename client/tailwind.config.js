@@ -6,6 +6,10 @@ export default {
   ],
   theme: {
     extend: {
+      fontFamily: {
+        display: ['Syne', 'system-ui', 'sans-serif'],
+        landing: ['DM Sans', 'system-ui', 'sans-serif'],
+      },
       colors: {
         'zuri-yellow': '#ffcd1c',
         'zuri-orange': '#ffbd59',

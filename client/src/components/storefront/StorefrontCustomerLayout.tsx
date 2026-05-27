@@ -3,6 +3,7 @@ import type { StorefrontConfig, StorefrontDetails } from '../../types'
 import {
   getStorefrontTheme,
   getHeroBackground,
+  getHeroBannerScrim,
   storefrontFontFamily
 } from '../../lib/storefrontTheme'
 
@@ -46,21 +47,34 @@ export function StorefrontCustomerLayout({
   const font = storefrontFontFamily(config)
   const title = details.name || businessNameFallback
   const tag = cuisineTagStyle(config)
+  const bannerUrl = typeof config.heroBannerUrl === 'string' ? config.heroBannerUrl.trim() : ''
+  const hasBanner = bannerUrl.length > 0
 
   return (
     <div
-      className={embedded ? 'min-h-0 h-full flex flex-col' : 'min-h-screen'}
+      className={embedded ? 'min-h-0 h-full flex flex-col' : 'min-h-screen flex flex-col'}
       style={{ background: theme.page, color: theme.text, fontFamily: font }}
     >
       <div
-        className="relative w-full px-6 pt-7 pb-9 box-border flex flex-col justify-end flex-shrink-0"
-        style={{ minHeight: config.heroHeight, background: getHeroBackground(config), color: '#fff' }}
+        className="relative w-full box-border flex flex-col justify-end flex-shrink-0 overflow-hidden max-md:max-h-[min(52svh,420px)]"
+        style={{
+          minHeight: `clamp(200px, min(48dvh, ${config.heroHeight}px), ${config.heroHeight}px)`,
+          color: '#fff'
+        }}
       >
+        {hasBanner ? (
+          <>
+            <img src={bannerUrl} alt="" className="absolute inset-0 h-full w-full object-cover pointer-events-none" decoding="async" />
+            <div className="absolute inset-0 pointer-events-none" style={{ background: getHeroBannerScrim(config) }} aria-hidden />
+          </>
+        ) : (
+          <div className="absolute inset-0" style={{ background: getHeroBackground(config) }} aria-hidden />
+        )}
         {showPreviewBadge ? (
-          <p className="absolute top-5 left-6 text-xs uppercase tracking-wider text-white/80">Live preview</p>
+          <p className="absolute top-5 left-6 z-20 text-xs uppercase tracking-wider text-white/80">Live preview</p>
         ) : null}
-        <div>
-          <h1 className="font-extrabold leading-tight" style={{ fontSize: config.titleSize }}>
+        <div className="relative z-10 px-4 pt-6 pb-8 sm:px-6 sm:pt-7 sm:pb-9">
+          <h1 className="font-extrabold leading-tight max-w-full break-words" style={{ fontSize: config.titleSize }}>
             {title}
           </h1>
           {details.tagline ? <p className="text-sm text-white/85 mt-2 max-w-xl">{details.tagline}</p> : null}
@@ -76,10 +90,10 @@ export function StorefrontCustomerLayout({
         </div>
       </div>
 
-      <header className="sticky top-0 z-20 border-b" style={{ background: theme.panel, borderColor: theme.border }}>
-        <div className="max-w-6xl mx-auto px-4 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
+      <header className={`${embedded ? '' : 'sticky top-0 z-20'} border-b`} style={{ background: theme.panel, borderColor: theme.border }}>
+        <div className="max-w-6xl mx-auto px-3 sm:px-4 py-3">
+          <div className="flex flex-col gap-3 min-w-0 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+            <div className="flex items-center gap-3 min-w-0 flex-1">
               {logoUrl ? (
                 <img
                   src={logoUrl}
@@ -107,12 +121,12 @@ export function StorefrontCustomerLayout({
                 ) : null}
               </div>
             </div>
-            {headerRight}
+            <div className="shrink-0 self-end sm:self-auto min-w-0 flex justify-end w-full sm:w-auto">{headerRight}</div>
           </div>
         </div>
       </header>
 
-      <div className={embedded ? 'max-w-6xl mx-auto px-4 py-6 flex-1 overflow-y-auto' : 'max-w-6xl mx-auto px-4 py-8'}>
+      <div className={embedded ? 'max-w-6xl mx-auto px-3 py-5 sm:px-4 sm:py-6 flex-1 w-full min-w-0' : 'max-w-6xl mx-auto px-3 py-6 sm:px-4 sm:py-8 flex-1 w-full min-w-0'}>
         {children}
       </div>
     </div>
