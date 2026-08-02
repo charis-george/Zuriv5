@@ -1,5 +1,8 @@
 const { getDb } = require('../database');
-const supabase = getDb();
+
+function db() {
+  return getDb();
+}
 
 const PLANS = Object.freeze({
   FREE: 'free',
@@ -27,14 +30,41 @@ const PLAN_FEATURES = Object.freeze({
   [PLANS.ADVANCED]: { analytics: true, menuPictures: true, businessLogo: true, premiumAnalytics: true, ticketingFees: true }
 });
 
+function effectivePlanFromRow(row) {
+  if (!row) return PLANS.FREE;
+  const storedPlan = row.plan || PLANS.FREE;
+  const status = row.subscription_status || 'none';
+  const periodEnd = row.subscription_current_period_end;
+
+  if (status === 'none' || !periodEnd) {
+    return storedPlan;
+  }
+
+  const stillInPeriod = new Date(periodEnd) > new Date();
+  if (stillInPeriod && (status === 'active' || status === 'past_due' || status === 'cancelled')) {
+    return storedPlan;
+  }
+
+  if (storedPlan !== PLANS.FREE && !stillInPeriod) {
+    return PLANS.FREE;
+  }
+  return storedPlan;
+}
+
 async function getBusinessPlan(businessId) {
-  const { data, error } = await supabase
+  try {
+    const { syncExpiredSubscription } = require('./paystack-subscription');
+    await syncExpiredSubscription(businessId);
+  } catch {
+    /* non-blocking if subscription module unavailable */
+  }
+  const { data, error } = await db()
     .from('businesses')
-    .select('plan')
+    .select('plan, subscription_status, subscription_current_period_end')
     .eq('id', businessId)
     .single();
   if (error || !data) return PLANS.FREE;
-  return data.plan || PLANS.FREE;
+  return effectivePlanFromRow(data);
 }
 
 function canAccessAnalytics(plan) {
@@ -84,6 +114,11 @@ function getPlanAmountNg(plan, interval = 'monthly') {
 
 function canAddMenuPictures(plan) {
   return plan !== PLANS.FREE;
+}
+
+/** AI menu digitization from photo/PDF — free on all plans (usage capped separately). */
+function canUseMenuDigitize(_plan) {
+  return true;
 }
 
 function canAddBusinessLogo(plan) {
@@ -136,11 +171,13 @@ module.exports = {
   PLAN_PRICES_NGN_YEARLY,
   getPlanAmountNg,
   PLAN_FEATURES,
+  effectivePlanFromRow,
   getBusinessPlan,
   canAccessAnalytics,
   canAccessGuestAiStorefront,
   GUEST_AI_STOREFRONT_DISABLED,
   canAddMenuPictures,
+  canUseMenuDigitize,
   canAddBusinessLogo,
   canAccessAIFeatures,
   canUseStorefrontAIGeneration,

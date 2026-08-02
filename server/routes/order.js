@@ -5,30 +5,68 @@ const { getDb } = require('../database');
 const { requireBusinessAuth } = require('../middleware/auth');
 const { getOrCreateNetworkCustomer, updateCustomerStats, getStatsByEmail, getStatsForCustomerIds } = require('../lib/zuri-network');
 const { queueBusinessEmail } = require('../lib/notifications');
-const { resolveActivePresetId, matchesPreset } = require('../lib/menuPresets');
+const { queueOrderReceiptOnce } = require('../lib/orderReceiptEmail');
+const { resolveActivePresetId, resolvePresetIdFromStorefront, matchesPreset } = require('../lib/menuPresets');
+const { canAcceptOrders, canAcceptPayments, statusMessage } = require('../lib/businessStatus');
+const { refundOrderPayment } = require('../lib/paystack-refund');
+const { validateOrderTicketQuantities, getTicketsSoldMap } = require('../lib/ticketQuantityRules');
+const { notifyBusinessNewOrder } = require('../lib/webPush');
+const { sendTicketInviteEmail } = require('../lib/ticketInviteEmail');
 
 const supabase = getDb();
+
+function validateGuestContact({ customerName, customerPhone, customerEmail }) {
+  const name = customerName ? String(customerName).trim() : '';
+  const phone = customerPhone ? String(customerPhone).trim() : '';
+  const email = customerEmail ? String(customerEmail).trim() : '';
+  if (!name || name.length < 2) return 'Name is required';
+  if (!phone || phone.replace(/\D/g, '').length < 7) return 'A valid phone number is required';
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return 'A valid email is required';
+  return null;
+}
 
 function normalizeCatalogMode(value) {
   return value === 'ticketing' ? 'ticketing' : 'menu';
 }
 
+async function resolveOrderCatalogPresetId(businessId, activeMode, { eventSlug, storefrontSlug } = {}) {
+  const fromStorefront = await resolvePresetIdFromStorefront(
+    businessId,
+    storefrontSlug ? String(storefrontSlug).trim() : '',
+    eventSlug ? String(eventSlug).trim() : ''
+  );
+  if (fromStorefront) return fromStorefront;
+  return resolveActivePresetId(businessId, activeMode);
+}
+
+const MENU_ITEM_SELECT =
+  'id, name, price, estimated_prep_time, item_mode, preset_id, max_per_user, group_size, min_per_order, pricing_type';
+
 // Create order
 router.post('/', async (req, res) => {
   try {
-    const { businessId, customerName, customerPhone, customerEmail, guestToken, items } = req.body;
+    const { businessId, customerName, customerPhone, customerEmail, guestToken, items, eventSlug, storefrontSlug } = req.body;
 
     if (!businessId || !items || items.length === 0) {
       return res.status(400).json({ error: 'Business ID and items are required' });
     }
 
+    const guestErr = validateGuestContact({ customerName, customerPhone, customerEmail });
+    if (guestErr) return res.status(400).json({ error: guestErr });
+
     const { data: business } = await supabase
       .from('businesses')
-      .select('business_mode')
+      .select('business_mode, account_status')
       .eq('id', businessId)
       .maybeSingle();
+
+    if (!business) return res.status(404).json({ error: 'Business not found' });
+    if (!canAcceptOrders(business.account_status)) {
+      return res.status(403).json({ error: statusMessage(business.account_status) || 'This venue is unavailable' });
+    }
+
     const activeMode = normalizeCatalogMode(business?.business_mode);
-    const activePresetId = await resolveActivePresetId(businessId, activeMode);
+    const activePresetId = await resolveOrderCatalogPresetId(businessId, activeMode, { eventSlug, storefrontSlug });
 
     const menuItemIds = [...new Set(items.map(item => item.menuItemId).filter(Boolean))];
     if (menuItemIds.length === 0) {
@@ -40,7 +78,7 @@ router.post('/', async (req, res) => {
     try {
       const resMenu = await supabase
         .from('menu_items')
-          .select('id, name, price, estimated_prep_time, item_mode, preset_id')
+          .select(MENU_ITEM_SELECT)
         .eq('business_id', businessId)
         .in('id', menuItemIds);
       menuItems = resMenu.data || [];
@@ -55,7 +93,7 @@ router.post('/', async (req, res) => {
         // Backward compatibility: older DBs may not have this column yet.
         const resMenuFallback = await supabase
           .from('menu_items')
-          .select('id, name, price, item_mode')
+          .select('id, name, price, item_mode, pricing_type')
           .eq('business_id', businessId)
           .in('id', menuItemIds);
         if (resMenuFallback.error) {
@@ -78,6 +116,21 @@ router.post('/', async (req, res) => {
     const missingIds = menuItemIds.filter(id => !menuMap[id]);
     if (missingIds.length > 0) {
       return res.status(400).json({ error: 'One or more items are not on the menu or do not belong to this business' });
+    }
+
+    const inviteOnlyIds = menuItemIds.filter((id) => menuMap[id]?.pricing_type === 'invite_only');
+    if (inviteOnlyIds.length > 0) {
+      return res.status(403).json({
+        error: 'One or more tickets are invite-only. Ask the organizer to send you an invite link.'
+      });
+    }
+
+    if (activeMode === 'ticketing') {
+      const ticketsSoldMap = await getTicketsSoldMap(supabase, businessId, menuItemIds);
+      const ticketRuleErr = validateOrderTicketQuantities(menuMap, items, ticketsSoldMap);
+      if (ticketRuleErr) {
+        return res.status(400).json({ error: ticketRuleErr });
+      }
     }
 
     let totalAmount = 0;
@@ -106,9 +159,11 @@ router.post('/', async (req, res) => {
       });
     }
 
-    if (orderItems.length === 0 || totalAmount <= 0) {
-      return res.status(400).json({ error: 'Order must have at least one item with a valid price' });
+    if (orderItems.length === 0) {
+      return res.status(400).json({ error: 'Order must have at least one item' });
     }
+
+    const isFreeOrder = totalAmount <= 0;
 
     const orderId = uuidv4();
     orderItems.forEach(oi => { oi.order_id = orderId; });
@@ -128,13 +183,15 @@ router.post('/', async (req, res) => {
       customer_name: customerName || null,
       customer_phone: customerPhone || null,
       customer_email: customerEmail || null,
-      status: 'pending',
+      status: isFreeOrder ? 'pending' : 'pending',
       total_amount: totalAmount,
       estimated_prep_time:
         estimatedPrepTimeWeightedQty > 0 ? Math.round(estimatedPrepTimeWeightedSum / estimatedPrepTimeWeightedQty) : 15,
-      payment_status: 'pending'
+      payment_status: isFreeOrder ? 'paid' : 'pending',
+      payment_method: isFreeOrder ? 'free' : null
     };
     if (zuriCustomerId) orderPayload.zuri_customer_id = zuriCustomerId;
+    if (eventSlug && String(eventSlug).trim()) orderPayload.event_slug = String(eventSlug).trim().slice(0, 80);
 
     const { data: order, error: orderError } = await supabase
       .from('orders')
@@ -184,35 +241,226 @@ router.post('/', async (req, res) => {
       }
     }
 
-    // Emit real-time notification to business
-    const io = req.app.get('io');
-    if (io) {
-      io.to(`business-${businessId}`).emit('new-order', orderResponse);
+    // Ticketing: unpaid checkouts are not real sales yet — notify only when paid (or free/complimentary).
+    const deferVenueAlerts =
+      activeMode === 'ticketing' && orderPayload.payment_status !== 'paid';
+
+    if (!deferVenueAlerts) {
+      const io = req.app.get('io');
+      if (io) {
+        io.to(`business-${businessId}`).emit('new-order', orderResponse);
+      }
+
+      notifyBusinessNewOrder(
+        businessId,
+        orderResponse,
+        activeMode === 'ticketing' ? { title: 'New ticket sale' } : undefined
+      ).catch((e) => {
+        console.error('[ZURI] push new-order error:', e?.message || e);
+      });
+
+      const itemLines = (orderItemsWithNames || []).map(it => `- ${it.quantity}× ${it.menuItemName} (${it.price.toFixed ? it.price.toFixed(2) : it.price})`).join('\n')
+      queueBusinessEmail({
+        businessId,
+        subject: activeMode === 'ticketing'
+          ? `New ticket sale (${orderResponse.status})`
+          : `New order received (${orderResponse.status})`,
+        text: [
+          activeMode === 'ticketing'
+            ? `You received a new paid ticket sale from ${orderResponse.customer_name || 'a guest'}.`
+            : `You received a new order from ${orderResponse.customer_name || 'a guest'}.`,
+          ``,
+          `Order: #${String(orderResponse.id).slice(0, 8).toUpperCase()}`,
+          `Total: ₦${Number(orderResponse.total_amount || orderResponse.totalAmount || 0).toFixed(2)}`,
+          `Phone: ${orderResponse.customer_phone || '—'}`,
+          ``,
+          `Items:`,
+          itemLines || '(no items)',
+          ``,
+          activeMode === 'ticketing'
+            ? `Open your dashboard to confirm the sale.`
+            : `Open your dashboard to start preparing.`
+        ].join('\n')
+      });
+    } else {
+      // Still emit so connected dashboards can refresh (list stays paid-only).
+      const io = req.app.get('io');
+      if (io) {
+        io.to(`business-${businessId}`).emit('new-order', orderResponse);
+      }
     }
 
-    // Email notification to business (best effort)
-    const itemLines = (orderItemsWithNames || []).map(it => `- ${it.quantity}× ${it.menuItemName} (${it.price.toFixed ? it.price.toFixed(2) : it.price})`).join('\n')
-    queueBusinessEmail({
-      businessId,
-      subject: `New order received (${orderResponse.status})`,
-      text: [
-        `You received a new order from ${orderResponse.customer_name || 'a guest'}.`,
-        ``,
-        `Order: #${String(orderResponse.id).slice(0, 8).toUpperCase()}`,
-        `Total: ₦${Number(orderResponse.total_amount || orderResponse.totalAmount || 0).toFixed(2)}`,
-        `Phone: ${orderResponse.customer_phone || '—'}`,
-        ``,
-        `Items:`,
-        itemLines || '(no items)',
-        ``,
-        `Open your dashboard to start preparing.`
-      ].join('\n')
-    })
+    if (isFreeOrder) {
+      queueOrderReceiptOnce({
+        orderId,
+        paidAt: new Date().toISOString(),
+        reference: orderId
+      });
+    }
 
     res.json(orderResponse);
   } catch (error) {
     console.error('Create order error:', error);
     res.status(500).json({ error: 'Failed to create order' });
+  }
+});
+
+// Send invite-only ticket order to a guest (business dashboard)
+router.post('/ticket-invite', requireBusinessAuth, async (req, res) => {
+  try {
+    const businessId = req.businessId;
+    const {
+      menuItemId,
+      quantity,
+      customerName,
+      customerEmail,
+      customerPhone,
+      deliveryMode,
+      eventSlug,
+      storefrontSlug
+    } = req.body;
+
+    if (!menuItemId || !customerName || !customerEmail) {
+      return res.status(400).json({ error: 'Ticket, guest name, and email are required' });
+    }
+
+    const guestErr = validateGuestContact({ customerName, customerPhone, customerEmail });
+    if (guestErr) return res.status(400).json({ error: guestErr });
+
+    const mode = deliveryMode === 'complimentary' ? 'complimentary' : 'payment_link';
+    const qty = Math.min(99, Math.max(1, parseInt(quantity, 10) || 1));
+
+    const { data: business } = await supabase
+      .from('businesses')
+      .select('business_mode, account_status, name, email')
+      .eq('id', businessId)
+      .maybeSingle();
+
+    if (!business) return res.status(404).json({ error: 'Business not found' });
+    if (business.business_mode !== 'ticketing') {
+      return res.status(400).json({ error: 'Ticket invites are only available for ticketing businesses' });
+    }
+    if (!canAcceptOrders(business.account_status)) {
+      return res.status(403).json({ error: statusMessage(business.account_status) || 'This venue is unavailable' });
+    }
+
+    const activeMode = normalizeCatalogMode(business.business_mode);
+    const activePresetId = await resolveOrderCatalogPresetId(businessId, activeMode, { eventSlug, storefrontSlug });
+
+    const { data: menuItem, error: menuError } = await supabase
+      .from('menu_items')
+      .select(MENU_ITEM_SELECT)
+      .eq('business_id', businessId)
+      .eq('id', menuItemId)
+      .maybeSingle();
+
+    if (menuError || !menuItem) {
+      return res.status(404).json({ error: 'Ticket not found' });
+    }
+
+    if (
+      (menuItem.item_mode && normalizeCatalogMode(menuItem.item_mode) !== activeMode) ||
+      !matchesPreset(menuItem, activePresetId)
+    ) {
+      return res.status(400).json({ error: 'This ticket is not on the active catalog' });
+    }
+
+    if (menuItem.pricing_type !== 'invite_only') {
+      return res.status(400).json({ error: 'Only invite-only tickets can be sent this way' });
+    }
+
+    const menuMap = { [menuItem.id]: menuItem };
+    const ticketsSoldMap = await getTicketsSoldMap(supabase, businessId, [menuItemId]);
+    const ticketRuleErr = validateOrderTicketQuantities(menuMap, [{ menuItemId, quantity: qty }], ticketsSoldMap);
+    if (ticketRuleErr) {
+      return res.status(400).json({ error: ticketRuleErr });
+    }
+
+    const price = Number(menuItem.price) || 0;
+    const totalAmount = price * qty;
+    const isComplimentary = mode === 'complimentary' || totalAmount <= 0;
+
+    if (!isComplimentary && !canAcceptPayments(business.account_status)) {
+      return res.status(403).json({ error: statusMessage(business.account_status) || 'Payments are not available for this venue' });
+    }
+
+    const orderId = uuidv4();
+    const orderItems = [{
+      id: uuidv4(),
+      order_id: orderId,
+      menu_item_id: menuItemId,
+      quantity: qty,
+      price,
+      special_notes: 'invite_only'
+    }];
+
+    const orderPayload = {
+      id: orderId,
+      business_id: businessId,
+      customer_name: String(customerName).trim(),
+      customer_phone: customerPhone ? String(customerPhone).trim() : null,
+      customer_email: String(customerEmail).trim().toLowerCase(),
+      status: 'pending',
+      total_amount: totalAmount,
+      estimated_prep_time: 15,
+      payment_status: isComplimentary ? 'paid' : 'pending',
+      payment_method: isComplimentary ? 'invite_complimentary' : 'invite_pending'
+    };
+    if (eventSlug && String(eventSlug).trim()) {
+      orderPayload.event_slug = String(eventSlug).trim().slice(0, 80);
+    }
+
+    const { data: order, error: orderError } = await supabase
+      .from('orders')
+      .insert(orderPayload)
+      .select()
+      .single();
+
+    if (orderError) {
+      console.error('Ticket invite order error:', orderError);
+      return res.status(500).json({ error: 'Failed to create invite order' });
+    }
+
+    const { error: itemsError } = await supabase.from('order_items').insert(orderItems);
+    if (itemsError) {
+      console.error('Ticket invite items error:', itemsError);
+      return res.status(500).json({ error: 'Failed to create invite order items' });
+    }
+
+    const orderItemsWithNames = [{
+      menuItemId,
+      menuItemName: menuItem.name || 'Ticket',
+      quantity: qty,
+      price
+    }];
+
+    const emailResult = await sendTicketInviteEmail({
+      order,
+      business,
+      items: orderItemsWithNames,
+      deliveryMode: mode,
+      eventSlug: eventSlug ? String(eventSlug).trim() : null
+    });
+
+    if (emailResult?.skipped) {
+      console.warn('[ZURI] Ticket invite API: email did not send', {
+        orderId,
+        deliveryMode: mode,
+        reason: emailResult.reason,
+        cause: emailResult.cause || emailResult.reason
+      });
+    }
+
+    res.json({
+      success: true,
+      orderId,
+      deliveryMode: mode,
+      paymentStatus: order.payment_status,
+      email: emailResult
+    });
+  } catch (error) {
+    console.error('Ticket invite error:', error);
+    res.status(500).json({ error: 'Failed to send ticket invite' });
   }
 });
 
@@ -223,7 +471,7 @@ router.get('/business/:businessId', requireBusinessAuth, async (req, res) => {
     if (businessId !== req.businessId) {
       return res.status(403).json({ error: 'You can only view your own business orders' });
     }
-    const { status, limit = 50 } = req.query;
+    const { status, payment_status: paymentStatus, limit = 50 } = req.query;
 
     let query = supabase
       .from('orders')
@@ -234,6 +482,9 @@ router.get('/business/:businessId', requireBusinessAuth, async (req, res) => {
 
     if (status) {
       query = query.eq('status', status);
+    }
+    if (paymentStatus && typeof paymentStatus === 'string') {
+      query = query.eq('payment_status', paymentStatus);
     }
 
     const { data: orders, error } = await query;
@@ -424,6 +675,71 @@ router.patch('/:id/status', requireBusinessAuth, async (req, res) => {
   } catch (error) {
     console.error('Update order status error:', error);
     res.status(500).json({ error: 'Failed to update order' });
+  }
+});
+
+/** Business-initiated refund (ticketing cancellations, disputes) */
+router.post('/:id/refund', requireBusinessAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { amountNaira, reason } = req.body || {};
+
+    const { data: order } = await supabase
+      .from('orders')
+      .select('id, business_id, payment_status')
+      .eq('id', id)
+      .single();
+
+    if (!order || order.business_id !== req.businessId) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    const result = await refundOrderPayment(id, { amountNaira, reason });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json(result);
+  } catch (error) {
+    console.error('Business refund error:', error);
+    res.status(500).json({ error: 'Refund failed' });
+  }
+});
+
+/** Guest or venue dispute escalation */
+router.post('/:id/dispute', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason, raisedBy, customerEmail } = req.body || {};
+
+    const { data: order } = await supabase
+      .from('orders')
+      .select('id, business_id, customer_email')
+      .eq('id', id)
+      .single();
+
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    if (raisedBy === 'guest' && customerEmail) {
+      const norm = String(customerEmail).trim().toLowerCase();
+      if (order.customer_email && order.customer_email.toLowerCase() !== norm) {
+        return res.status(403).json({ error: 'Email does not match order' });
+      }
+    }
+
+    const { data, error } = await supabase
+      .from('disputes')
+      .insert({
+        order_id: id,
+        business_id: order.business_id,
+        raised_by: ['guest', 'venue', 'platform'].includes(raisedBy) ? raisedBy : 'guest',
+        reason: reason ? String(reason).slice(0, 1000) : null
+      })
+      .select()
+      .single();
+
+    if (error) return res.status(500).json({ error: 'Failed to open dispute' });
+    res.json(data);
+  } catch (error) {
+    console.error('Create dispute error:', error);
+    res.status(500).json({ error: 'Failed to open dispute' });
   }
 });
 

@@ -1,6 +1,7 @@
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
 import { lazy, Suspense, useEffect } from 'react'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { DialogProvider } from './components/DialogProvider'
 import { PaperPlaneLoader } from './components/PaperPlaneLoader'
 
 // Lazy load pages for code splitting
@@ -16,8 +17,10 @@ const BusinessResetPassword = lazy(() => import('./pages/BusinessResetPassword')
 const BusinessDashboard = lazy(() => import('./pages/BusinessDashboard'))
 const BusinessStorefrontCustomizer = lazy(() => import('./pages/BusinessStorefrontCustomizer'))
 const BusinessPaymentPage = lazy(() => import('./pages/BusinessPaymentPage'))
+const BusinessSettingsPage = lazy(() => import('./pages/BusinessSettingsPage'))
 const BusinessOnboarding = lazy(() => import('./pages/BusinessOnboarding'))
 const QRScanner = lazy(() => import('./pages/QRScanner'))
+const ScannerConnectPage = lazy(() => import('./pages/ScannerConnectPage'))
 const DemoPage = lazy(() => import('./pages/DemoPage'))
 const WaitlistPage = lazy(() => import('./pages/WaitlistPage'))
 const ZuriTapPage = lazy(() => import('./pages/ZuriTapPage'))
@@ -46,10 +49,13 @@ function AppRoutes(): JSX.Element {
         <Route path="/pricing" element={<PricingPage />} />
         <Route path="/privacy" element={<PrivacyTermsPage />} />
         <Route path="/order/:businessId" element={<OrderPage />} />
+        <Route path="/order/:businessId/:storefrontSlug" element={<OrderPage />} />
+        <Route path="/event/:businessId/:eventSlug" element={<OrderPage />} />
         <Route path="/payment-done" element={<PaymentDone />} />
         <Route path="/upgrade-done" element={<UpgradeDone />} />
         <Route path="/subscribe/:plan" element={<SubscriptionSummary />} />
         <Route path="/scan" element={<QRScanner />} />
+        <Route path="/scan/connect" element={<ScannerConnectPage />} />
         <Route path="/demo" element={<DemoPage />} />
         <Route path="/waitlist" element={<WaitlistPage />} />
         <Route path="/reserve/:businessId" element={<ReservationPage />} />
@@ -67,6 +73,7 @@ function AppRoutes(): JSX.Element {
         <Route path="/business/dashboard/:businessId" element={<BusinessDashboard />} />
         <Route path="/business/dashboard/:businessId/customize" element={<BusinessStorefrontCustomizer />} />
         <Route path="/business/dashboard/:businessId/payment" element={<BusinessPaymentPage />} />
+        <Route path="/business/dashboard/:businessId/settings" element={<BusinessSettingsPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </Suspense>
@@ -80,11 +87,13 @@ function App(): JSX.Element {
   }, [])
   return (
     <Router>
-      <ErrorBoundary>
-        <div className="z-theme-scope min-h-screen z-page-orbit font-light antialiased">
-          <AppRoutes />
-        </div>
-      </ErrorBoundary>
+      <DialogProvider>
+        <ErrorBoundary>
+          <div className="z-theme-scope min-h-screen z-page-orbit font-light antialiased">
+            <AppRoutes />
+          </div>
+        </ErrorBoundary>
+      </DialogProvider>
     </Router>
   )
 }

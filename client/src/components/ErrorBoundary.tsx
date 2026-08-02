@@ -24,11 +24,18 @@ export class ErrorBoundary extends Component<Props, State> {
   render(): ReactNode {
     if (this.state.hasError && this.state.error) {
       if (this.props.fallback) return this.props.fallback
+      const showDetails = import.meta.env.DEV
       return (
         <div className="min-h-screen bg-zuri-light flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl border border-gray-200 p-8 max-w-md w-full text-center">
             <h1 className="text-xl font-bold text-zuri-black mb-2">Something went wrong</h1>
-            <p className="text-gray-600 text-sm mb-4 break-all">{this.state.error.message}</p>
+            {showDetails ? (
+              <p className="text-gray-600 text-sm mb-4 break-all">{this.state.error.message}</p>
+            ) : (
+              <p className="text-gray-600 text-sm mb-4">
+                An unexpected error occurred. Please refresh the page or go back home.
+              </p>
+            )}
             <button
               onClick={() => this.setState({ hasError: false, error: null })}
               className="bg-zuri-black text-white px-4 py-2 rounded-lg font-semibold hover:bg-gray-800 transition mr-2"

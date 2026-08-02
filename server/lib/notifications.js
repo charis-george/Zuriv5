@@ -1,47 +1,54 @@
-const { getTransporter } = require('./email')
-const { getDb } = require('../database')
+const { getDb } = require('../database');
+const { sendResendEmail, isResendConfigured } = require('./resendMail');
 
-const supabase = getDb()
+const supabase = new Proxy(
+  {},
+  {
+    get(_target, prop) {
+      const client = getDb();
+      return client[prop];
+    }
+  }
+);
 
 async function getBusinessEmail(businessId) {
   const { data, error } = await supabase
     .from('businesses')
     .select('email, name')
     .eq('id', businessId)
-    .single()
+    .single();
 
-  if (error || !data?.email) return null
-  return data
+  if (error || !data?.email) return null;
+  return data;
 }
 
-async function sendBusinessEmail({ businessId, subject, text }) {
-  const business = await getBusinessEmail(businessId)
-  if (!business?.email) return { skipped: true, reason: 'missing business email' }
+async function sendBusinessEmail({ businessId, subject, text, html }) {
+  const business = await getBusinessEmail(businessId);
+  if (!business?.email) return { skipped: true, reason: 'missing business email' };
+  if (!isResendConfigured()) {
+    return { skipped: true, reason: 'resend not configured' };
+  }
 
-  const transporter = getTransporter()
-  if (!transporter) return { skipped: true, reason: 'smtp not configured' }
-
-  const from = process.env.SMTP_FROM || process.env.SMTP_USER
-
-  await transporter.sendMail({
-    from,
+  await sendResendEmail({
     to: business.email,
     subject,
-    text
-  })
+    text,
+    html
+  });
 
-  return { skipped: false }
+  return { skipped: false };
 }
 
-/** Fire-and-forget: never block HTTP handlers on SMTP (slow/hanging mail servers freeze the UI). */
+/** Fire-and-forget: never block HTTP handlers on email delivery. */
 function queueBusinessEmail(args) {
   setImmediate(() => {
-    sendBusinessEmail(args).catch((err) => console.error('Business email queue error:', err))
-  })
+    sendBusinessEmail(args).catch((err) =>
+      console.error('Business email queue error:', err?.message || err)
+    );
+  });
 }
 
 module.exports = {
   sendBusinessEmail,
   queueBusinessEmail
-}
-
+};

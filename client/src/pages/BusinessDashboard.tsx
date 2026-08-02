@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback, type FormEvent } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import io, { Socket } from 'socket.io-client'
@@ -6,7 +6,7 @@ import {
   LineChart, Line, BarChart, Bar, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts'
-import { Business, Order, Reservation, Review, SalesSummary, SalesByDate, PopularItem, PeakHour, ProfitMargin, QRCodeData, MenuCategory, MenuItem, PLAN_LABELS, type BusinessMode, type AiGuestStorefrontConfig } from '../types'
+import { Business, Order, Reservation, Review, SalesSummary, SalesByDate, PopularItem, PeakHour, ProfitMargin, QRCodeData, MenuCategory, MenuItem, PLAN_LABELS, type BusinessMode, type AiGuestStorefrontConfig, type PaymentAgentAlert } from '../types'
 import type { CustomerIntelligence } from '../types'
 import type { MarketInsights } from '../types'
 import { PaperPlaneLoader } from '../components/PaperPlaneLoader'
@@ -14,11 +14,29 @@ import { ConfirmModal } from '../components/ConfirmModal'
 import { CustomDropdown } from '../components/CustomDropdown'
 import { ZuriDatePicker } from '../components/ZuriDatePicker'
 import { API_BASE_URL, apiUrl } from '../lib/apiBase'
+import { clearBusinessAuth, getBusinessToken } from '../lib/businessAuthStorage'
 import { formatUserFacingError } from '../lib/formatApiError'
+import { normalizeUuidParam } from '../lib/normalizeUuid'
 import { isAiInsightsTier, isGuestAiMenuTier, isGrowthPlusPlan, isOpsAiTier, isScaleGuestMenuTagPlan } from '../lib/planAccess'
 import { mergeStorefrontConfig, DEFAULT_AI_GUEST } from '../lib/storefrontTheme'
+import { normalizeStorefrontProfiles, storefrontShareUrl } from '../lib/storefrontProfiles'
+import { eventShareUrl } from '../lib/storefrontEventPages'
 import { computeNetAfterFeeNaira, computeTransactionFeeNaira, formatModeTransactionFee } from '../lib/transactionFees'
 import { MenuCatalogPresets } from '../components/menu/MenuCatalogPresets'
+import { StorefrontProfilePicker } from '../components/storefront/StorefrontProfilePicker'
+import { useDialog } from '../components/DialogProvider'
+import { BusinessDashboardMobileShell } from '../components/business/BusinessDashboardMobileShell'
+import { MobileBottomSheet } from '../components/business/MobileBottomSheet'
+import {
+  formatOrderStatusLabel,
+  getOrderStatusColor,
+  getOrderStatusActions,
+  matchesTicketingOrderFilter,
+  ticketingOrdersSectionTitle,
+  type TicketingOrderFilter,
+  type OrderFulfillmentStatus
+} from '../lib/ticketingOrderStatus'
+import { isPushSupported, showLocalOrderNotification, subscribeBusinessPush } from '../lib/pushNotifications'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -166,18 +184,19 @@ const WS_URL =
     ? 'http://localhost:3000'
     : (typeof window !== 'undefined' ? window.location.origin : ''))
 
-/** Press feedback for primary dashboard controls (tabs, bell, order actions). */
-const BTN_PRESS =
-  'transition-transform duration-150 ease-out motion-safe:active:scale-[0.96] active:brightness-[0.96]'
+/** Instant touch feedback for dashboard controls (mobile + desktop). */
+const BTN_PRESS = 'dashboard-btn'
 
 function BusinessDashboard(): JSX.Element {
-  const { businessId } = useParams<{ businessId: string }>()
+  const dialog = useDialog()
+  const { businessId: rawBusinessId } = useParams<{ businessId: string }>()
+  const businessId = normalizeUuidParam(rawBusinessId)
   const navigate = useNavigate()
 
   const [isPhone, setIsPhone] = useState<boolean>(false)
 
   const getAuthHeaders = () => {
-    const t = localStorage.getItem('zuri_business_token')
+    const t = getBusinessToken()
     return t ? { Authorization: `Bearer ${t}` } : {}
   }
 
@@ -207,7 +226,17 @@ function BusinessDashboard(): JSX.Element {
   const [qrCode, setQrCode] = useState<QRCodeData | null>(null)
   const [qrLoading, setQrLoading] = useState(false)
   const [qrError, setQrError] = useState<string | null>(null)
+  const [scannerCodes, setScannerCodes] = useState<
+    { id: string; label: string | null; createdAt: string; lastUsedAt: string | null }[]
+  >([])
+  const [scannerCodesLoading, setScannerCodesLoading] = useState(false)
+  const [scannerConnectUrl, setScannerConnectUrl] = useState('')
+  const [scannerCodeBusy, setScannerCodeBusy] = useState(false)
+  const [newScannerCode, setNewScannerCode] = useState<{ code: string; label: string | null } | null>(null)
+  const [scannerCodeLabel, setScannerCodeLabel] = useState('')
+  const [scannerCodesError, setScannerCodesError] = useState<string | null>(null)
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null)
+  const [selectedMenuStorefrontId, setSelectedMenuStorefrontId] = useState<string | null>(null)
   const [menu, setMenu] = useState<MenuCategory[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [activeTab, setActiveTab] = useState<TabType>('orders')
@@ -238,6 +267,15 @@ function BusinessDashboard(): JSX.Element {
   const [dishEnrichLoading, setDishEnrichLoading] = useState(false)
   const [imageUploading, setImageUploading] = useState(false)
   const [imageUploadError, setImageUploadError] = useState<string | null>(null)
+  const [inviteTicketItem, setInviteTicketItem] = useState<MenuItem | null>(null)
+  const [inviteForm, setInviteForm] = useState({
+    customerName: '',
+    customerEmail: '',
+    customerPhone: '',
+    quantity: '1',
+    deliveryMode: 'payment_link' as 'payment_link' | 'complimentary'
+  })
+  const [inviteSending, setInviteSending] = useState(false)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const [showLogoModal, setShowLogoModal] = useState(false)
   const [logoUploading, setLogoUploading] = useState(false)
@@ -249,6 +287,14 @@ function BusinessDashboard(): JSX.Element {
   const [ordersTimePreset, setOrdersTimePreset] = useState<OrdersTimePreset>('all')
   const [ordersCustomFrom, setOrdersCustomFrom] = useState('')
   const [ordersCustomTo, setOrdersCustomTo] = useState('')
+  const [ticketingOrderFilter, setTicketingOrderFilter] = useState<TicketingOrderFilter>('all')
+  const [pushAlertsEnabled, setPushAlertsEnabled] = useState(
+    () => typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted'
+  )
+  const [pushBannerDismissed, setPushBannerDismissed] = useState(false)
+  const [agentPendingReview, setAgentPendingReview] = useState<PaymentAgentAlert[]>([])
+  const [agentNeedsAttention, setAgentNeedsAttention] = useState<PaymentAgentAlert[]>([])
+  const [agentConfirmingId, setAgentConfirmingId] = useState<string | null>(null)
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false)
   const [changePasswordCurrent, setChangePasswordCurrent] = useState('')
   const [changePasswordNew, setChangePasswordNew] = useState('')
@@ -264,18 +310,52 @@ function BusinessDashboard(): JSX.Element {
   const notificationsMenuRef = useRef<HTMLDivElement>(null)
 
   const [tapOptimisticOn, setTapOptimisticOn] = useState(false)
-  const [tapCode, setTapCode] = useState<string | null>(null)
+  const [tapEnabled, setTapEnabled] = useState(false)
   const [tapExpiresAt, setTapExpiresAt] = useState<string | null>(null)
   const [tapSending, setTapSending] = useState(false)
   const [tapWaitingOrderId, setTapWaitingOrderId] = useState<string | null>(null)
+  const [tapRequestExpiresAt, setTapRequestExpiresAt] = useState<string | null>(null)
   const [tapSelections, setTapSelections] = useState<Record<string, number>>({})
+  const [tapTableRef, setTapTableRef] = useState('')
+  const [tapStaffCodes, setTapStaffCodes] = useState<Array<{ id: string; code: string; label: string }>>([])
+  const [tapSelectedStaffId, setTapSelectedStaffId] = useState<string | null>(null)
+  const [tapNewStaffLabel, setTapNewStaffLabel] = useState('')
+  const [tapStaffBusy, setTapStaffBusy] = useState(false)
   const [tapRoomLoading, setTapRoomLoading] = useState(false)
   const [tapRoomError, setTapRoomError] = useState<string | null>(null)
-  const tapSwitchOn = tapRoomLoading ? tapOptimisticOn : !!tapCode
+  const tapSwitchOn = tapRoomLoading ? tapOptimisticOn : tapEnabled
   const tapWaitingOrderIdRef = useRef<string | null>(null)
   useEffect(() => { tapWaitingOrderIdRef.current = tapWaitingOrderId }, [tapWaitingOrderId])
+  const selectedTapStaff = tapStaffCodes.find((c) => c.id === tapSelectedStaffId) || tapStaffCodes[0] || null
 
   const isTicketing = business?.businessMode === 'ticketing'
+  const storefrontProfiles = useMemo(
+    () => normalizeStorefrontProfiles(business ?? undefined),
+    [business]
+  )
+  const hasMultipleStorefronts = storefrontProfiles.length > 1
+
+  useEffect(() => {
+    if (!hasMultipleStorefronts) return
+    const active =
+      storefrontProfiles.find((p) => p.id === selectedMenuStorefrontId) ||
+      storefrontProfiles.find((p) => p.isDefault) ||
+      storefrontProfiles[0]
+    if (!active) return
+    if (!selectedMenuStorefrontId) {
+      setSelectedMenuStorefrontId(active.id)
+      if (active.catalogPresetId) setEditingPresetId(active.catalogPresetId)
+      return
+    }
+    if (active.catalogPresetId) setEditingPresetId(active.catalogPresetId)
+  }, [storefrontProfiles, hasMultipleStorefronts, selectedMenuStorefrontId])
+
+  const handleSelectMenuStorefront = (profileId: string): void => {
+    setSelectedMenuStorefrontId(profileId)
+    const profile = storefrontProfiles.find((p) => p.id === profileId)
+    if (profile?.catalogPresetId) setEditingPresetId(profile.catalogPresetId)
+  }
+
   const canCustomizeStorefront = isGrowthPlusPlan(business?.plan)
   const ticketDraftPrice = Number(itemForm.price)
   const ticketFeePreview =
@@ -331,7 +411,7 @@ function BusinessDashboard(): JSX.Element {
 
   useEffect(() => {
     if (!businessId) return
-    const token = localStorage.getItem('zuri_business_token')
+    const token = getBusinessToken()
     if (!token) {
       navigate('/business/login', { replace: true })
       return
@@ -342,7 +422,7 @@ function BusinessDashboard(): JSX.Element {
     }
 
     // Fetch business info
-    axios.get<Business>(`/api/business/${businessId}`)
+    axios.get<Business>(`/api/business/${businessId}`, { headers: getAuthHeaders() })
       .then(res => {
         setBusiness(res.data)
         setBusinessGroupDraft(res.data.businessGroupId || '')
@@ -356,12 +436,29 @@ function BusinessDashboard(): JSX.Element {
 
     loadQrCode()
 
-    axios.get<{ code: string | null; expiresAt?: string }>(apiUrl(`/api/tap/room?businessId=${businessId}`), { headers: getAuthHeaders() })
-      .then(res => { if (res.data?.code) { setTapCode(res.data.code); setTapOptimisticOn(true); setTapExpiresAt(res.data.expiresAt || null) } })
+    axios.get<{
+      enabled?: boolean
+      code: string | null
+      expiresAt?: string
+      staffCodes?: Array<{ id: string; code: string; label: string }>
+    }>(apiUrl(`/api/tap/room?businessId=${businessId}`), { headers: getAuthHeaders() })
+      .then(res => {
+        const codes = res.data?.staffCodes || []
+        setTapStaffCodes(codes)
+        if (codes[0]?.id) setTapSelectedStaffId(codes[0].id)
+        if (res.data?.enabled) {
+          setTapEnabled(true)
+          setTapOptimisticOn(true)
+          setTapExpiresAt(res.data.expiresAt || null)
+        }
+      })
       .catch(() => {})
 
     // Fetch orders
     fetchOrders()
+
+    // Zuri Assist payment-matching queues
+    fetchAgentAlerts()
 
     // Fetch reservations (table booking requests)
     fetchReservations()
@@ -375,9 +472,21 @@ function BusinessDashboard(): JSX.Element {
     socket.on('connect', emitJoin)
     emitJoin()
 
-    socket.on('new-order', () => {
+    socket.on('new-order', (data?: Order) => {
       fetchOrders()
       fetchAnalytics()
+      const ticketing = business?.businessMode === 'ticketing'
+      // Ticketing: only surface paid sales (complimentary invites are already paid at create)
+      if (ticketing) {
+        const pay = (data as { payment_status?: string } | undefined)?.payment_status
+        if (pay !== 'paid') return
+      }
+      const orderId = data?.id ? String(data.id).slice(0, 8).toUpperCase() : ''
+      const customer = data ? ((data as { customer_name?: string }).customer_name ?? data.customerName) || 'Guest' : 'Guest'
+      void showLocalOrderNotification(
+        ticketing ? 'New ticket sale' : 'New order received',
+        orderId ? `#${orderId} · ${customer}` : 'Open your dashboard to review it.'
+      )
     })
 
     socket.on('order-updated', () => {
@@ -386,9 +495,42 @@ function BusinessDashboard(): JSX.Element {
     })
 
     socket.on('tap-payment-success', (data: { orderId: string }) => {
-      if (data.orderId === tapWaitingOrderIdRef.current) setTapWaitingOrderId(null)
+      if (data.orderId === tapWaitingOrderIdRef.current) {
+        setTapWaitingOrderId(null)
+        setTapRequestExpiresAt(null)
+      }
       fetchOrders()
       fetchAnalytics()
+    })
+    socket.on('tap-request-declined', (data: { orderId: string }) => {
+      if (data.orderId === tapWaitingOrderIdRef.current) {
+        setTapWaitingOrderId(null)
+        setTapRequestExpiresAt(null)
+      }
+    })
+    socket.on('tap-request-cancelled', (data: { orderId: string }) => {
+      if (data.orderId === tapWaitingOrderIdRef.current) {
+        setTapWaitingOrderId(null)
+        setTapRequestExpiresAt(null)
+      }
+    })
+
+    socket.on('order-payment-success', (data?: { orderId?: string }) => {
+      fetchOrders()
+      fetchAnalytics()
+      fetchAgentAlerts()
+      if (business?.businessMode === 'ticketing') {
+        const orderId = data?.orderId ? String(data.orderId).slice(0, 8).toUpperCase() : ''
+        void showLocalOrderNotification(
+          'New ticket sale',
+          orderId ? `#${orderId} · Payment confirmed` : 'A ticket payment just cleared.'
+        )
+      }
+    })
+
+    socket.on('payment-agent-alert', () => {
+      fetchAgentAlerts()
+      fetchOrders()
     })
 
     socket.on('new-reservation', () => {
@@ -410,7 +552,7 @@ function BusinessDashboard(): JSX.Element {
     return () => {
       socket.disconnect()
     }
-  }, [businessId])
+  }, [businessId, business?.businessMode])
 
   // Load/save past AI chats per business (so refresh doesn't lose them)
   useEffect(() => {
@@ -480,7 +622,7 @@ function BusinessDashboard(): JSX.Element {
     }
   }
 
-  // Typewriter animation for AI responses
+  // Typewriter animation for AI responses (instant on mobile)
   useEffect(() => {
     if (aiInsightLoading) return
     if (aiInsight == null) {
@@ -490,11 +632,17 @@ function BusinessDashboard(): JSX.Element {
     }
 
     const full = String(aiInsight)
+    if (isPhone) {
+      setAiInsightTyped(full)
+      setAiInsightTypingDone(true)
+      return
+    }
+
     setAiInsightTyped('')
     setAiInsightTypingDone(false)
 
     let i = 0
-    const stepMs = 20 // keep typing smooth while avoiding heavy re-renders
+    const stepMs = 20
     const id = window.setInterval(() => {
       i += 1
       setAiInsightTyped(full.slice(0, i))
@@ -505,7 +653,7 @@ function BusinessDashboard(): JSX.Element {
     }, stepMs)
 
     return () => window.clearInterval(id)
-  }, [aiInsight, aiInsightLoading])
+  }, [aiInsight, aiInsightLoading, isPhone])
 
   useEffect(() => {
     if (!logoMenuOpen) return
@@ -612,9 +760,50 @@ function BusinessDashboard(): JSX.Element {
 
   const fetchOrders = (): void => {
     if (!businessId) return
-    axios.get<Order[]>(`/api/order/business/${businessId}`, { headers: getAuthHeaders() })
+    const params =
+      business?.businessMode === 'ticketing' ? { payment_status: 'paid', limit: 100 } : undefined
+    axios
+      .get<Order[]>(`/api/order/business/${businessId}`, { headers: getAuthHeaders(), params })
       .then(res => setOrders(res.data))
-      .catch(err => { if (err.response?.status === 401) { localStorage.removeItem('zuri_business_token'); navigate('/business/login', { replace: true }) } else console.error(err) })
+      .catch(err => { if (err.response?.status === 401) { clearBusinessAuth(); navigate('/business/login', { replace: true }) } else console.error(err) })
+  }
+
+  const fetchAgentAlerts = (): void => {
+    if (!businessId) return
+    const headers = getAuthHeaders()
+    Promise.all([
+      axios.get<{ alerts: PaymentAgentAlert[] }>(apiUrl('/api/agent/alerts/pending-review'), { headers }),
+      axios.get<{ alerts: PaymentAgentAlert[] }>(apiUrl('/api/agent/alerts/needs-attention'), { headers })
+    ])
+      .then(([pending, needs]) => {
+        setAgentPendingReview(Array.isArray(pending.data?.alerts) ? pending.data.alerts : [])
+        setAgentNeedsAttention(Array.isArray(needs.data?.alerts) ? needs.data.alerts : [])
+      })
+      .catch((err) => {
+        if (err.response?.status === 401) {
+          clearBusinessAuth()
+          navigate('/business/login', { replace: true })
+        }
+      })
+  }
+
+  const confirmAgentMatch = async (alertId: string, orderId: string): Promise<void> => {
+    if (!businessId) return
+    setAgentConfirmingId(`${alertId}:${orderId}`)
+    try {
+      await axios.post(
+        apiUrl(`/api/agent/alerts/${alertId}/confirm`),
+        { order_id: orderId },
+        { headers: getAuthHeaders() }
+      )
+      fetchAgentAlerts()
+      fetchOrders()
+      fetchAnalytics()
+    } catch (err) {
+      alert(formatUserFacingError(axios.isAxiosError(err) ? err.response?.data : null, 'Could not confirm payment match'))
+    } finally {
+      setAgentConfirmingId(null)
+    }
   }
 
   const fetchReservations = (): void => {
@@ -623,7 +812,7 @@ function BusinessDashboard(): JSX.Element {
       .then(res => setReservations(Array.isArray(res.data) ? res.data : []))
       .catch(err => {
         if (err.response?.status === 401) {
-          localStorage.removeItem('zuri_business_token')
+          clearBusinessAuth()
           navigate('/business/login', { replace: true })
         } else {
           console.error(err)
@@ -638,7 +827,7 @@ function BusinessDashboard(): JSX.Element {
       .then(res => setReviews(Array.isArray(res.data?.reviews) ? res.data.reviews : []))
       .catch(err => {
         if (err.response?.status === 401) {
-          localStorage.removeItem('zuri_business_token')
+          clearBusinessAuth()
           navigate('/business/login', { replace: true })
         } else {
           console.error(err)
@@ -820,6 +1009,78 @@ function BusinessDashboard(): JSX.Element {
       .finally(() => setQrLoading(false))
   }, [businessId])
 
+  const loadScannerCodes = useCallback((): void => {
+    const token = getBusinessToken()
+    if (!token || !businessId) return
+    setScannerCodesLoading(true)
+    setScannerCodesError(null)
+    axios
+      .get<{ codes: { id: string; label: string | null; createdAt: string; lastUsedAt: string | null }[]; connectUrl: string }>(
+        apiUrl('/api/qr/scanner-codes'),
+        { headers: { Authorization: `Bearer ${token}` } }
+      )
+      .then((res) => {
+        setScannerCodes(res.data.codes || [])
+        setScannerConnectUrl(res.data.connectUrl || `${window.location.origin}/scan/connect`)
+      })
+      .catch((err) => {
+        setScannerCodesError(
+          axios.isAxiosError(err)
+            ? formatUserFacingError(err.response?.data, 'Could not load scanner codes.')
+            : 'Could not load scanner codes.'
+        )
+      })
+      .finally(() => setScannerCodesLoading(false))
+  }, [businessId])
+
+  const createScannerCode = async (): Promise<void> => {
+    const token = getBusinessToken()
+    if (!token || scannerCodeBusy) return
+    setScannerCodeBusy(true)
+    setScannerCodesError(null)
+    try {
+      const res = await axios.post<{ code: string; label: string | null }>(
+        apiUrl('/api/qr/scanner-codes'),
+        { label: scannerCodeLabel.trim() || null },
+        { headers: { Authorization: `Bearer ${token}` } }
+      )
+      setNewScannerCode({ code: res.data.code, label: res.data.label })
+      setScannerCodeLabel('')
+      loadScannerCodes()
+    } catch (err) {
+      setScannerCodesError(
+        axios.isAxiosError(err)
+          ? formatUserFacingError(err.response?.data, 'Could not create scanner code.')
+          : 'Could not create scanner code.'
+      )
+    } finally {
+      setScannerCodeBusy(false)
+    }
+  }
+
+  const revokeScannerCode = async (codeId: string): Promise<void> => {
+    const token = getBusinessToken()
+    if (!token) return
+    try {
+      await axios.delete(apiUrl(`/api/qr/scanner-codes/${codeId}`), {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      loadScannerCodes()
+    } catch (err) {
+      setScannerCodesError(
+        axios.isAxiosError(err)
+          ? formatUserFacingError(err.response?.data, 'Could not revoke scanner code.')
+          : 'Could not revoke scanner code.'
+      )
+    }
+  }
+
+  useEffect(() => {
+    if (activeTab === 'qr' && business?.businessMode === 'ticketing' && businessId) {
+      loadScannerCodes()
+    }
+  }, [activeTab, business?.businessMode, businessId, loadScannerCodes])
+
   useEffect(() => {
     if (!businessId) return
     fetchMenu()
@@ -832,7 +1093,7 @@ function BusinessDashboard(): JSX.Element {
     const itemData = {
       businessId,
       presetId: editingPresetId || undefined,
-      categoryId: itemForm.categoryId || null,
+      categoryId: itemForm.categoryId && itemForm.categoryId !== 'uncategorized' ? itemForm.categoryId : null,
       name: itemForm.name,
       description: itemForm.description,
       price: parseFloat(itemForm.price),
@@ -863,7 +1124,7 @@ function BusinessDashboard(): JSX.Element {
     if (editingItem) {
       axios.put(`/api/menu/item/${editingItem.id}`, {
         ...itemData,
-        categoryId: itemForm.categoryId || null
+        categoryId: itemForm.categoryId && itemForm.categoryId !== 'uncategorized' ? itemForm.categoryId : null
       }, { headers: getAuthHeaders() })
         .then(async () => {
           await saveItemMenuTranslations(editingItem.id)
@@ -892,8 +1153,58 @@ function BusinessDashboard(): JSX.Element {
     }
   }
 
-  const handleDeleteItem = (itemId: string): void => {
-    if (!confirm('Are you sure you want to delete this menu item?')) return
+  const handleSendTicketInvite = async (e: FormEvent): Promise<void> => {
+    e.preventDefault()
+    if (!businessId || !inviteTicketItem) return
+    setInviteSending(true)
+    try {
+      const res = await axios.post(
+        '/api/order/ticket-invite',
+        {
+          menuItemId: inviteTicketItem.id,
+          quantity: Number(inviteForm.quantity) || 1,
+          customerName: inviteForm.customerName.trim(),
+          customerEmail: inviteForm.customerEmail.trim(),
+          customerPhone: inviteForm.customerPhone.trim() || undefined,
+          deliveryMode: inviteForm.deliveryMode
+        },
+        { headers: getAuthHeaders() }
+      )
+      const mode = inviteForm.deliveryMode
+      setInviteTicketItem(null)
+      setInviteForm({
+        customerName: '',
+        customerEmail: '',
+        customerPhone: '',
+        quantity: '1',
+        deliveryMode: 'payment_link'
+      })
+      fetchOrders()
+      void dialog.alert(
+        mode === 'complimentary'
+          ? 'Complimentary ticket sent. The guest will receive their ticket QR by email.'
+          : 'Invite sent. The guest will receive an email with a link to complete payment.',
+        { title: 'Invite sent' }
+      )
+      void res
+    } catch (err) {
+      const msg = axios.isAxiosError(err)
+        ? formatUserFacingError(err.response?.data, 'Failed to send invite')
+        : 'Failed to send invite'
+      void dialog.alert(msg, { title: 'Could not send invite', variant: 'error' })
+    } finally {
+      setInviteSending(false)
+    }
+  }
+
+  const handleDeleteItem = async (itemId: string): Promise<void> => {
+    const ok = await dialog.confirm({
+      title: 'Delete menu item?',
+      message: 'This action cannot be undone.',
+      confirmLabel: 'Delete',
+      danger: true
+    })
+    if (!ok) return
 
     axios.delete(`/api/menu/item/${itemId}`, { headers: getAuthHeaders() })
       .then(() => {
@@ -910,7 +1221,7 @@ function BusinessDashboard(): JSX.Element {
     let categoryId = ''
     for (const category of menu) {
       if (category.items.some(i => i.id === item.id)) {
-        categoryId = category.id
+        categoryId = category.id === 'uncategorized' ? '' : category.id
         break
       }
     }
@@ -947,7 +1258,8 @@ function BusinessDashboard(): JSX.Element {
     axios.post('/api/menu/category', {
       businessId,
       name: categoryForm.name,
-      displayOrder: categoryForm.displayOrder
+      displayOrder: categoryForm.displayOrder,
+      presetId: editingPresetId || undefined
     }, { headers: getAuthHeaders() })
       .then(() => {
         fetchMenu()
@@ -979,37 +1291,130 @@ function BusinessDashboard(): JSX.Element {
   }
 
   const updateOrderStatus = (orderId: string, status: OrderStatus): void => {
+    setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, status } : o)))
     axios.patch(`/api/order/${orderId}/status`, { status }, { headers: getAuthHeaders() })
       .then(() => {
         fetchOrders()
         fetchAnalytics()
       })
-      .catch(err => {
+      .catch((err) => {
+        fetchOrders()
         alert('Failed to update order status')
         console.error(err)
       })
   }
 
+  const refundOrder = async (orderId: string): Promise<void> => {
+    const ok = await dialog.confirm({
+      title: 'Refund buyer?',
+      message: 'This issues a full Paystack refund to the customer. Continue?',
+      confirmLabel: 'Refund',
+      danger: true
+    })
+    if (!ok) return
+    try {
+      await axios.post(`/api/order/${orderId}/refund`, { reason: 'Venue-initiated refund' }, { headers: getAuthHeaders() })
+      fetchOrders()
+      dialog.alert('Refund submitted. It may take a few minutes to appear on the buyer\'s statement.')
+    } catch (err) {
+      alert(formatUserFacingError(axios.isAxiosError(err) ? err.response?.data : null, 'Refund failed'))
+    }
+  }
+
+  const orderPaymentStatus = (o: Order & { payment_status?: string }) =>
+    (o as { payment_status?: string }).payment_status ?? 'pending'
+  const orderPayoutStatus = (o: Order & { payout_status?: string | null }) =>
+    (o as { payout_status?: string | null }).payout_status ?? null
+
+  const pendingReviewOrderIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const alert of agentPendingReview) {
+      for (const c of alert.candidates || []) {
+        if (c.orderId) ids.add(c.orderId)
+      }
+    }
+    return ids
+  }, [agentPendingReview])
+
+  const paymentStatusBadgeClass = (o: Order): string => {
+    const pay = orderPaymentStatus(o)
+    if (pay === 'paid') return 'bg-green-100 text-green-800'
+    if (pendingReviewOrderIds.has(o.id)) return 'bg-amber-100 text-amber-900'
+    return 'bg-gray-100 text-gray-600'
+  }
+
   const updateReservationStatus = (reservationId: string, status: Reservation['status']): void => {
+    setReservations((prev) => prev.map((r) => (r.id === reservationId ? { ...r, status } : r)))
     axios.patch(`/api/reservations/${reservationId}/status`, { status }, { headers: getAuthHeaders() })
       .then(() => {
         fetchReservations()
       })
-      .catch(err => {
+      .catch((err) => {
+        fetchReservations()
         alert('Failed to update reservation status')
         console.error(err)
       })
   }
 
-  const getStatusColor = (status: OrderStatus): string => {
-    const colors: Record<OrderStatus, string> = {
-      pending: 'bg-yellow-100 text-yellow-800',
-      preparing: 'bg-blue-100 text-blue-800',
-      ready: 'bg-green-100 text-green-800',
-      completed: 'bg-gray-100 text-gray-800',
-      cancelled: 'bg-red-100 text-red-800'
-    }
-    return colors[status] || colors.pending
+  const getStatusColor = (status: OrderStatus): string => getOrderStatusColor(status, isTicketing)
+
+  const renderOrderStatusActions = (order: Order): JSX.Element | null => {
+    const actions = getOrderStatusActions(order.status as OrderFulfillmentStatus, isTicketing)
+    if (!actions.length) return null
+    return (
+      <div className="flex flex-wrap gap-2">
+        {actions.map((action) => {
+          const className =
+            action.variant === 'danger'
+              ? `dashboard-btn min-h-[2.25rem] px-3 py-2 bg-white border border-gray-200 text-gray-700 rounded-xl text-xs font-semibold hover:bg-gray-50 ${BTN_PRESS}`
+              : action.variant === 'success'
+                ? `dashboard-btn min-h-[2.25rem] px-3 py-2 bg-zuri-black text-white rounded-xl text-xs font-semibold hover:bg-gray-800 ${BTN_PRESS}`
+                : `dashboard-btn min-h-[2.25rem] px-3 py-2 bg-zuri-orange text-white rounded-xl text-xs font-semibold hover:bg-zuri-orange-dark ${BTN_PRESS}`
+          return (
+            <button
+              key={action.nextStatus + action.label}
+              type="button"
+              onClick={() => updateOrderStatus(order.id, action.nextStatus)}
+              className={className}
+            >
+              {action.label}
+            </button>
+          )
+        })}
+        {orderPaymentStatus(order) === 'paid' && isTicketing && (
+          <button
+            type="button"
+            onClick={() => void refundOrder(order.id)}
+            className={`dashboard-btn min-h-[2.25rem] px-3 py-2 border border-red-200 text-red-700 rounded-xl text-xs font-semibold hover:bg-red-50 ${BTN_PRESS}`}
+          >
+            Refund buyer
+          </button>
+        )}
+      </div>
+    )
+  }
+
+  const renderCompactOrderStatusActions = (order: Order): JSX.Element | null => {
+    const actions = getOrderStatusActions(order.status as OrderFulfillmentStatus, isTicketing)
+    if (!actions.length) return null
+    return (
+      <div className="flex flex-wrap gap-2 mt-3">
+        {actions.map((action) => (
+          <button
+            key={action.nextStatus + action.label}
+            type="button"
+            onClick={() => updateOrderStatus(order.id, action.nextStatus)}
+            className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition ${BTN_PRESS} ${
+              action.variant === 'danger'
+                ? 'border border-zuri-orange text-zuri-orange hover:bg-zuri-orange hover:text-white'
+                : 'bg-zuri-orange text-white hover:bg-zuri-orange-dark'
+            }`}
+          >
+            {action.label}
+          </button>
+        ))}
+      </div>
+    )
   }
 
   const downloadQrCode = (): void => {
@@ -1035,6 +1440,16 @@ function BusinessDashboard(): JSX.Element {
     )
   }, [orders, ordersTimePreset, ordersCustomFrom, ordersCustomTo])
 
+  const ordersForDisplay = useMemo(() => {
+    const base = isTicketing
+      ? ordersInTimeRange.filter((o) => orderPaymentStatus(o) === 'paid')
+      : ordersInTimeRange
+    if (!isTicketing || ticketingOrderFilter === 'all') return base
+    return base.filter((o) =>
+      matchesTicketingOrderFilter(o.status as OrderFulfillmentStatus, ticketingOrderFilter)
+    )
+  }, [ordersInTimeRange, isTicketing, ticketingOrderFilter])
+
   if (loading) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center font-normal">
@@ -1052,33 +1467,6 @@ function BusinessDashboard(): JSX.Element {
           <a href="/business/login" className="inline-block bg-zuri-orange text-white px-4 py-1.5 rounded-lg text-sm hover:bg-zuri-orange-dark transition">
             Log in
           </a>
-        </div>
-      </div>
-    )
-  }
-
-  if (isPhone) {
-    return (
-      <div className="min-h-screen bg-white flex items-center justify-center p-4 font-normal">
-        <div className="bg-white rounded-2xl border border-zuri-orange/20 bg-zuri-light/50 p-8 max-w-md w-full text-center">
-          <h1 className="text-xl font-bold text-zuri-black mb-2">Use a tablet or laptop</h1>
-          <p className="text-zuri-black/60 text-sm mb-6">
-            The business dashboard isn’t supported on phones yet. Please open it on a tablet or laptop.
-          </p>
-          <div className="flex gap-3 justify-center">
-            <a
-              href="/business/login"
-              className="inline-flex items-center justify-center px-4 py-2 rounded-lg text-sm font-medium border-2 border-zuri-orange text-zuri-orange bg-transparent hover:border-zuri-orange-dark hover:text-zuri-orange-dark transition-colors"
-            >
-              Log in
-            </a>
-            <a
-              href="/"
-              className="inline-flex items-center justify-center px-4 py-2 rounded-lg text-sm font-medium bg-zuri-orange text-white hover:bg-zuri-orange-dark transition"
-            >
-              Home
-            </a>
-          </div>
         </div>
       </div>
     )
@@ -1107,7 +1495,11 @@ function BusinessDashboard(): JSX.Element {
     ? [...profitMargins].sort((a, b) => b.marginPercentage - a.marginPercentage)[0]
     : null
 
-  const pendingOrders = orders.filter(o => o.status === 'pending' || o.status === 'preparing')
+  const pendingOrders = orders.filter((o) => {
+    if (o.status !== 'pending' && o.status !== 'preparing') return false
+    if (isTicketing && orderPaymentStatus(o) !== 'paid') return false
+    return true
+  })
   const requestedReservations = reservations.filter(r => r.status === 'requested')
   const recentReviews = [...reviews].sort((a, b) => new Date(reviewCreatedAt(b) || 0).getTime() - new Date(reviewCreatedAt(a) || 0).getTime()).slice(0, 10)
 
@@ -1118,8 +1510,25 @@ function BusinessDashboard(): JSX.Element {
     ...recentReviews.map((r) => ({ type: 'review' as const, id: r.id, createdAtMs: new Date(reviewCreatedAt(r) || 0).getTime(), review: r }))
   ].sort((a, b) => b.createdAtMs - a.createdAtMs)
 
-  return (
-    <div className="min-h-screen bg-[#f5f5f5] font-normal">
+  const complianceBanner =
+    business?.accountStatus === 'under_review' || business?.kycDocRequestedAt ? (
+      <div className="mx-4 mt-3 mb-1 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        {business.kycDocRequestedAt ? (
+          <p>
+            <span className="font-semibold">Action needed:</span> ZURI has requested additional verification documents for your venue. Reply to your onboarding email or contact support.
+          </p>
+        ) : (
+          <p>
+            <span className="font-semibold">Under review:</span> Your storefront is live while our team completes a quick post-signup check. Payouts require a verified bank account.
+          </p>
+        )}
+      </div>
+    ) : null
+
+  const dashboardBody = (
+    <>
+      {complianceBanner}
+      {!isPhone && (
       <header className="bg-white border-b border-gray-100">
         <div className="max-w-6xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
@@ -1294,40 +1703,11 @@ function BusinessDashboard(): JSX.Element {
                                     </p>
                                   </div>
                                   <span className={`inline-block px-2 py-1 rounded-lg text-[11px] font-semibold ${getStatusColor(order.status)}`}>
-                                    {order.status}
+                                    {formatOrderStatusLabel(order.status as OrderFulfillmentStatus, isTicketing)}
                                   </span>
                                 </div>
 
-                                {order.status === 'pending' && (
-                                  <div className="flex flex-wrap gap-2 mt-3">
-                                    <button
-                                      type="button"
-                                      onClick={() => updateOrderStatus(order.id, 'preparing')}
-                                      className={`px-2.5 py-1 bg-zuri-orange text-white rounded-lg text-[11px] font-semibold hover:bg-zuri-orange-dark transition ${BTN_PRESS}`}
-                                    >
-                                      Start
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => updateOrderStatus(order.id, 'cancelled')}
-                                      className={`px-2.5 py-1 border border-zuri-orange text-zuri-orange rounded-lg text-[11px] font-semibold hover:bg-zuri-orange hover:text-white transition ${BTN_PRESS}`}
-                                    >
-                                      Cancel
-                                    </button>
-                                  </div>
-                                )}
-
-                                {order.status === 'preparing' && (
-                                  <div className="flex gap-2 mt-3">
-                                    <button
-                                      type="button"
-                                      onClick={() => updateOrderStatus(order.id, 'ready')}
-                                      className={`px-2.5 py-1 bg-zuri-orange text-white rounded-lg text-[11px] font-semibold hover:bg-zuri-orange-dark transition ${BTN_PRESS}`}
-                                    >
-                                      Ready
-                                    </button>
-                                  </div>
-                                )}
+                                {renderCompactOrderStatusActions(order)}
                               </div>
                             )
                           }
@@ -1491,6 +1871,16 @@ function BusinessDashboard(): JSX.Element {
                       <button
                         type="button"
                         onClick={() => {
+                          if (businessId) navigate(`/business/dashboard/${businessId}/settings`)
+                          setProfileOpen(false)
+                        }}
+                        className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 text-left"
+                      >
+                        <span>Settings</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
                           if (businessId) navigate(`/business/dashboard/${businessId}/payment`)
                           setProfileOpen(false)
                         }}
@@ -1532,7 +1922,7 @@ function BusinessDashboard(): JSX.Element {
                       <button
                         type="button"
                         onClick={() => {
-                          localStorage.removeItem('zuri_business_token')
+                          clearBusinessAuth()
                           setProfileOpen(false)
                           navigate('/business/login', { replace: true })
                         }}
@@ -1548,8 +1938,9 @@ function BusinessDashboard(): JSX.Element {
           </div>
         </div>
       </header>
+      )}
 
-      {(isGrowthPlusPlan(business?.plan)) && (
+      {(isGrowthPlusPlan(business?.plan)) && !isPhone && (
         <div className="bg-white border-b border-gray-200">
           <div className="max-w-6xl mx-auto px-4 py-3 flex flex-col items-center gap-2">
             <div className="flex items-center gap-3">
@@ -1559,26 +1950,34 @@ function BusinessDashboard(): JSX.Element {
                 role="switch"
                 aria-checked={tapSwitchOn}
                 aria-busy={tapRoomLoading}
-                aria-label={tapCode ? 'Turn Zuri Tap off' : 'Turn Zuri Tap on'}
+                aria-label={tapEnabled ? 'Turn Zuri Tap off' : 'Turn Zuri Tap on'}
                 onClick={async () => {
                   if (!businessId) return
-                  const nextOn = !tapCode
+                  const nextOn = !tapEnabled
                   setTapOptimisticOn(nextOn)
                   setTapRoomError(null)
                   setTapRoomLoading(true)
                   try {
-                    if (tapCode) {
+                    if (tapEnabled) {
                       await axios.post(apiUrl('/api/tap/room/off'), { businessId }, { headers: getAuthHeaders() })
-                      setTapCode(null)
+                      setTapEnabled(false)
                       setTapExpiresAt(null)
                       setTapOptimisticOn(false)
                       setTapWaitingOrderId(null)
+                      setTapRequestExpiresAt(null)
                     } else {
-                      const { data } = await axios.post<{ code: string; expiresAt: string }>(apiUrl('/api/tap/room/on'), { businessId }, { headers: getAuthHeaders() })
-                      setTapCode(data.code)
+                      const { data } = await axios.post<{
+                        enabled?: boolean
+                        expiresAt: string
+                        staffCodes?: Array<{ id: string; code: string; label: string }>
+                      }>(apiUrl('/api/tap/room/on'), { businessId }, { headers: getAuthHeaders() })
+                      setTapEnabled(true)
                       setTapExpiresAt(data.expiresAt)
                       setTapOptimisticOn(true)
                       setTapSelections({})
+                      const codes = data.staffCodes || []
+                      setTapStaffCodes(codes)
+                      if (codes[0]?.id) setTapSelectedStaffId(codes[0].id)
                     }
                   } catch (e) {
                     console.error(e)
@@ -1615,12 +2014,12 @@ function BusinessDashboard(): JSX.Element {
             <p className={`text-xs ${tapRoomLoading ? 'text-zuri-orange font-medium animate-pulse' : 'text-gray-500'}`}>
               {tapRoomLoading
                 ? (tapSwitchOn ? 'Turning Zuri Tap on…' : 'Turning Zuri Tap off…')
-                : 'Turn Zuri Tap on to send Tap requests from your menu to any customers who have joined this room.'}
+                : 'Turn Tap on, then give each staff member their own code so customers only see that staffer’s requests.'}
             </p>
           </div>
         </div>
       )}
-      {(business?.plan === 'free' || business?.plan === 'starter') && (
+      {(business?.plan === 'free' || business?.plan === 'starter') && !isPhone && (
         <div className="bg-white border-b border-gray-200">
           <div className="max-w-6xl mx-auto px-4 py-3 flex justify-center">
             <a href="/pricing" className="text-xs sm:text-sm text-gray-500 hover:text-zuri-orange transition">
@@ -1631,15 +2030,171 @@ function BusinessDashboard(): JSX.Element {
       )}
 
       {/* Zuri Tap hotspot panel - when Tap is on */}
-      {tapCode && (
+      {tapEnabled && !isPhone && (
         <div className="bg-zuri-black text-white border-b border-gray-800">
           <div className="max-w-6xl mx-auto px-4 py-6">
-            <h2 className="text-lg font-bold mb-2">Zuri Tap – Live room</h2>
-            <p className="text-sm text-gray-300 mb-4">Customer enters this code on their Zuri Tap screen to join your room and see payment requests.</p>
-            <p className="text-3xl font-mono font-bold tracking-widest mb-6">{tapCode}</p>
-                <p className="text-xs text-gray-400 mb-4">Select items from your menu, then tap Send. When the customer is ready, they’ll see the request and pay with their Zuri Tap password.</p>
+            <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
+              <div>
+                <h2 className="text-lg font-bold">Zuri Tap – Live</h2>
+                <p className="text-sm text-gray-300 mt-1">Each staff member has their own code. Customers join a staff code and only see that person&apos;s payment requests.</p>
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!businessId) return
+                  setTapRoomLoading(true)
+                  setTapRoomError(null)
+                  try {
+                    const { data } = await axios.post<{ expiresAt: string; staffCodes?: Array<{ id: string; code: string; label: string }> }>(
+                      apiUrl('/api/tap/room/rotate'),
+                      { businessId },
+                      { headers: getAuthHeaders() }
+                    )
+                    setTapExpiresAt(data.expiresAt)
+                    if (data.staffCodes?.length) {
+                      setTapStaffCodes(data.staffCodes)
+                      if (!data.staffCodes.some((c) => c.id === tapSelectedStaffId)) {
+                        setTapSelectedStaffId(data.staffCodes[0].id)
+                      }
+                    }
+                  } catch (e) {
+                    setTapRoomError(
+                      axios.isAxiosError(e)
+                        ? formatUserFacingError(e.response?.data, 'Could not extend Tap')
+                        : 'Could not extend Tap'
+                    )
+                  } finally {
+                    setTapRoomLoading(false)
+                  }
+                }}
+                className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-white/20 text-gray-200 hover:bg-white/10"
+              >
+                Extend session
+              </button>
+            </div>
+            {tapExpiresAt && (
+              <p className="text-xs text-gray-400 mb-4">
+                Tap live until {new Date(tapExpiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </p>
+            )}
+
             <div className="grid md:grid-cols-2 gap-6">
               <div>
+                <p className="text-sm font-semibold text-gray-300 mb-2">Staff codes</p>
+                <div className="space-y-2 mb-3 max-h-40 overflow-y-auto">
+                  {tapStaffCodes.map((row) => (
+                    <div
+                      key={row.id}
+                      className={`flex items-center justify-between gap-2 rounded-lg px-3 py-2 ${selectedTapStaff?.id === row.id ? 'bg-zuri-orange/30 ring-1 ring-zuri-orange' : 'bg-white/10'}`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setTapSelectedStaffId(row.id)}
+                        className="text-left min-w-0 flex-1"
+                      >
+                        <p className="text-sm font-semibold truncate">{row.label}</p>
+                        <p className="font-mono text-lg tracking-widest">{row.code}</p>
+                      </button>
+                      <div className="flex flex-col gap-1 shrink-0">
+                        <button
+                          type="button"
+                          disabled={tapStaffBusy}
+                          onClick={async () => {
+                            if (!businessId) return
+                            setTapStaffBusy(true)
+                            try {
+                              const { data } = await axios.post<{ id: string; code: string; label: string }>(
+                                apiUrl(`/api/tap/staff-codes/${row.id}/rotate`),
+                                {},
+                                { headers: getAuthHeaders() }
+                              )
+                              setTapStaffCodes((prev) => prev.map((c) => (c.id === row.id ? data : c)))
+                              if (tapSelectedStaffId === row.id) setTapSelectedStaffId(data.id)
+                            } catch (e) {
+                              alert(axios.isAxiosError(e) ? formatUserFacingError(e.response?.data, 'Rotate failed') : 'Rotate failed')
+                            } finally {
+                              setTapStaffBusy(false)
+                            }
+                          }}
+                          className="text-[10px] font-semibold text-gray-300 hover:text-white"
+                        >
+                          Rotate
+                        </button>
+                        <button
+                          type="button"
+                          disabled={tapStaffBusy || tapStaffCodes.length <= 1}
+                          onClick={async () => {
+                            if (!businessId || !window.confirm(`Revoke ${row.label}'s code?`)) return
+                            setTapStaffBusy(true)
+                            try {
+                              await axios.delete(apiUrl(`/api/tap/staff-codes/${row.id}`), { headers: getAuthHeaders() })
+                              const next = tapStaffCodes.filter((c) => c.id !== row.id)
+                              setTapStaffCodes(next)
+                              if (tapSelectedStaffId === row.id) setTapSelectedStaffId(next[0]?.id || null)
+                            } catch (e) {
+                              alert(axios.isAxiosError(e) ? formatUserFacingError(e.response?.data, 'Revoke failed') : 'Revoke failed')
+                            } finally {
+                              setTapStaffBusy(false)
+                            }
+                          }}
+                          className="text-[10px] font-semibold text-red-300 hover:text-red-200 disabled:opacity-40"
+                        >
+                          Revoke
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-2 mb-4">
+                  <input
+                    type="text"
+                    value={tapNewStaffLabel}
+                    onChange={(e) => setTapNewStaffLabel(e.target.value.slice(0, 40))}
+                    placeholder="New staff name"
+                    className="flex-1 px-2.5 py-2 rounded-lg bg-white/10 border border-white/10 text-sm text-white placeholder:text-gray-500"
+                  />
+                  <button
+                    type="button"
+                    disabled={tapStaffBusy || !tapNewStaffLabel.trim()}
+                    onClick={async () => {
+                      if (!businessId || !tapNewStaffLabel.trim()) return
+                      setTapStaffBusy(true)
+                      try {
+                        const { data } = await axios.post<{ id: string; code: string; label: string }>(
+                          apiUrl('/api/tap/staff-codes'),
+                          { label: tapNewStaffLabel.trim() },
+                          { headers: getAuthHeaders() }
+                        )
+                        setTapStaffCodes((prev) => [...prev, data])
+                        setTapSelectedStaffId(data.id)
+                        setTapNewStaffLabel('')
+                      } catch (e) {
+                        alert(axios.isAxiosError(e) ? formatUserFacingError(e.response?.data, 'Could not create code') : 'Could not create code')
+                      } finally {
+                        setTapStaffBusy(false)
+                      }
+                    }}
+                    className="px-3 py-2 bg-white/15 rounded-lg text-xs font-semibold disabled:opacity-50"
+                  >
+                    Add
+                  </button>
+                </div>
+
+                <div className="mb-3">
+                  <label className="block text-[11px] text-gray-400 mb-1">Table / order ref</label>
+                  <input
+                    type="text"
+                    value={tapTableRef}
+                    onChange={(e) => setTapTableRef(e.target.value.slice(0, 24))}
+                    placeholder="e.g. T12"
+                    className="w-full px-2.5 py-2 rounded-lg bg-white/10 border border-white/10 text-sm text-white placeholder:text-gray-500"
+                  />
+                </div>
+                {selectedTapStaff && (
+                  <p className="text-xs text-gray-400 mb-3">
+                    Sending as <strong className="text-white">{selectedTapStaff.label}</strong> · customers must enter <strong className="font-mono text-white">{selectedTapStaff.code}</strong>
+                  </p>
+                )}
                 <p className="text-sm font-semibold text-gray-300 mb-2">{isTicketing ? 'Select ticket types' : 'Select menu items'}</p>
                 <div className="space-y-2 max-h-48 overflow-y-auto">
                   {menu.flatMap(c => c.items).filter(i => i.available).map(item => (
@@ -1675,35 +2230,87 @@ function BusinessDashboard(): JSX.Element {
                   const selected = menu.flatMap(c => c.items).filter(i => (tapSelections[i.id] || 0) > 0)
                   const total = selected.reduce((sum, i) => sum + i.price * (tapSelections[i.id] || 0), 0)
                   return (
-                    <div className="mt-4 flex items-center justify-between">
-                      <span className="text-sm font-semibold">Total: ₦{total.toFixed(2)}</span>
-                      <button
-                        type="button"
-                        disabled={tapSending || selected.length === 0 || !!tapWaitingOrderId}
-                        onClick={async () => {
-                          if (!businessId || selected.length === 0) return
-                          setTapSending(true)
-                          try {
-                            const items = selected.map(i => ({
-                              menuItemId: i.id,
-                              name: i.name,
-                              price: i.price,
-                              quantity: tapSelections[i.id] || 1
-                            }))
-                            const { data } = await axios.post<{ orderId: string }>(apiUrl('/api/tap/send'), { businessId, code: tapCode, items }, { headers: getAuthHeaders() })
-                            setTapWaitingOrderId(data.orderId)
-                            tapWaitingOrderIdRef.current = data.orderId
-                          } catch (e) {
-                            console.error(e)
-                            alert('Failed to send request')
-                          } finally {
-                            setTapSending(false)
-                          }
-                        }}
-                        className="px-4 py-2 bg-zuri-orange text-white rounded-xl text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {tapWaitingOrderId ? 'Waiting for customer to pay…' : tapSending ? 'Sending…' : 'Send to room'}
-                      </button>
+                    <div className="mt-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-semibold">Total: ₦{total.toFixed(2)}</span>
+                        <button
+                          type="button"
+                          disabled={tapSending || selected.length === 0 || !!tapWaitingOrderId || !selectedTapStaff}
+                          onClick={async () => {
+                            if (!businessId || selected.length === 0 || !selectedTapStaff) return
+                            setTapSending(true)
+                            try {
+                              const items = selected.map(i => ({
+                                menuItemId: i.id,
+                                name: i.name,
+                                price: i.price,
+                                quantity: tapSelections[i.id] || 1
+                              }))
+                              const { data } = await axios.post<{ orderId: string; expiresAt?: string }>(
+                                apiUrl('/api/tap/send'),
+                                {
+                                  businessId,
+                                  staffCodeId: selectedTapStaff.id,
+                                  code: selectedTapStaff.code,
+                                  items,
+                                  tableRef: tapTableRef.trim() || undefined
+                                },
+                                { headers: getAuthHeaders() }
+                              )
+                              setTapWaitingOrderId(data.orderId)
+                              tapWaitingOrderIdRef.current = data.orderId
+                              setTapRequestExpiresAt(data.expiresAt || null)
+                            } catch (e) {
+                              console.error(e)
+                              alert(
+                                axios.isAxiosError(e)
+                                  ? formatUserFacingError(e.response?.data, 'Failed to send request')
+                                  : 'Failed to send request'
+                              )
+                            } finally {
+                              setTapSending(false)
+                            }
+                          }}
+                          className="px-4 py-2 bg-zuri-orange text-white rounded-xl text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {tapWaitingOrderId ? 'Waiting for customer…' : tapSending ? 'Sending…' : 'Send to staff room'}
+                        </button>
+                      </div>
+                      {tapWaitingOrderId && (
+                        <div className="flex items-center justify-between gap-2 text-xs text-gray-300 bg-white/5 rounded-lg px-3 py-2">
+                          <span>
+                            Open · {selectedTapStaff?.label || 'Staff'}
+                            {tapTableRef ? ` · ${tapTableRef}` : ''}
+                            {tapRequestExpiresAt
+                              ? ` · expires ${new Date(tapRequestExpiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                              : ''}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (!businessId || !tapWaitingOrderId) return
+                              try {
+                                await axios.post(
+                                  apiUrl('/api/tap/cancel'),
+                                  { businessId, orderId: tapWaitingOrderId },
+                                  { headers: getAuthHeaders() }
+                                )
+                                setTapWaitingOrderId(null)
+                                setTapRequestExpiresAt(null)
+                              } catch (e) {
+                                alert(
+                                  axios.isAxiosError(e)
+                                    ? formatUserFacingError(e.response?.data, 'Could not cancel')
+                                    : 'Could not cancel'
+                                )
+                              }
+                            }}
+                            className="font-semibold text-zuri-orange"
+                          >
+                            Cancel / send again
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )
                 })()}
@@ -1906,8 +2513,9 @@ function BusinessDashboard(): JSX.Element {
         </div>
       )}
 
-      <div className="max-w-6xl mx-auto px-4 py-8">
-        <div className="bg-white rounded-2xl shadow-sm border border-transparent overflow-hidden">
+      <div className={isPhone ? 'w-full max-w-full min-w-0' : 'max-w-6xl mx-auto px-4 py-8'}>
+        <div className={isPhone ? '' : 'bg-white rounded-2xl shadow-sm border border-transparent overflow-hidden'}>
+          {!isPhone && (
           <div className="flex border-b border-gray-100 overflow-x-auto">
             <button
               onClick={() => {
@@ -1970,14 +2578,178 @@ function BusinessDashboard(): JSX.Element {
               </button>
             )}
           </div>
+          )}
 
-          <div className="p-6">
+          <div className={isPhone ? 'space-y-4' : 'p-6'}>
             {/* Orders Tab */}
             {activeTab === 'orders' && (
               <div className="space-y-8">
-                <h2 className="text-lg font-bold text-zuri-black mb-4">Recent orders</h2>
-                <div className="flex flex-col gap-3 mb-6 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
-                  <div className="flex flex-wrap gap-2">
+                {(agentPendingReview.length > 0 || agentNeedsAttention.length > 0) && (
+                  <div className="sticky top-0 z-20 -mx-1 px-1 space-y-3">
+                    {agentPendingReview.length > 0 && (
+                      <div className="rounded-xl border-2 border-amber-400 bg-amber-50 shadow-md p-4">
+                        <div className="flex items-start justify-between gap-3 mb-3">
+                          <div>
+                            <p className="text-sm font-bold text-amber-950">Zuri Assist — confirm payment</p>
+                            <p className="text-xs text-amber-900/80 mt-0.5">
+                              {agentPendingReview.length} payment{agentPendingReview.length === 1 ? '' : 's'} need a one-tap match
+                            </p>
+                          </div>
+                        </div>
+                        <div className="space-y-3">
+                          {agentPendingReview.map((alert) => (
+                            <div key={alert.id} className="rounded-lg bg-white border border-amber-200 p-3">
+                              <p className="text-sm font-semibold text-zuri-black">
+                                ₦{Number(alert.parsedAmount ?? 0).toLocaleString()}
+                                <span className="ml-2 text-xs font-normal text-gray-500 capitalize">
+                                  {[alert.parsedBankOrProvider, alert.parsedChannel].filter(Boolean).join(' · ')}
+                                </span>
+                              </p>
+                              {alert.parsedSenderName ? (
+                                <p className="text-xs text-gray-600 mt-0.5">From {alert.parsedSenderName}</p>
+                              ) : null}
+                              {alert.flagReason ? (
+                                <p className="text-[11px] text-amber-800 mt-1">Flag: {alert.flagReason.replace(/_/g, ' ')}</p>
+                              ) : null}
+                              <div className="mt-2 flex flex-col gap-2">
+                                {(alert.candidates || []).length === 0 ? (
+                                  <p className="text-xs text-gray-500">No ranked orders — open Needs attention or match manually later.</p>
+                                ) : (
+                                  (alert.candidates || []).slice(0, 4).map((c) => (
+                                    <button
+                                      key={c.id}
+                                      type="button"
+                                      disabled={agentConfirmingId === `${alert.id}:${c.orderId}`}
+                                      onClick={() => void confirmAgentMatch(alert.id, c.orderId)}
+                                      className={`text-left rounded-lg border border-amber-200 px-3 py-2 text-xs hover:border-zuri-orange hover:bg-zuri-orange/5 disabled:opacity-60 ${BTN_PRESS}`}
+                                    >
+                                      <span className="font-semibold text-zuri-black">
+                                        #{String(c.orderId).slice(0, 8).toUpperCase()}
+                                      </span>
+                                      {' · '}
+                                      {c.order?.customer_name || 'Guest'}
+                                      {' · '}
+                                      ₦{Number(c.order?.total_amount ?? 0).toLocaleString()}
+                                      <span className="text-gray-400"> · {(Number(c.confidenceScore) * 100).toFixed(0)}%</span>
+                                    </button>
+                                  ))
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {agentNeedsAttention.length > 0 && (
+                      <div className="rounded-xl border border-gray-300 bg-white p-4">
+                        <p className="text-sm font-bold text-zuri-black">Needs attention</p>
+                        <p className="text-xs text-gray-500 mt-0.5 mb-2">
+                          Unmatchable alerts (no open order in window, parse failure, or old SMS)
+                        </p>
+                        <ul className="space-y-2">
+                          {agentNeedsAttention.slice(0, 5).map((alert) => (
+                            <li key={alert.id} className="text-xs text-gray-700 flex flex-wrap gap-x-2">
+                              <span className="font-semibold">
+                                {alert.parsedAmount != null ? `₦${Number(alert.parsedAmount).toLocaleString()}` : 'No amount'}
+                              </span>
+                              <span className="text-gray-400">{alert.flagReason?.replace(/_/g, ' ') || 'unmatchable'}</span>
+                              {alert.parsedSenderName ? <span>from {alert.parsedSenderName}</span> : null}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {isPhone && (
+                  <div className="mobile-dashboard-stat-grid">
+                    <div className="rounded-2xl bg-white border border-gray-100 p-4 shadow-sm min-h-[5.5rem]">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">{isTicketing ? 'New sales' : 'Pending'}</p>
+                      <p className="text-2xl font-bold text-zuri-black mt-1">{pendingOrders.length}</p>
+                    </div>
+                    <div className="rounded-2xl bg-white border border-gray-100 p-4 shadow-sm min-h-[5.5rem]">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Reservations</p>
+                      <p className="text-2xl font-bold text-zuri-black mt-1">{requestedReservations.length}</p>
+                    </div>
+                    {analytics ? (
+                      <>
+                        <div className="rounded-2xl bg-white border border-gray-100 p-4 shadow-sm min-h-[5.5rem]">
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Revenue</p>
+                          <p className="text-xl font-bold text-zuri-orange mt-1">₦{Math.round(analytics.totalRevenue || 0).toLocaleString()}</p>
+                        </div>
+                        <div className="rounded-2xl bg-white border border-gray-100 p-4 shadow-sm min-h-[5.5rem]">
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Orders</p>
+                          <p className="text-2xl font-bold text-zuri-black mt-1">{analytics.totalOrders ?? 0}</p>
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
+                )}
+                <h2 className={`font-bold text-zuri-black ${isPhone ? 'text-base' : 'text-lg mb-4'}`}>{ticketingOrdersSectionTitle(isTicketing)}</h2>
+                {isTicketing ? (
+                  <p className="text-xs text-gray-500 -mt-2 mb-4">Only paid ticket sales are listed — abandoned checkouts stay out of revenue.</p>
+                ) : null}
+                {isTicketing ? (
+                  <div className={`flex flex-wrap gap-2 mb-4 ${isPhone ? 'mobile-dashboard-chip-row' : ''}`}>
+                    {(
+                      [
+                        ['all', 'All sales'],
+                        ['new', 'New'],
+                        ['confirmed', 'Confirmed'],
+                        ['checked_in', 'Checked in'],
+                        ['fulfilled', 'Fulfilled']
+                      ] as const
+                    ).map(([key, label]) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => setTicketingOrderFilter(key)}
+                        className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition ${BTN_PRESS} ${
+                          ticketingOrderFilter === key
+                            ? 'border-zuri-orange bg-zuri-orange text-white'
+                            : 'border-gray-200 bg-white text-gray-700 hover:border-zuri-orange/50'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                {isPushSupported() && !pushAlertsEnabled && !pushBannerDismissed ? (
+                  <div className="mb-4 rounded-xl border border-zuri-orange/25 bg-zuri-orange/5 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-zuri-black">Enable order push alerts</p>
+                      <p className="text-xs text-gray-600 mt-0.5">Get notified when a new {isTicketing ? 'ticket sale' : 'order'} comes in — even when this tab is in the background.</p>
+                    </div>
+                    <div className="flex gap-2 shrink-0">
+                      <button
+                        type="button"
+                        className="px-3 py-2 rounded-lg text-xs font-semibold bg-zuri-orange text-white hover:bg-zuri-orange-dark"
+                        onClick={async () => {
+                          if (!businessId) return
+                          const result = await subscribeBusinessPush(businessId)
+                          if (result === 'granted') {
+                            setPushAlertsEnabled(true)
+                            setPushBannerDismissed(true)
+                          } else if (result === 'denied') {
+                            setPushBannerDismissed(true)
+                          }
+                        }}
+                      >
+                        Enable alerts
+                      </button>
+                      <button
+                        type="button"
+                        className="px-3 py-2 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600"
+                        onClick={() => setPushBannerDismissed(true)}
+                      >
+                        Not now
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                <div className={`flex flex-col gap-3 mb-6 ${isPhone ? '' : 'sm:flex-row sm:flex-wrap sm:items-end sm:justify-between'}`}>
+                  <div className={isPhone ? 'mobile-dashboard-chip-row' : 'flex flex-wrap gap-2'}>
                     {(
                       [
                         ['all', 'All'],
@@ -2109,13 +2881,28 @@ function BusinessDashboard(): JSX.Element {
                   </div>
                 )}
                 {orders.length === 0 ? (
-                  <p className="text-gray-500 text-sm text-center py-12">No orders yet</p>
-                ) : ordersInTimeRange.length === 0 ? (
-                  <p className="text-gray-500 text-sm text-center py-12">No orders in this time range.</p>
+                  <p className="text-gray-500 text-sm text-center py-12">
+                    {isTicketing ? 'No paid ticket sales yet' : 'No orders yet'}
+                  </p>
+                ) : ordersForDisplay.length === 0 ? (
+                  <p className="text-gray-500 text-sm text-center py-12">
+                    {isTicketing ? 'No paid sales in this filter or time range.' : 'No orders in this time range.'}
+                  </p>
                 ) : (
                   <div className="space-y-4">
-                    {ordersInTimeRange.map(order => (
-                      <div key={order.id} className="bg-gray-50/50 rounded-xl p-5 border border-gray-100">
+                    {ordersForDisplay.map(order => (
+                      <div
+                        key={order.id}
+                        className={`rounded-xl p-5 border ${
+                          orderPaymentStatus(order) === 'paid'
+                            ? 'border-green-200 bg-green-50/40'
+                            : pendingReviewOrderIds.has(order.id)
+                              ? 'border-amber-300 bg-amber-50/50'
+                              : isPhone
+                                ? 'border-gray-100 bg-white shadow-sm'
+                                : 'border-gray-100 bg-gray-50/50'
+                        }`}
+                      >
                         <div className="flex justify-between items-start gap-4 mb-4">
                           <div>
                             <p className="font-bold text-zuri-black text-sm">#{order.id.slice(0, 8).toUpperCase()}</p>
@@ -2133,10 +2920,14 @@ function BusinessDashboard(): JSX.Element {
                           </div>
                           <div className="text-right shrink-0">
                             <span className={`inline-block px-2.5 py-1 rounded-lg text-xs font-semibold ${getStatusColor(order.status)}`}>
-                              {order.status}
+                              {formatOrderStatusLabel(order.status as OrderFulfillmentStatus, isTicketing)}
                             </span>
                             <p className="text-lg font-bold text-zuri-orange mt-2">
                               ₦{(orderTotalAmount(order) ?? 0).toFixed(2)}
+                            </p>
+                            <p className={`inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-semibold capitalize ${paymentStatusBadgeClass(order)}`}>
+                              Pay: {pendingReviewOrderIds.has(order.id) && orderPaymentStatus(order) !== 'paid' ? 'review' : orderPaymentStatus(order)}
+                              {orderPayoutStatus(order) ? ` · Payout: ${orderPayoutStatus(order)}` : ''}
                             </p>
                           </div>
                         </div>
@@ -2158,40 +2949,7 @@ function BusinessDashboard(): JSX.Element {
                           </div>
                         </div>
 
-                        <div className="flex flex-wrap gap-2">
-                          {order.status === 'pending' && (
-                            <>
-                              <button
-                                onClick={() => updateOrderStatus(order.id, 'preparing')}
-                                className={`px-3 py-1.5 bg-zuri-orange text-white rounded-xl text-xs font-semibold hover:bg-zuri-orange-dark transition ${BTN_PRESS}`}
-                              >
-                                Start preparing
-                              </button>
-                              <button
-                                onClick={() => updateOrderStatus(order.id, 'cancelled')}
-                                className={`px-3 py-1.5 bg-white border border-gray-200 text-gray-700 rounded-xl text-xs font-semibold hover:bg-gray-50 transition ${BTN_PRESS}`}
-                              >
-                                Cancel
-                              </button>
-                            </>
-                          )}
-                          {order.status === 'preparing' && (
-                            <button
-                              onClick={() => updateOrderStatus(order.id, 'ready')}
-                              className={`px-3 py-1.5 bg-green-600 text-white rounded-xl text-xs font-semibold hover:bg-green-700 transition ${BTN_PRESS}`}
-                            >
-                              Mark ready
-                            </button>
-                          )}
-                          {order.status === 'ready' && (
-                            <button
-                              onClick={() => updateOrderStatus(order.id, 'completed')}
-                              className={`px-3 py-1.5 bg-zuri-black text-white rounded-xl text-xs font-semibold hover:bg-gray-800 transition ${BTN_PRESS}`}
-                            >
-                              Mark completed
-                            </button>
-                          )}
-                        </div>
+                        {renderOrderStatusActions(order)}
                       </div>
                     ))}
                   </div>
@@ -2205,7 +2963,7 @@ function BusinessDashboard(): JSX.Element {
                   ) : (
                     <div className="space-y-4">
                       {reservations.map(reservation => (
-                        <div key={reservation.id} className="bg-gray-50/50 rounded-xl p-5 border border-gray-100">
+                        <div key={reservation.id} className={`rounded-xl p-5 border border-gray-100 ${isPhone ? 'bg-white shadow-sm' : 'bg-gray-50/50'}`}>
                           <div className="flex justify-between items-start gap-4 mb-4">
                             <div>
                               <p className="font-bold text-zuri-black text-sm">{reservationCustomerName(reservation) || 'Guest'}</p>
@@ -2699,17 +3457,33 @@ function BusinessDashboard(): JSX.Element {
 
             {/* Menu Management Tab */}
             {activeTab === 'menu' && (
-              <div>
+              <div className={isPhone ? 'rounded-2xl bg-white border border-gray-100 p-4 shadow-sm' : ''}>
                 <h2 className="text-lg font-bold text-zuri-black mb-6">{isTicketing ? 'Tickets' : 'Menu'}</h2>
-                <MenuCatalogPresets
-                  businessId={businessId || ''}
-                  plan={business?.plan}
-                  catalogMode={isTicketing ? 'ticketing' : 'menu'}
-                  editingPresetId={editingPresetId}
-                  onEditingPresetChange={setEditingPresetId}
-                  onCatalogChanged={fetchMenu}
-                />
-                <div className="flex justify-between items-center mb-6 flex-wrap gap-2">
+                {hasMultipleStorefronts ? (
+                  <div className="mb-4 rounded-xl border border-zuri-orange/30 bg-zuri-orange/5 p-4">
+                    <StorefrontProfilePicker
+                      businessId={businessId || ''}
+                      profiles={storefrontProfiles}
+                      selectedId={selectedMenuStorefrontId}
+                      onSelectId={handleSelectMenuStorefront}
+                    />
+                    <p className="text-[11px] text-gray-600 mt-2 leading-snug">
+                      {isTicketing
+                        ? 'Ticket types you add below belong only to the selected storefront. Switch storefronts to build a separate lineup for each event.'
+                        : 'Menu items you add below belong only to the selected storefront.'}
+                    </p>
+                  </div>
+                ) : (
+                  <MenuCatalogPresets
+                    businessId={businessId || ''}
+                    plan={business?.plan}
+                    catalogMode={isTicketing ? 'ticketing' : 'menu'}
+                    editingPresetId={editingPresetId}
+                    onEditingPresetChange={setEditingPresetId}
+                    onCatalogChanged={fetchMenu}
+                  />
+                )}
+                <div className={isPhone ? 'mobile-dashboard-chip-row mb-6' : 'flex justify-between items-center mb-6 flex-wrap gap-2'}>
                   <button
                     type="button"
                     onClick={() => {
@@ -2720,7 +3494,7 @@ function BusinessDashboard(): JSX.Element {
                       }
                       navigate(`/business/dashboard/${businessId}/customize`)
                     }}
-                    className="bg-white border border-zuri-orange text-zuri-orange px-3 py-1.5 rounded-xl text-xs font-semibold hover:bg-zuri-orange hover:text-white transition disabled:opacity-50"
+                    className="bg-white border border-zuri-orange text-zuri-orange px-3 py-2 rounded-xl text-xs font-semibold hover:bg-zuri-orange hover:text-white transition disabled:opacity-50 shrink-0 dashboard-btn inline-flex items-center justify-center leading-normal"
                     title={
                       canCustomizeStorefront
                         ? undefined
@@ -2733,39 +3507,62 @@ function BusinessDashboard(): JSX.Element {
                         : 'Customize menu'
                       : 'Upgrade to customize'}
                   </button>
-                  {businessId && (
+                  {businessId && storefrontProfiles.length > 0 ? (
+                    <div className={isPhone ? 'flex flex-col gap-2 w-full' : 'flex flex-wrap gap-2 items-center'}>
+                      {storefrontProfiles.map((profile) => {
+                        const eventLink = isTicketing ? profile.details.eventPages?.find((e) => e.enabled !== false) : null
+                        const href = eventLink
+                          ? eventShareUrl(businessId, eventLink.slug)
+                          : storefrontShareUrl(businessId, profile)
+                        const label = isTicketing && eventLink
+                          ? `${profile.name} tickets`
+                          : profile.name
+                        return (
+                          <a
+                            key={profile.id}
+                            href={href}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="bg-white border border-gray-200 text-zuri-black px-3 py-2 rounded-xl text-xs font-semibold hover:bg-gray-50 transition shrink-0 dashboard-btn inline-flex items-center justify-center leading-normal"
+                          >
+                            {label}
+                          </a>
+                        )
+                      })}
+                    </div>
+                  ) : businessId ? (
                     <a
                       href={`/order/${encodeURIComponent(businessId)}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="bg-white border border-gray-200 text-zuri-black px-3 py-1.5 rounded-xl text-xs font-semibold hover:bg-gray-50 transition"
+                      className="bg-white border border-gray-200 text-zuri-black px-3 py-2 rounded-xl text-xs font-semibold hover:bg-gray-50 transition shrink-0 dashboard-btn inline-flex items-center justify-center leading-normal"
                     >
                       Open live storefront
                     </a>
-                  )}
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => {
-                        setShowCategoryForm(true)
-                        setCategoryForm({ name: '', displayOrder: 0 })
-                      }}
-                      className="bg-white border border-gray-200 text-zuri-black px-4 py-2 rounded-xl text-sm font-semibold hover:bg-gray-50 transition"
-                    >
-                      + Category
-                    </button>
-                    <button
-                      onClick={() => {
-                        setShowItemForm(true)
-                        setEditingItem(null)
-                        setItemForm(createEmptyItemForm())
-                        setImageUploadError(null)
-                        if (imageInputRef.current) imageInputRef.current.value = ''
-                      }}
-                      className="bg-zuri-orange text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-zuri-orange-dark transition"
-                    >
-                      {isTicketing ? '+ Ticket' : '+ Item'}
-                    </button>
-                  </div>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowCategoryForm(true)
+                      setCategoryForm({ name: '', displayOrder: 0 })
+                    }}
+                    className="bg-white border border-gray-200 text-zuri-black px-4 py-2 rounded-xl text-sm font-semibold hover:bg-gray-50 shrink-0 dashboard-btn inline-flex items-center justify-center"
+                  >
+                    + Category
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowItemForm(true)
+                      setEditingItem(null)
+                      setItemForm(createEmptyItemForm())
+                      setImageUploadError(null)
+                      if (imageInputRef.current) imageInputRef.current.value = ''
+                    }}
+                    className="bg-zuri-orange text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-zuri-orange-dark shrink-0 dashboard-btn inline-flex items-center justify-center"
+                  >
+                    {isTicketing ? '+ Ticket' : '+ Item'}
+                  </button>
                 </div>
 
                 {menu.length === 0 ? (
@@ -2784,8 +3581,9 @@ function BusinessDashboard(): JSX.Element {
                       <div
                         key={category.id}
                         className="bg-gray-50/50 rounded-xl p-5 border border-gray-100"
-                        draggable
+                        draggable={category.id !== 'uncategorized'}
                         onDragStart={(e) => {
+                          if (category.id === 'uncategorized') return
                           if ((e.target as HTMLElement | null)?.closest('button')) return
                           setDraggingCategoryId(category.id)
                           e.dataTransfer.effectAllowed = 'move'
@@ -2812,7 +3610,9 @@ function BusinessDashboard(): JSX.Element {
                           setDraggingCategoryId(null)
 
                           Promise.all(
-                            next.map((c, idx) => (
+                            next
+                              .filter((c) => c.id !== 'uncategorized')
+                              .map((c, idx) => (
                               axios.patch(`/api/menu/category/${c.id}`, { businessId, displayOrder: idx, name: c.name }, { headers: getAuthHeaders() })
                             ))
                           )
@@ -2831,7 +3631,8 @@ function BusinessDashboard(): JSX.Element {
                           <button
                             type="button"
                             onClick={() => handleDeleteCategory(category.id)}
-                            className="px-3 py-1.5 border border-zuri-orange text-zuri-orange rounded-lg text-xs font-semibold hover:bg-zuri-orange hover:text-white transition"
+                            disabled={category.id === 'uncategorized'}
+                            className="px-3 py-1.5 border border-zuri-orange text-zuri-orange rounded-lg text-xs font-semibold hover:bg-zuri-orange hover:text-white transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-zuri-orange"
                           >
                             Delete
                           </button>
@@ -2854,6 +3655,11 @@ function BusinessDashboard(): JSX.Element {
                                   {item.available ? 'Available' : 'Unavailable'}
                                 </span>
                               </div>
+                              {isTicketing && item.pricingType === 'invite_only' ? (
+                                <p className="text-[10px] font-semibold uppercase tracking-wide text-purple-700 bg-purple-50 px-2 py-1 rounded-lg mb-2 inline-block">
+                                  Invite-only
+                                </p>
+                              ) : null}
                               {item.description && (
                                 <p className="text-xs text-gray-500 mb-2 line-clamp-2">{item.description}</p>
                               )}
@@ -2883,6 +3689,24 @@ function BusinessDashboard(): JSX.Element {
                                 <div className="mb-3" />
                               )}
                               <div className="flex gap-2">
+                                {isTicketing && item.pricingType === 'invite_only' ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setInviteTicketItem(item)
+                                      setInviteForm({
+                                        customerName: '',
+                                        customerEmail: '',
+                                        customerPhone: '',
+                                        quantity: '1',
+                                        deliveryMode: 'payment_link'
+                                      })
+                                    }}
+                                    className="flex-1 px-2 py-1.5 bg-purple-50 text-purple-700 rounded-xl text-xs font-semibold hover:bg-purple-100 transition"
+                                  >
+                                    Send invite
+                                  </button>
+                                ) : null}
                                 <button
                                   onClick={() => {
                                     axios.put(`/api/menu/item/${item.id}`, { available: !item.available }, { headers: getAuthHeaders() })
@@ -2907,7 +3731,7 @@ function BusinessDashboard(): JSX.Element {
                                   Edit
                                 </button>
                                 <button
-                                  onClick={() => handleDeleteItem(item.id)}
+                                  onClick={() => { void handleDeleteItem(item.id) }}
                                   className="px-2 py-1.5 bg-red-50 text-red-600 rounded-xl text-xs font-semibold hover:bg-red-100 transition"
                                 >
                                   Delete
@@ -2923,13 +3747,44 @@ function BusinessDashboard(): JSX.Element {
 
                 {/* Add/Edit Item Modal */}
                 {showItemForm && (
-                  <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-2xl p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-                      <div className="flex justify-between items-center mb-6">
-                        <h3 className="text-2xl font-bold text-zuri-black">
+                  <div
+                    className={
+                      isPhone
+                        ? 'mobile-dashboard-modal-backdrop'
+                        : 'fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4'
+                    }
+                    onClick={
+                      isPhone
+                        ? (e) => {
+                            if (e.target !== e.currentTarget) return
+                            setShowItemForm(false)
+                            setEditingItem(null)
+                            setItemForm(createEmptyItemForm())
+                            setImageUploadError(null)
+                            if (imageInputRef.current) imageInputRef.current.value = ''
+                          }
+                        : undefined
+                    }
+                  >
+                    <div
+                      className={
+                        isPhone
+                          ? 'mobile-dashboard-modal-sheet'
+                          : 'bg-white rounded-2xl p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto'
+                      }
+                    >
+                      <div
+                        className={
+                          isPhone
+                            ? 'mobile-dashboard-modal-sheet-header'
+                            : 'flex justify-between items-center mb-6'
+                        }
+                      >
+                        <h3 className={isPhone ? 'text-lg font-bold text-zuri-black pr-2' : 'text-2xl font-bold text-zuri-black'}>
                           {editingItem ? (isTicketing ? 'Edit ticket' : 'Edit Menu Item') : isTicketing ? 'Add ticket' : 'Add Menu Item'}
                         </h3>
                         <button
+                          type="button"
                           onClick={() => {
                             setShowItemForm(false)
                             setEditingItem(null)
@@ -2937,18 +3792,22 @@ function BusinessDashboard(): JSX.Element {
                             setImageUploadError(null)
                             if (imageInputRef.current) imageInputRef.current.value = ''
                           }}
-                          className="text-gray-400 hover:text-zuri-black transition"
+                          className="text-gray-400 hover:text-zuri-black transition shrink-0"
                         >
                           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                           </svg>
                         </button>
                       </div>
-                      <form onSubmit={handleCreateItem} className="space-y-4">
+                      <form
+                        onSubmit={handleCreateItem}
+                        className={isPhone ? 'flex flex-col flex-1 min-h-0' : 'space-y-4'}
+                      >
+                        <div className={isPhone ? 'mobile-dashboard-modal-sheet-body mobile-dashboard-form-stack' : 'space-y-4'}>
                         {isTicketing ? (
-                          <div className="rounded-xl border-2 border-gray-200 p-4 space-y-3">
+                          <div className={isPhone ? 'mobile-dashboard-form-section space-y-3' : 'rounded-xl border-2 border-gray-200 p-4 space-y-3'}>
                             <p className="text-sm font-bold text-zuri-black">What kind of ticket is this?</p>
-                            <div className="grid grid-cols-3 gap-2">
+                            <div className={isPhone ? 'mobile-dashboard-segment-row mobile-dashboard-segment-row--3' : 'grid grid-cols-3 gap-2'}>
                               {(['paid', 'free', 'invite_only'] as const).map((pt) => (
                                 <button
                                   key={pt}
@@ -2964,7 +3823,7 @@ function BusinessDashboard(): JSX.Element {
                                 </button>
                               ))}
                             </div>
-                            <div className="grid grid-cols-2 gap-3 pt-1">
+                            <div className={isPhone ? 'grid grid-cols-1 gap-3 pt-1' : 'grid grid-cols-2 gap-3 pt-1'}>
                               <div>
                                 <label className="block text-xs font-semibold text-gray-500 mb-1">Ticket capacity</label>
                                 <CustomDropdown
@@ -3289,7 +4148,7 @@ function BusinessDashboard(): JSX.Element {
                         {isTicketing ? (
                           <div className="grid md:grid-cols-2 gap-4">
                             <div>
-                              <label className="block text-sm font-semibold text-zuri-black mb-2">Group size (people per ticket)</label>
+                              <label className="block text-sm font-semibold text-zuri-black mb-2">Sell in groups of</label>
                               <input
                                 type="number"
                                 min="1"
@@ -3297,9 +4156,9 @@ function BusinessDashboard(): JSX.Element {
                                 value={itemForm.groupSize}
                                 onChange={(e) => setItemForm({ ...itemForm, groupSize: e.target.value })}
                                 className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-zuri-yellow"
-                                placeholder="1 (single admission)"
+                                placeholder="1 (any quantity)"
                               />
-                              <p className="text-xs text-gray-500 mt-1">How many people one ticket admits (e.g. 5 for group/table)</p>
+                              <p className="text-xs text-gray-500 mt-1">Buyers must add tickets in multiples of this number (e.g. 2 for pairs, 4 for tables)</p>
                             </div>
                             <div>
                               <label className="block text-sm font-semibold text-zuri-black mb-2">Min tickets per order</label>
@@ -3336,7 +4195,7 @@ function BusinessDashboard(): JSX.Element {
                               {isTicketing ? 'Ticket image (optional)' : 'Item image'}
                             </label>
                             <div className="space-y-2">
-                              <div className="flex items-center gap-3">
+                              <div className={`flex gap-3 ${isPhone ? 'flex-col items-stretch' : 'items-center'}`}>
                                 <input
                                   ref={imageInputRef}
                                   type="file"
@@ -3412,7 +4271,8 @@ function BusinessDashboard(): JSX.Element {
                             {isTicketing ? 'Available for sale' : 'Available for ordering'}
                           </label>
                         </div>
-                        <div className="flex space-x-4 pt-4">
+                        </div>
+                        <div className={isPhone ? 'mobile-dashboard-modal-sheet-footer' : 'flex space-x-4 pt-4'}>
                           <button
                             type="button"
                             onClick={() => {
@@ -3422,15 +4282,23 @@ function BusinessDashboard(): JSX.Element {
                               setImageUploadError(null)
                               if (imageInputRef.current) imageInputRef.current.value = ''
                             }}
-                            className="flex-1 px-3 py-1.5 border border-zuri-orange rounded-lg font-semibold text-zuri-orange hover:bg-zuri-orange hover:text-white transition"
+                            className={
+                              isPhone
+                                ? 'flex-1 px-3 py-2.5 border border-zuri-orange rounded-lg font-semibold text-zuri-orange'
+                                : 'flex-1 px-3 py-1.5 border border-zuri-orange rounded-lg font-semibold text-zuri-orange hover:bg-zuri-orange hover:text-white transition'
+                            }
                           >
                             Cancel
                           </button>
                           <button
                             type="submit"
-                            className="flex-1 px-3 py-1.5 bg-zuri-orange text-white rounded-lg font-semibold hover:bg-zuri-orange-dark transition"
+                            className={
+                              isPhone
+                                ? 'flex-1 px-3 py-2.5 bg-zuri-orange text-white rounded-lg font-semibold'
+                                : 'flex-1 px-3 py-1.5 bg-zuri-orange text-white rounded-lg font-semibold hover:bg-zuri-orange-dark transition'
+                            }
                           >
-                            {editingItem ? 'Update Item' : 'Add Item'}
+                            {editingItem ? (isTicketing ? 'Update ticket' : 'Update item') : isTicketing ? 'Add ticket' : 'Add item'}
                           </button>
                         </div>
                       </form>
@@ -3438,25 +4306,150 @@ function BusinessDashboard(): JSX.Element {
                   </div>
                 )}
 
+                {inviteTicketItem ? (
+                  <div
+                    className={
+                      isPhone
+                        ? 'mobile-dashboard-modal-backdrop'
+                        : 'fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4'
+                    }
+                    onClick={(e) => {
+                      if (e.target !== e.currentTarget || inviteSending) return
+                      setInviteTicketItem(null)
+                    }}
+                  >
+                    <div className="bg-white rounded-2xl p-6 sm:p-8 max-w-lg w-full max-h-[90vh] overflow-y-auto">
+                      <div className="flex justify-between items-start gap-3 mb-5">
+                        <div>
+                          <h3 className="text-xl font-bold text-zuri-black">Send ticket invite</h3>
+                          <p className="text-sm text-gray-500 mt-1">
+                            {inviteTicketItem.name} · ₦{inviteTicketItem.price.toFixed(2)}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={inviteSending}
+                          onClick={() => setInviteTicketItem(null)}
+                          className="text-gray-400 hover:text-zuri-black"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                      <form onSubmit={(e) => { void handleSendTicketInvite(e) }} className="space-y-4">
+                        <div>
+                          <label className="block text-sm font-semibold text-zuri-black mb-1.5">Guest name *</label>
+                          <input
+                            required
+                            value={inviteForm.customerName}
+                            onChange={(e) => setInviteForm({ ...inviteForm, customerName: e.target.value })}
+                            className="w-full px-3 py-2.5 border-2 border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-zuri-yellow"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-semibold text-zuri-black mb-1.5">Guest email *</label>
+                          <input
+                            required
+                            type="email"
+                            value={inviteForm.customerEmail}
+                            onChange={(e) => setInviteForm({ ...inviteForm, customerEmail: e.target.value })}
+                            className="w-full px-3 py-2.5 border-2 border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-zuri-yellow"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-semibold text-zuri-black mb-1.5">Guest phone</label>
+                          <input
+                            value={inviteForm.customerPhone}
+                            onChange={(e) => setInviteForm({ ...inviteForm, customerPhone: e.target.value })}
+                            className="w-full px-3 py-2.5 border-2 border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-zuri-yellow"
+                            placeholder="Optional but recommended"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-semibold text-zuri-black mb-1.5">Quantity</label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={99}
+                            value={inviteForm.quantity}
+                            onChange={(e) => setInviteForm({ ...inviteForm, quantity: e.target.value })}
+                            className="w-full px-3 py-2.5 border-2 border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-zuri-yellow"
+                          />
+                        </div>
+                        <div>
+                          <p className="block text-sm font-semibold text-zuri-black mb-2">How should they receive it?</p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {([
+                              ['payment_link', 'Send payment link'],
+                              ['complimentary', 'Already paid / complimentary']
+                            ] as const).map(([value, label]) => (
+                              <button
+                                key={value}
+                                type="button"
+                                onClick={() => setInviteForm({ ...inviteForm, deliveryMode: value })}
+                                className={`px-3 py-2.5 rounded-lg text-sm font-semibold border-2 transition ${
+                                  inviteForm.deliveryMode === value
+                                    ? 'border-zuri-orange bg-zuri-orange/10 text-zuri-orange'
+                                    : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                                }`}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                          <p className="text-xs text-gray-500 mt-2">
+                            {inviteForm.deliveryMode === 'complimentary'
+                              ? 'Marks the order as paid and emails the guest their ticket QR immediately.'
+                              : 'Creates a pending order and emails the guest a secure link to pay and receive their QR.'}
+                          </p>
+                        </div>
+                        <button
+                          type="submit"
+                          disabled={inviteSending}
+                          className="w-full bg-zuri-orange text-white py-3 rounded-xl font-bold hover:bg-zuri-orange-dark transition disabled:opacity-60"
+                        >
+                          {inviteSending ? 'Sending…' : 'Send invite email'}
+                        </button>
+                      </form>
+                    </div>
+                  </div>
+                ) : null}
+
                 {/* Add Category Modal */}
                 {showCategoryForm && (
-                  <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-2xl p-8 max-w-md w-full">
-                      <div className="flex justify-between items-center mb-6">
-                        <h3 className="text-2xl font-bold text-zuri-black">Add Category</h3>
+                  <div
+                    className={
+                      isPhone
+                        ? 'mobile-dashboard-modal-backdrop'
+                        : 'fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4'
+                    }
+                    onClick={
+                      isPhone
+                        ? (e) => {
+                            if (e.target !== e.currentTarget) return
+                            setShowCategoryForm(false)
+                            setCategoryForm({ name: '', displayOrder: 0 })
+                          }
+                        : undefined
+                    }
+                  >
+                    <div className={isPhone ? 'mobile-dashboard-modal-sheet max-h-[min(24rem,calc(var(--layout-height,100dvh)-var(--mobile-header-h)))]' : 'bg-white rounded-2xl p-8 max-w-md w-full'}>
+                      <div className={isPhone ? 'mobile-dashboard-modal-sheet-header' : 'flex justify-between items-center mb-6'}>
+                        <h3 className={isPhone ? 'text-lg font-bold text-zuri-black' : 'text-2xl font-bold text-zuri-black'}>Add Category</h3>
                         <button
+                          type="button"
                           onClick={() => {
                             setShowCategoryForm(false)
                             setCategoryForm({ name: '', displayOrder: 0 })
                           }}
-                          className="text-gray-400 hover:text-zuri-black transition"
+                          className="text-gray-400 hover:text-zuri-black transition shrink-0"
                         >
                           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                           </svg>
                         </button>
                       </div>
-                      <form onSubmit={handleCreateCategory} className="space-y-4">
+                      <form onSubmit={handleCreateCategory} className={isPhone ? 'flex flex-col flex-1 min-h-0' : 'space-y-4'}>
+                        <div className={isPhone ? 'mobile-dashboard-modal-sheet-body mobile-dashboard-form-stack' : 'space-y-4'}>
                         <div>
                           <label className="block text-sm font-semibold text-zuri-black mb-2">Category name *</label>
                           <input
@@ -3481,20 +4474,29 @@ function BusinessDashboard(): JSX.Element {
                           />
                           <p className="text-xs text-gray-500 mt-1">Lower numbers appear first</p>
                         </div>
-                        <div className="flex space-x-4 pt-4">
+                        </div>
+                        <div className={isPhone ? 'mobile-dashboard-modal-sheet-footer' : 'flex space-x-4 pt-4'}>
                           <button
                             type="button"
                             onClick={() => {
                               setShowCategoryForm(false)
                               setCategoryForm({ name: '', displayOrder: 0 })
                             }}
-                            className="flex-1 px-3 py-1.5 border border-zuri-orange rounded-lg font-semibold text-zuri-orange hover:bg-zuri-orange hover:text-white transition"
+                            className={
+                              isPhone
+                                ? 'flex-1 px-3 py-2.5 border border-zuri-orange rounded-lg font-semibold text-zuri-orange'
+                                : 'flex-1 px-3 py-1.5 border border-zuri-orange rounded-lg font-semibold text-zuri-orange hover:bg-zuri-orange hover:text-white transition'
+                            }
                           >
                             Cancel
                           </button>
                           <button
                             type="submit"
-                            className="flex-1 px-3 py-1.5 bg-zuri-orange text-white rounded-lg font-semibold hover:bg-zuri-orange-dark transition"
+                            className={
+                              isPhone
+                                ? 'flex-1 px-3 py-2.5 bg-zuri-orange text-white rounded-lg font-semibold'
+                                : 'flex-1 px-3 py-1.5 bg-zuri-orange text-white rounded-lg font-semibold hover:bg-zuri-orange-dark transition'
+                            }
                           >
                             Add Category
                           </button>
@@ -3507,7 +4509,7 @@ function BusinessDashboard(): JSX.Element {
             )}
 
             {activeTab === 'qr' && (
-              <div className="text-center">
+              <div className={`text-center ${isPhone ? 'rounded-2xl bg-white border border-gray-100 p-4 shadow-sm' : ''}`}>
                 <h2 className="text-lg font-bold text-zuri-black mb-6">Your QR code</h2>
                 {qrLoading ? (
                   <div className="py-12 flex items-center justify-center w-full">
@@ -3551,11 +4553,212 @@ function BusinessDashboard(): JSX.Element {
                     </button>
                   </div>
                 )}
+
+                {isTicketing ? (
+                  <div className="mt-10 pt-8 border-t border-gray-100 text-left max-w-lg mx-auto">
+                    <h3 className="text-base font-bold text-zuri-black mb-1 text-center">Staff ticket scanners</h3>
+                    <p className="text-sm text-gray-600 mb-4 text-center">
+                      Generate access codes so door staff can scan tickets from their phones — without logging into your
+                      full dashboard.
+                    </p>
+                    <p className="text-xs text-zuri-orange font-mono text-center break-all mb-4">
+                      {scannerConnectUrl || `${typeof window !== 'undefined' ? window.location.origin : ''}/scan/connect`}
+                    </p>
+
+                    {newScannerCode ? (
+                      <div className="rounded-xl border-2 border-zuri-orange/40 bg-zuri-orange/5 p-4 mb-4 text-center">
+                        <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1">New access code</p>
+                        <p className="text-3xl font-mono font-bold tracking-[0.3em] text-zuri-black mb-2">
+                          {newScannerCode.code}
+                        </p>
+                        {newScannerCode.label ? (
+                          <p className="text-xs text-gray-500 mb-2">Label: {newScannerCode.label}</p>
+                        ) : null}
+                        <p className="text-xs text-gray-600 mb-3">
+                          Share this code once. Staff enter it at the link above, then open{' '}
+                          <span className="font-mono">/scan</span> to verify tickets.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void navigator.clipboard?.writeText(newScannerCode.code)
+                          }}
+                          className="text-sm font-semibold text-zuri-orange hover:underline mr-4"
+                        >
+                          Copy code
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setNewScannerCode(null)}
+                          className="text-sm text-gray-500 hover:text-zuri-black"
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    ) : null}
+
+                    <div className="flex flex-col sm:flex-row gap-2 mb-4">
+                      <input
+                        type="text"
+                        value={scannerCodeLabel}
+                        onChange={(e) => setScannerCodeLabel(e.target.value)}
+                        placeholder="Label (optional) — e.g. Main gate"
+                        className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange"
+                      />
+                      <button
+                        type="button"
+                        disabled={scannerCodeBusy}
+                        onClick={() => void createScannerCode()}
+                        className="px-4 py-2 bg-zuri-black text-white rounded-lg text-sm font-semibold hover:bg-gray-800 disabled:opacity-50 whitespace-nowrap"
+                      >
+                        {scannerCodeBusy ? 'Creating…' : 'Generate code'}
+                      </button>
+                    </div>
+
+                    {scannerCodesError ? (
+                      <p className="text-sm text-red-600 mb-3">{scannerCodesError}</p>
+                    ) : null}
+
+                    {scannerCodesLoading ? (
+                      <div className="py-6 flex justify-center">
+                        <PaperPlaneLoader size="sm" />
+                      </div>
+                    ) : scannerCodes.length > 0 ? (
+                      <ul className="space-y-2">
+                        {scannerCodes.map((row) => (
+                          <li
+                            key={row.id}
+                            className="flex items-center justify-between gap-3 rounded-lg border border-gray-100 bg-gray-50/80 px-3 py-2"
+                          >
+                            <div className="min-w-0 text-left">
+                              <p className="text-sm font-semibold text-zuri-black truncate">
+                                {row.label || 'Scanner device'}
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                Created {new Date(row.createdAt).toLocaleDateString()}
+                                {row.lastUsedAt
+                                  ? ` · Last used ${new Date(row.lastUsedAt).toLocaleString()}`
+                                  : ' · Not used yet'}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void revokeScannerCode(row.id)}
+                              className="text-xs font-semibold text-red-600 hover:text-red-800 shrink-0"
+                            >
+                              Revoke
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-sm text-gray-500 text-center">No active scanner codes yet.</p>
+                    )}
+                  </div>
+                ) : null}
               </div>
             )}
 
             {/* Zuri Assist dashboard (Scale and above) */}
             {activeTab === 'ai' && isAiInsightsTier(business?.plan) && (
+              isPhone ? (
+                <div className="mobile-ai-shell">
+                  <div className="flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowAiChats((v) => !v)}
+                      className={`dashboard-btn inline-flex items-center gap-2 rounded-full border border-zuri-orange/25 bg-zuri-orange/5 px-3 py-1.5 text-xs font-semibold text-zuri-black ${BTN_PRESS}`}
+                      aria-expanded={showAiChats}
+                    >
+                      <span className="h-5 w-5 rounded-full bg-zuri-black text-white grid place-items-center text-[10px]">AI</span>
+                      Past chats{aiChats.length ? ` (${aiChats.length})` : ''}
+                    </button>
+                  </div>
+
+                  {showAiChats && (
+                    <div className="rounded-xl border border-zuri-orange/20 bg-white p-3">
+                      {aiChats.length === 0 ? (
+                        <p className="text-sm text-zuri-black/60">No past chats yet.</p>
+                      ) : (
+                        <div className="max-h-40 overflow-y-auto space-y-2">
+                          {aiChats.map((c) => {
+                            const summary = c.type === 'custom' ? (c.query || 'Custom question') : c.type.replace(/_/g, ' ')
+                            return (
+                              <button
+                                key={c.id}
+                                type="button"
+                                onClick={() => {
+                                  setShowAiChats(false)
+                                  setActiveAiChatId(c.id)
+                                  setAiInsightLoading(false)
+                                  setAiInsight(c.insight)
+                                }}
+                                className={`dashboard-btn w-full text-left rounded-lg border px-3 py-2 text-sm ${c.id === activeAiChatId ? 'border-zuri-orange/50 bg-zuri-orange/10' : 'border-gray-200 bg-white'}`}
+                              >
+                                <span className="font-semibold text-zuri-black block truncate">{summary}</span>
+                                <span className="text-[11px] text-gray-500">{formatAiChatStamp(c.createdAt)}</span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div>
+                    <p className="text-sm text-zuri-black/70">Hi {business?.name || 'there'}</p>
+                    <h2 className="text-lg font-bold text-zuri-black mt-0.5">Ask Zuri Assist</h2>
+                  </div>
+
+                  <div className="space-y-2">
+                    {[
+                      { type: 'revenue_insights', label: 'Revenue insights', desc: 'Best sellers & bundles' },
+                      { type: 'sales_forecasting', label: 'Sales forecast', desc: 'Demand & peak hours' },
+                      { type: 'promotions_suggestions', label: 'Promotions', desc: 'Offers for slow days' }
+                    ].map(({ type, label, desc }) => (
+                      <button
+                        key={type}
+                        type="button"
+                        disabled={aiInsightLoading}
+                        onClick={() => requestAiInsight(type as AiInsightType)}
+                        className={`dashboard-btn w-full text-left rounded-xl border border-zuri-orange/20 bg-white px-3 py-2.5 disabled:opacity-60 ${BTN_PRESS}`}
+                      >
+                        <span className="font-semibold text-zuri-black text-sm block">{label}</span>
+                        <span className="text-xs text-zuri-black/55">{desc}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {aiInsight !== null && (
+                    <div className="mobile-ai-insight">
+                      <h3 className="font-semibold text-zuri-black text-sm mb-2">{aiInsightLoading ? 'Thinking…' : 'Insight'}</h3>
+                      <div className="prose prose-sm max-w-none prose-p:my-1.5 prose-strong:text-zuri-black">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {aiInsightLoading ? '' : aiInsightTypingDone ? aiInsight || '' : safeMarkdownDuringTyping(aiInsightTyped)}
+                        </ReactMarkdown>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mobile-ai-composer">
+                    <input
+                      value={aiCustomQuery}
+                      onChange={(e) => setAiCustomQuery(e.target.value)}
+                      placeholder="Ask anything…"
+                      className="mobile-dashboard-input flex-1 bg-transparent text-base text-zuri-black placeholder:text-zuri-black/45 focus:outline-none min-w-0"
+                    />
+                    <button
+                      type="button"
+                      disabled={aiInsightLoading || !aiCustomQuery.trim()}
+                      onClick={() => requestAiInsight('custom', { query: aiCustomQuery.trim() })}
+                      className={`dashboard-btn h-9 w-9 shrink-0 rounded-full bg-zuri-orange text-white text-sm font-bold disabled:opacity-50 ${BTN_PRESS}`}
+                      aria-label="Ask AI"
+                    >
+                      →
+                    </button>
+                  </div>
+                </div>
+              ) : (
               <div className="max-w-5xl mx-auto">
                 <div className="rounded-3xl border border-zuri-orange/20 bg-white/75 backdrop-blur-sm px-5 py-6 sm:px-10 sm:py-8 shadow-[0_10px_30px_rgba(255,189,89,0.08)]">
                   <div className="flex items-center justify-between mb-8">
@@ -3690,7 +4893,7 @@ function BusinessDashboard(): JSX.Element {
                       value={aiCustomQuery}
                       onChange={(e) => setAiCustomQuery(e.target.value)}
                       placeholder="Ask whatever you want"
-                      className="flex-1 bg-transparent text-sm text-zuri-black placeholder:text-zuri-black/45 focus:outline-none"
+                      className={`flex-1 bg-transparent text-zuri-black placeholder:text-zuri-black/45 focus:outline-none min-w-0 ${isPhone ? 'mobile-dashboard-input text-base' : 'text-sm'}`}
                     />
                     <button
                       type="button"
@@ -3722,21 +4925,152 @@ function BusinessDashboard(): JSX.Element {
                   )}
                 </div>
               </div>
+              )
             )}
           </div>
         </div>
       </div>
-      <ConfirmModal
-        open={!!pendingCategoryDelete}
-        title="Delete category?"
-        message={`"${pendingCategoryDelete?.name || 'This category'}" will be removed, and its items will move to Uncategorized.`}
-        confirmLabel="Delete"
-        cancelLabel="Cancel"
-        danger
-        onConfirm={confirmDeleteCategory}
-        onCancel={() => setPendingCategoryDelete(null)}
-      />
-    </div>
+    </>
+  )
+
+  const confirmModal = (
+    <ConfirmModal
+      open={!!pendingCategoryDelete}
+      title="Delete category?"
+      message={`"${pendingCategoryDelete?.name || 'This category'}" will be removed, and its items will move to Uncategorized.`}
+      confirmLabel="Delete"
+      cancelLabel="Cancel"
+      danger
+      onConfirm={confirmDeleteCategory}
+      onCancel={() => setPendingCategoryDelete(null)}
+    />
+  )
+
+  const mobileNotificationsSheet = isPhone ? (
+    <MobileBottomSheet open={notificationsOpen} onClose={() => setNotificationsOpen(false)} title="Notifications">
+      {notificationsCount === 0 ? (
+        <p className="px-2 pb-2 text-sm text-gray-500">You are all caught up.</p>
+      ) : (
+        <div className="space-y-2 px-1">
+          {notificationsFeed.map(item => {
+            if (item.type === 'order' && item.order) {
+              const order = item.order
+              return (
+                <div key={item.id} className="bg-gray-50 rounded-xl p-3 border border-gray-100">
+                  <div className="flex justify-between items-start gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-zuri-black truncate">
+                        #{order.id.slice(0, 8).toUpperCase()} · {orderCustomerName(order) || 'Guest'}
+                      </p>
+                      <p className="text-[11px] text-gray-500 mt-0.5 truncate">
+                        {orderCustomerPhone(order) || '—'} · ₦{orderTotalAmount(order).toFixed(2)}
+                      </p>
+                    </div>
+                    <span className={`inline-block px-2 py-1 rounded-lg text-[11px] font-semibold ${getStatusColor(order.status)}`}>
+                      {formatOrderStatusLabel(order.status as OrderFulfillmentStatus, isTicketing)}
+                    </span>
+                  </div>
+                  {renderCompactOrderStatusActions(order)}
+                </div>
+              )
+            }
+            if (item.type === 'review' && item.review) {
+              const review = item.review
+              return (
+                <div key={item.id} className="bg-gray-50 rounded-xl p-3 border border-gray-100">
+                  <p className="text-xs font-bold text-zuri-black">{reviewCustomerName(review) || 'Customer'}</p>
+                  <p className="text-[11px] text-gray-500 mt-1">{review.rating} / 5 · {review.comment || 'No comment'}</p>
+                </div>
+              )
+            }
+            if (item.type === 'reservation' && item.reservation) {
+              const reservation = item.reservation
+              return (
+                <div key={item.id} className="bg-gray-50 rounded-xl p-3 border border-gray-100">
+                  <p className="text-xs font-bold text-zuri-black">{reservationCustomerName(reservation) || 'Guest'}</p>
+                  <p className="text-[11px] text-gray-500 mt-0.5">Party {reservationPartySize(reservation) || 1}</p>
+                  {reservation.status === 'requested' && (
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      <button type="button" onClick={() => updateReservationStatus(reservation.id, 'confirmed')} className={`dashboard-btn px-3 py-2 bg-zuri-orange text-white rounded-lg text-xs font-semibold ${BTN_PRESS}`}>Confirm</button>
+                      <button type="button" onClick={() => updateReservationStatus(reservation.id, 'cancelled')} className={`dashboard-btn px-3 py-2 border border-zuri-orange text-zuri-orange rounded-lg text-xs font-semibold ${BTN_PRESS}`}>Cancel</button>
+                    </div>
+                  )}
+                </div>
+              )
+            }
+            return null
+          })}
+        </div>
+      )}
+    </MobileBottomSheet>
+  ) : null
+
+  const mobileProfileSheet = isPhone ? (
+    <MobileBottomSheet
+      open={profileOpen}
+      onClose={() => setProfileOpen(false)}
+      title={business?.name || 'Business'}
+      subtitle={business?.email}
+    >
+      <div className="px-1 pb-2">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Storefront type</p>
+        <div className="flex rounded-xl border border-gray-200 overflow-hidden mb-4">
+          <button type="button" disabled={businessModeSaving} onClick={() => void patchBusinessMode('menu')} className={`dashboard-btn flex-1 py-2.5 text-xs font-semibold ${!isTicketing ? 'bg-zuri-orange text-white' : 'bg-white text-gray-700'}`}>Menu</button>
+          <button type="button" disabled={businessModeSaving} onClick={() => void patchBusinessMode('ticketing')} className={`dashboard-btn flex-1 py-2.5 text-xs font-semibold ${isTicketing ? 'bg-zuri-orange text-white' : 'bg-white text-gray-700'}`}>Tickets</button>
+        </div>
+        {business?.plan && business.plan !== 'free' ? (
+          <button type="button" onClick={() => { setProfileOpen(false); setShowLogoModal(true); setLogoUploadError(null) }} className={`dashboard-btn w-full rounded-xl px-4 py-3 text-left text-sm font-semibold text-zuri-black hover:bg-gray-50 ${BTN_PRESS}`}>Change logo</button>
+        ) : null}
+      </div>
+    </MobileBottomSheet>
+  ) : null
+
+  if (isPhone) {
+    return (
+      <>
+        <BusinessDashboardMobileShell
+          business={business}
+          businessId={businessId}
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          isTicketing={isTicketing}
+          notificationsCount={notificationsCount}
+          onNotificationsClick={() => {
+            setProfileOpen(false)
+            setLogoMenuOpen(false)
+            setNotificationsOpen(true)
+          }}
+          onProfileClick={() => {
+            setNotificationsOpen(false)
+            setLogoMenuOpen(false)
+            setProfileOpen(true)
+          }}
+          onChangePassword={() => {
+            setShowChangePasswordModal(true)
+            setChangePasswordCurrent('')
+            setChangePasswordNew('')
+            setChangePasswordConfirm('')
+            setChangePasswordError(null)
+          }}
+          onFetchOrders={fetchOrders}
+          onFetchAnalytics={fetchAnalytics}
+        >
+          {dashboardBody}
+        </BusinessDashboardMobileShell>
+        {mobileNotificationsSheet}
+        {mobileProfileSheet}
+        {confirmModal}
+      </>
+    )
+  }
+
+  return (
+    <>
+      <div className="min-h-screen bg-[#f5f5f5] font-normal">
+        {dashboardBody}
+      </div>
+      {confirmModal}
+    </>
   )
 }
 

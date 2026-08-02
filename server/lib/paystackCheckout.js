@@ -28,25 +28,42 @@ function originFromCallbackUrl(callbackUrl) {
 }
 
 /**
- * @param {{ orderId: string, businessId: string, saveCard?: boolean, tap?: boolean }} p
+ * @param {{ orderId: string, businessId: string, saveCard?: boolean, tap?: boolean, paymentMethod?: string }} p
  */
 function buildOrderPaymentMetadata(p) {
-  const { orderId, businessId, saveCard, tap } = p;
+  const { orderId, businessId, saveCard, tap, paymentMethod } = p;
   const origin = primaryFrontendOrigin();
+  const customFields = [
+    { display_name: 'Service', variable_name: 'zuri_service', value: 'ZURI' },
+    { display_name: 'Order ref', variable_name: 'zuri_order', value: String(orderId).slice(0, 12) }
+  ];
+  if (paymentMethod === 'split') {
+    customFields.push({ display_name: 'Payment type', variable_name: 'payment_method', value: 'split' });
+  }
   const meta = {
     orderId,
     businessId,
-    custom_fields: [
-      { display_name: 'Service', variable_name: 'zuri_service', value: 'ZURI' },
-      { display_name: 'Order ref', variable_name: 'zuri_order', value: String(orderId).slice(0, 12) }
-    ]
+    custom_fields: customFields
   };
   if (saveCard) meta.save_card = 'true';
   if (tap) meta.tap = 'true';
+  if (paymentMethod === 'split') meta.paymentMethod = 'split';
   if (origin) {
     meta.cancel_action = `${origin}/order/${encodeURIComponent(businessId)}?payment=cancelled`;
   }
   return meta;
+}
+
+/** Read split vs transfer from Paystack transaction metadata (webhook / verify). */
+function parsePaymentMethodFromPaystackMetadata(metadata) {
+  if (!metadata || typeof metadata !== 'object') return undefined;
+  if (metadata.paymentMethod === 'split') return 'split';
+  const fields = metadata.custom_fields;
+  if (Array.isArray(fields)) {
+    const hit = fields.find((f) => f?.variable_name === 'payment_method' && String(f?.value).toLowerCase() === 'split');
+    if (hit) return 'split';
+  }
+  return undefined;
 }
 
 /**
@@ -78,10 +95,56 @@ function paystackCheckoutExtras() {
   };
 }
 
+/** Unique per checkout attempt — Paystack rejects duplicate reference. */
+function buildPaystackPaymentReference(orderId) {
+  const compact = String(orderId || '').replace(/-/g, '').slice(0, 16);
+  const stamp = Date.now().toString(36);
+  return `zuri_ps_${compact}_${stamp}`.slice(0, 64);
+}
+
+/** Build Monnify redirect from FRONTEND_URL (preferred) or client callback. */
+function buildMonnifyRedirectUrl(_orderOrRefId, clientCallbackUrl, path = 'payment-done') {
+  const origin = primaryFrontendOrigin() || originFromCallbackUrl(clientCallbackUrl);
+  if (origin) {
+    // No query string — Monnify appends ?paymentReference= and corrupts ?reference= values.
+    return `${origin.replace(/\/$/, '')}/${path}`;
+  }
+  if (clientCallbackUrl) {
+    try {
+      const url = new URL(clientCallbackUrl);
+      url.search = '';
+      url.hash = '';
+      return url.toString();
+    } catch {
+      return String(clientCallbackUrl).split('?')[0].split('#')[0];
+    }
+  }
+  return null;
+}
+
+/** Ensure Paystack redirect back to our SPA always includes the transaction reference. */
+function withReferenceOnCallback(callbackUrl, reference) {
+  if (!callbackUrl || typeof callbackUrl !== 'string' || !reference) return callbackUrl || null;
+  try {
+    const url = new URL(callbackUrl);
+    if (!url.searchParams.get('reference') && !url.searchParams.get('trxref')) {
+      url.searchParams.set('reference', String(reference));
+    }
+    return url.toString();
+  } catch {
+    const sep = callbackUrl.includes('?') ? '&' : '?';
+    return `${callbackUrl}${sep}reference=${encodeURIComponent(String(reference))}`;
+  }
+}
+
 module.exports = {
   primaryFrontendOrigin,
+  buildMonnifyRedirectUrl,
   buildOrderPaymentMetadata,
   buildSubscriptionPaymentMetadata,
+  buildPaystackPaymentReference,
+  parsePaymentMethodFromPaystackMetadata,
   paystackCheckoutExtras,
+  withReferenceOnCallback,
   ZURI_PAYSTACK_BRAND
 };

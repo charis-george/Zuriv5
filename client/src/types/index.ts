@@ -37,18 +37,34 @@ export type BillingInterval = 'monthly' | 'yearly'
 /** Restaurant menu ordering vs event ticketing storefront */
 export type BusinessMode = 'menu' | 'ticketing'
 
+/** Customer checkout + payout gateway */
+export type PaymentProvider = 'paystack' | 'monnify'
+
+/** Venue moderation status */
+export type AccountStatus = 'active' | 'under_review' | 'suspended' | 'disabled'
+
+/** Event refund policy preset */
+export type EventRefundPolicy = 'no_refunds' | 'full_before_event' | 'custom'
+
 export interface Business {
   id: string
   name: string
-  email: string
+  /** Owner email — only returned when the request is authenticated as that business. */
+  email?: string
   phone?: string
   address?: string
   createdAt?: string
   plan?: PlanId
   paystackPublicKey?: string | null
+  paymentProvider?: PaymentProvider
   logoUrl?: string | null
   storefrontConfig?: StorefrontConfig | null
   storefrontDetails?: StorefrontDetails | null
+  /** Multiple branded storefronts (Growth+). Legacy columns mirror the default profile. */
+  storefrontProfiles?: StorefrontProfile[] | null
+  /** Set on public storefront views when a specific profile is active. */
+  activeStorefrontId?: string
+  activeStorefrontSlug?: string
   /** Present when loaded from API (camelCase) */
   businessMode?: BusinessMode
   /** Public order page: Scale-tier image pills (For you / Reorder / Trending) */
@@ -57,16 +73,119 @@ export interface Business {
   businessGroupId?: string | null
   /** Number of AI storefront generations used by this business */
   storefrontAiGenerations?: number
+  menuDigitizeUses?: number
+  menuDigitizeTokensTotal?: number
+  contactName?: string | null
+  accountStatus?: AccountStatus
+  subscriptionStatus?: 'none' | 'active' | 'past_due' | 'cancelled'
+  subscriptionInterval?: BillingInterval | null
+  subscriptionCurrentPeriodEnd?: string | null
+  subscriptionCancelledAt?: string | null
+  renewsAutomatically?: boolean
+  managePaymentUrl?: string | null
+  bankVerifiedAt?: string | null
+  kycDocRequestedAt?: string | null
+  moderationNotes?: string | null
   bankAccount?: {
     bankName: string | null
     accountNumberMasked: string | null
     accountName: string | null
+    verifiedAt?: string | null
   } | null
+  /** Zuri Assist payment-matching agent (owner-only fields) */
+  paymentAgentEnabled?: boolean
+  agentForwardingNumber?: string | null
+  matchWindowMinutes?: number
+  agentStaffMsisdn?: string | null
+  agentAllowedMsisdns?: string[]
+}
+
+export type PaymentAgentMatchStatus =
+  | 'unmatched'
+  | 'auto_matched'
+  | 'pending_review'
+  | 'manually_matched'
+  | 'unmatchable'
+
+export interface PaymentAgentCandidate {
+  id: string
+  orderId: string
+  confidenceScore: number
+  reason?: string | null
+  order?: {
+    id: string
+    customer_name?: string | null
+    total_amount?: number
+    created_at?: string
+    payment_status?: string
+    status?: string
+  } | null
+}
+
+export interface PaymentAgentAlert {
+  id: string
+  parsedAmount?: number | null
+  parsedSenderName?: string | null
+  parsedChannel?: string | null
+  parsedBankOrProvider?: string | null
+  alertTimestamp?: string
+  receivedAt?: string
+  matchStatus: PaymentAgentMatchStatus
+  confidenceScore?: number | null
+  flagReason?: string | null
+  parseErrors?: string | null
+  candidates?: PaymentAgentCandidate[]
 }
 
 // Storefront Customizer Types (published to customer ordering page)
 export type StorefrontHeroOverlay = 'gradient' | 'solid' | 'dim' | 'split'
-export type StorefrontFontFamily = 'sans' | 'serif' | 'mono'
+/** Curated Google Font pairing preset (header + body). Legacy sans/serif/mono are migrated on read. */
+export type StorefrontFontPairingId = 'modern' | 'artisanal' | 'luxe' | 'playful' | 'classic' | 'nightlife'
+export type StorefrontFontFamily = StorefrontFontPairingId | 'sans' | 'serif' | 'mono'
+
+export type StorefrontEventLineupItem = {
+  name: string
+  role?: string
+}
+
+export type StorefrontEventTemplateId =
+  | 'classic'
+  | 'spotlight'
+  | 'festival'
+  | 'minimal'
+  | 'split-stage'
+  | 'nightclub'
+
+export type StorefrontEventPageLayout = {
+  heroStyle?: 'cinematic' | 'compact' | 'centered' | 'split'
+  ticketLayout?: 'stacked' | 'grid' | 'rows'
+  countdownStyle?: 'blocks' | 'inline' | 'banner'
+  lineupStyle?: 'list' | 'grid' | 'chips'
+  heroTextAlign?: 'left' | 'center'
+  ticketsFirst?: boolean
+  heroMinHeight?: string
+}
+
+export type StorefrontEventPage = {
+  id: string
+  slug: string
+  title: string
+  subtitle?: string
+  coverImageUrl?: string | null
+  eventStartsAt: string
+  showCountdown?: boolean
+  lineup?: StorefrontEventLineupItem[]
+  enabled?: boolean
+  /** Links this event to a specific storefront profile (multi-storefront venues). */
+  storefrontId?: string
+  /** Refund/cancellation terms shown at checkout */
+  refundPolicy?: EventRefundPolicy
+  refundPolicyText?: string
+  /** Visual layout preset for this event landing page */
+  eventTemplate?: StorefrontEventTemplateId | 'custom'
+  /** Per-event layout overrides (merged on top of template defaults) */
+  eventLayout?: StorefrontEventPageLayout
+}
 export type StorefrontMenuLayout = 'grid' | 'list' | 'cards'
 export type StorefrontMenuTemplateId =
   | 'classic'
@@ -126,8 +245,28 @@ export type StorefrontDetails = {
   name: string
   tagline: string
   cuisineTags: string[]
+  /** Guest-visible phone (overrides business.phone on storefront when set). */
+  contactPhone?: string
+  /** Instagram handle without @ */
+  instagramHandle?: string
+  /** WhatsApp number for chat link (E.164 or local format). */
+  whatsappNumber?: string
+  /** Branded event micropages (ticketing venues) — scoped per storefront profile. */
+  eventPages?: StorefrontEventPage[]
   /** Optional per–menu-item translations for African languages (by item id). */
   menuTranslations?: Record<string, Partial<Record<'ha' | 'yo' | 'ig', string>>>
+}
+
+/** A branded storefront link under one ZURI business account. */
+export type StorefrontProfile = {
+  id: string
+  slug: string
+  name: string
+  isDefault?: boolean
+  /** Ticket/menu catalog preset — each storefront has its own lineup. */
+  catalogPresetId?: string | null
+  config: StorefrontConfig
+  details: StorefrontDetails
 }
 
 export const PLAN_LABELS: Record<PlanId, string> = {
@@ -211,6 +350,9 @@ export interface MenuItem {
   perks?: string[] | null
   /** Ticketing: total capacity (null = unlimited) — maps to stockOnHand in DB */
   totalCapacity?: number | null
+  stockOnHand?: number | null
+  /** Tickets already sold (paid + pending) — set by menu API for ticketing */
+  ticketsSold?: number | null
   /** Shared catalog id for cross-venue exact match */
   canonicalDishId?: string | null
   /** Ingredient list for taste matching */
@@ -247,6 +389,10 @@ export interface Order {
   createdAt: string
   completedAt?: string
   payment_status?: string
+  payment_method?: string
+  payout_status?: string | null
+  payout_error?: string | null
+  refund_amount?: number | null
   items?: OrderItem[]
   /** Zuri Network: returning customer across Zuri businesses */
   returningZuriCustomer?: boolean
@@ -401,5 +547,6 @@ export interface BusinessFormData {
   password: string
   phone?: string
   address?: string
+  contactName?: string
 }
 

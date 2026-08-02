@@ -5,9 +5,11 @@ import { PaperPlaneLoader } from '../components/PaperPlaneLoader'
 import { ZuriDatePicker, toIsoDateLocal } from '../components/ZuriDatePicker'
 import type { Business } from '../types'
 import { usePageSeo } from '../lib/seo'
+import { normalizeUuidParam } from '../lib/normalizeUuid'
 
 function ReservationPage(): JSX.Element {
-  const { businessId } = useParams<{ businessId: string }>()
+  const { businessId: rawBusinessId } = useParams<{ businessId: string }>()
+  const businessId = normalizeUuidParam(rawBusinessId)
   const [loading, setLoading] = useState(true)
   const [business, setBusiness] = useState<Business | null>(null)
   const [error, setError] = useState<string | null>(null)

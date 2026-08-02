@@ -1,18 +1,253 @@
 const express = require('express');
 const router = express.Router();
-const crypto = require('crypto');
 const Paystack = require('@paystack/paystack-sdk');
 const { getDb } = require('../database');
-const { processOrderPayout, updatePayoutStatusFromWebhook } = require('../lib/paystack-transfer');
-const { buildOrderPaymentMetadata, paystackCheckoutExtras } = require('../lib/paystackCheckout');
-const { queueOrderReceiptOnce } = require('../lib/orderReceiptEmail');
+const {
+  getBusinessPaymentProvider,
+  processOrderPayout,
+  updatePayoutStatusFromWebhook,
+  normalizeProvider
+} = require('../lib/paymentProvider');
+const { initializeOrderPayment } = require('../lib/paymentInitialize');
+const { buildPaystackPaymentReference, parsePaymentMethodFromPaystackMetadata } = require('../lib/paystackCheckout');
+const {
+  isMonnifyConfigured,
+  getTransactionByPaymentReference,
+  isPaidTransaction,
+  amountPaidNaira,
+  verifyWebhookSignature,
+  webhookRawBody,
+  parseWebhookPayload,
+  normalizeMetaData,
+  orderIdFromMonnifyMeta,
+  parseMonnifyReturnRefs,
+  MONNIFY_BASE_URL,
+  monnifyWebhookUrl
+} = require('../lib/monnify');
+const { queueOrderReceiptOnce, queueOrderReceiptIfNeeded } = require('../lib/orderReceiptEmail');
+const { notifyBusinessNewOrder } = require('../lib/webPush');
+const { queueBusinessEmail } = require('../lib/notifications');
+const { isAcceptableOrderPaymentAmount } = require('../lib/transactionFees');
+const {
+  activateSubscriptionFromCharge,
+  activateSubscriptionFromMonnify
+} = require('../lib/subscriptionActivate');
+const { canAcceptPayments, statusMessage } = require('../lib/businessStatus');
+const { refundOrderPayment } = require('../lib/paystack-refund');
+const { requireBusinessAuth } = require('../middleware/auth');
+const {
+  handleSubscriptionCreate,
+  handleSubscriptionRenewal,
+  handleSubscriptionPaymentFailed,
+  handleInvoiceCreate
+} = require('../lib/paystack-subscription');
+const { splitPaymentsEnabled } = require('../lib/paystack-subaccount');
 
 const supabase = getDb();
 const appPaystack = process.env.PAYSTACK_SECRET_KEY ? new Paystack(process.env.PAYSTACK_SECRET_KEY) : null;
 const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY || '';
 
+/** Only persist Paystack card authorizations — never bank transfer, USSD, etc. */
+function isReusableCardAuthorization(auth) {
+  if (!auth?.authorization_code) return false;
+  if (auth.reusable === false) return false;
+  const channel = String(auth.channel || '').toLowerCase();
+  return channel === 'card';
+}
+
+/** True when checkout split funds to a Paystack subaccount (no manual transfer needed). */
+async function orderUsesSplitCheckout(orderId, businessId, markExtra = {}) {
+  if (markExtra.paymentMethod === 'split') return true;
+
+  const { data: order } = await supabase
+    .from('orders')
+    .select('payment_method')
+    .eq('id', orderId)
+    .maybeSingle();
+  if (order?.payment_method === 'split') return true;
+  if (order?.payment_method === 'transfer' || order?.payment_method === 'free') return false;
+
+  // payment_method unset — infer split only when venue has an active Paystack subaccount
+  if (!splitPaymentsEnabled() || !businessId) return false;
+  const { data: biz } = await supabase
+    .from('businesses')
+    .select('payment_provider, bank_verified_at, paystack_subaccount_code')
+    .eq('id', businessId)
+    .maybeSingle();
+  if (!biz || biz.payment_provider === 'monnify') return false;
+  return Boolean(biz.bank_verified_at && biz.paystack_subaccount_code);
+}
+
+async function markOrderPaid(orderId, paymentProvider, extra = {}) {
+  const { paymentMethod, ...persistExtra } = extra;
+
+  const { data: existing } = await supabase
+    .from('orders')
+    .select('business_id, payment_method')
+    .eq('id', orderId)
+    .maybeSingle();
+
+  const isSplit = await orderUsesSplitCheckout(orderId, existing?.business_id, { paymentMethod });
+
+  const updates = {
+    payment_status: 'paid',
+    payment_provider: paymentProvider,
+    ...persistExtra
+  };
+  if (isSplit) {
+    updates.payment_method = 'split';
+    updates.payout_status = 'split_settled';
+    updates.payout_error = null;
+  } else if (!existing?.payment_method) {
+    updates.payment_method = 'transfer';
+  }
+
+  const { data, error } = await supabase
+    .from('orders')
+    .update(updates)
+    .eq('id', orderId)
+    .select('id, business_id, payment_status, payment_method, payout_status')
+    .maybeSingle();
+  if (error) {
+    console.error('[ZURI] markOrderPaid failed', { orderId, message: error.message || error });
+    return { ok: false, error };
+  }
+  if (!data || data.payment_status !== 'paid') {
+    console.error('[ZURI] markOrderPaid did not persist', { orderId, data });
+    return { ok: false, error: new Error('payment_status not updated') };
+  }
+  return { ok: true, order: data };
+}
+
+function emitOrderPaid(req, businessId, orderId) {
+  const io = req?.app?.get?.('io');
+  if (io && businessId) {
+    io.to(`business-${businessId}`).emit('order-payment-success', { orderId });
+  }
+}
+
+function emitTapSuccess(req, businessId, orderId) {
+  const io = req.app.get('io');
+  if (io && businessId) io.to(`business-${businessId}`).emit('tap-payment-success', { orderId });
+}
+
+async function finalizePaidOrder({
+  req,
+  orderId,
+  businessId,
+  paymentProvider,
+  markExtra = {},
+  paidAt,
+  reference,
+  payoutAmount,
+  tap = false
+}) {
+  const marked = await markOrderPaid(orderId, paymentProvider, markExtra);
+  if (!marked.ok) return marked;
+
+  const bid = businessId || marked.order?.business_id;
+  emitOrderPaid(req, bid, orderId);
+  if (tap) emitTapSuccess(req, bid, orderId);
+  const isSplit = marked.order?.payment_method === 'split' || marked.order?.payout_status === 'split_settled';
+  if (!isSplit && payoutAmount != null) schedulePayout(orderId, payoutAmount, paymentProvider);
+  queueOrderReceiptOnce({ orderId, paidAt: paidAt || null, reference: reference || orderId });
+
+  // Ticketing checkouts create unpaid orders first — alert the venue only once payment clears.
+  if (bid) {
+    notifyTicketingSalePaid(bid, orderId).catch((e) => {
+      console.error('[ZURI] ticketing paid notify error:', e?.message || e);
+    });
+  }
+
+  return marked;
+}
+
+async function notifyTicketingSalePaid(businessId, orderId) {
+  const { data: business } = await supabase
+    .from('businesses')
+    .select('business_mode')
+    .eq('id', businessId)
+    .maybeSingle();
+  if (!business || business.business_mode !== 'ticketing') return;
+
+  const { data: order } = await supabase
+    .from('orders')
+    .select('id, customer_name, customer_phone, total_amount, status, payment_status')
+    .eq('id', orderId)
+    .maybeSingle();
+  if (!order || order.payment_status !== 'paid') return;
+
+  const { data: orderItems } = await supabase
+    .from('order_items')
+    .select('menu_item_id, quantity, price')
+    .eq('order_id', orderId);
+
+  let itemLines = '(no items)';
+  if (orderItems?.length) {
+    const menuIds = orderItems.map((i) => i.menu_item_id).filter(Boolean);
+    const { data: menuItems } = await supabase.from('menu_items').select('id, name').in('id', menuIds);
+    const nameMap = (menuItems || []).reduce((acc, m) => {
+      acc[m.id] = m.name;
+      return acc;
+    }, {});
+    itemLines = orderItems
+      .map((it) => `- ${it.quantity}× ${nameMap[it.menu_item_id] || 'Item'} (${Number(it.price).toFixed(2)})`)
+      .join('\n');
+  }
+
+  await notifyBusinessNewOrder(
+    businessId,
+    {
+      ...order,
+      customerName: order.customer_name,
+      totalAmount: order.total_amount
+    },
+    { title: 'New ticket sale' }
+  );
+
+  queueBusinessEmail({
+    businessId,
+    subject: `New ticket sale (${order.status})`,
+    text: [
+      `You received a new paid ticket sale from ${order.customer_name || 'a guest'}.`,
+      ``,
+      `Order: #${String(order.id).slice(0, 8).toUpperCase()}`,
+      `Total: ₦${Number(order.total_amount || 0).toFixed(2)}`,
+      `Phone: ${order.customer_phone || '—'}`,
+      ``,
+      `Items:`,
+      itemLines,
+      ``,
+      `Open your dashboard to confirm the sale.`
+    ].join('\n')
+  });
+}
+
+async function shouldSchedulePayout(orderId) {
+  const { data: order } = await supabase
+    .from('orders')
+    .select('payment_method, payout_status')
+    .eq('id', orderId)
+    .maybeSingle();
+  if (!order) return false;
+  if (order.payment_method === 'split' || order.payment_method === 'free') return false;
+  if (order.payout_status === 'split_settled') return false;
+  return true;
+}
+
+function schedulePayout(orderId, amount, paymentProvider) {
+  setImmediate(async () => {
+    try {
+      const go = await shouldSchedulePayout(orderId);
+      if (!go) return;
+      await processOrderPayout(orderId, amount, paymentProvider);
+    } catch (err) {
+      console.error('Payout error', orderId, paymentProvider, err);
+    }
+  });
+}
+
 // Paystack webhook: verify signature, on charge.success update order and optionally save card.
-// Mount this route with express.raw({ type: 'application/json' }) so req.body is the raw Buffer.
 router.post('/webhook', (req, res) => {
   const signature = req.headers['x-paystack-signature'];
   if (!signature || !PAYSTACK_SECRET) {
@@ -22,6 +257,7 @@ router.post('/webhook', (req, res) => {
   if (!rawBody || !Buffer.isBuffer(rawBody)) {
     return res.status(400).send('Invalid body');
   }
+  const crypto = require('crypto');
   const hash = crypto.createHmac('sha512', PAYSTACK_SECRET).update(rawBody).digest('hex');
   if (hash !== signature) {
     console.error('Paystack webhook signature mismatch');
@@ -36,28 +272,102 @@ router.post('/webhook', (req, res) => {
   if (event.event === 'charge.success' && event.data) {
     const reference = event.data.reference;
     const metadata = event.data.metadata || {};
+
+    if (reference && String(reference).startsWith('sub_')) {
+      activateSubscriptionFromCharge(event.data)
+        .then(() => res.status(200).json({ received: true }))
+        .catch((err) => {
+          console.error('Subscription webhook error:', err);
+          res.status(500).json({ received: false });
+        });
+      return;
+    }
+
     const businessId = metadata.businessId;
-    const orderId = reference;
-    supabase.from('orders').select('id, business_id, total_amount, payment_status').eq('id', orderId).single()
+    const orderId = metadata.orderId || null;
+    const resolveOrder = orderId
+      ? supabase.from('orders').select('id, business_id, total_amount, payment_status, payment_method, receipt_sent_at').eq('id', orderId).single()
+      : supabase
+          .from('orders')
+          .select('id, business_id, total_amount, payment_status, payment_method, receipt_sent_at')
+          .eq('paystack_payment_reference', reference)
+          .maybeSingle()
+          .then(({ data, error }) => {
+            if (data) return { data };
+            if (UUID_RE.test(String(reference || ''))) {
+              return supabase.from('orders').select('id, business_id, total_amount, payment_status, payment_method, receipt_sent_at').eq('id', reference).single();
+            }
+            return { data: null, error };
+          });
+
+    resolveOrder
       .then(({ data: order }) => {
-        if (!order || order.payment_status === 'paid') {
+        const resolvedOrderId = order?.id;
+        if (!order || !resolvedOrderId) {
+          res.status(200).json({ received: true });
+          return;
+        }
+        if (order.payment_status === 'paid') {
+          // Recovery only — do not re-queue after receipt_sent_at is set (verify polls used to spam this).
+          queueOrderReceiptIfNeeded(order, {
+            paidAt: event.data.paid_at || null,
+            reference: reference || resolvedOrderId
+          });
           res.status(200).json({ received: true });
           return;
         }
         const amountPaid = event.data.amount / 100;
-        if (Math.abs(amountPaid - Number(order.total_amount)) > 0.01) {
-          console.error('Webhook amount mismatch', { orderId, orderTotal: order.total_amount, paid: amountPaid });
+        if (!isAcceptableOrderPaymentAmount(order.total_amount, amountPaid)) {
+          console.error('Webhook amount mismatch', { orderId: resolvedOrderId, orderTotal: order.total_amount, paid: amountPaid });
           res.status(200).json({ received: true });
           return;
         }
-        return supabase.from('orders').update({ payment_status: 'paid' }).eq('id', orderId)
-          .then(() => {
+        const isSubscriptionRenewal =
+          !reference?.startsWith('sub_') &&
+          (event.data.subscription || event.data.plan);
+
+        if (isSubscriptionRenewal) {
+          handleSubscriptionRenewal(event.data)
+            .then(() => res.status(200).json({ received: true }))
+            .catch((err) => {
+              console.error('Subscription renewal webhook error:', err);
+              res.status(500).json({ received: false });
+            });
+          return;
+        }
+
+        const paymentMethod =
+          parsePaymentMethodFromPaystackMetadata(metadata) ||
+          (order.payment_method === 'split' ? 'split' : undefined);
+        const paystackTxId = event.data.id || null;
+        const bid = businessId || order.business_id;
+        const isTap = metadata.tap === 'true';
+
+        return finalizePaidOrder({
+          req,
+          orderId: resolvedOrderId,
+          businessId: bid,
+          paymentProvider: 'paystack',
+          markExtra: {
+            paymentMethod,
+            paystack_transaction_id: paystackTxId
+          },
+          paidAt: event.data.paid_at || null,
+          reference: reference || resolvedOrderId,
+          payoutAmount: amountPaid,
+          tap: isTap
+        })
+          .then(async (marked) => {
+            if (!marked.ok) {
+              console.error('Paystack webhook mark paid failed', { orderId: resolvedOrderId });
+              res.status(500).json({ received: false });
+              return;
+            }
             const auth = event.data.authorization;
             const saveCard = metadata.save_card === 'true';
-            const bid = businessId || order.business_id;
             const customerEmail = event.data.customer?.email;
-            if (saveCard && auth?.authorization_code && bid && customerEmail) {
-              return supabase.from('saved_cards').upsert({
+            if (saveCard && isReusableCardAuthorization(auth) && bid && customerEmail) {
+              await supabase.from('saved_cards').upsert({
                 email: customerEmail,
                 business_id: bid,
                 authorization_code: auth.authorization_code,
@@ -65,26 +375,7 @@ router.post('/webhook', (req, res) => {
                 card_type: auth.card_type
               }, { onConflict: 'email,business_id' });
             }
-          })
-          .then(() => {
-            const isTap = metadata.tap === 'true';
-            const bid = businessId || order?.business_id;
-            if (isTap && bid) {
-              const io = req.app.get('io');
-              if (io) io.to(`business-${bid}`).emit('tap-payment-success', { orderId });
-            }
             res.status(200).json({ received: true });
-            setImmediate(() => {
-              processOrderPayout(orderId, amountPaid).catch((err) =>
-                console.error('Paystack payout error', orderId, err)
-              );
-            });
-            // Send receipt (best-effort) once order is paid.
-            queueOrderReceiptOnce({
-              orderId,
-              paidAt: event.data.paid_at || null,
-              reference: reference || orderId
-            });
           });
       })
       .catch((err) => {
@@ -94,22 +385,231 @@ router.post('/webhook', (req, res) => {
     return;
   }
   if (event.event === 'transfer.success' && event.data?.reference) {
-    updatePayoutStatusFromWebhook(event.data.reference, 'success').catch((err) =>
+    updatePayoutStatusFromWebhook(event.data.reference, 'success', null, 'paystack').catch((err) =>
       console.error('Transfer webhook update error', event.data.reference, err)
     );
     return res.status(200).json({ received: true });
   }
   if (event.event === 'transfer.failed' && event.data?.reference) {
     const message = event.data?.gateway_response || event.data?.reason || 'Transfer failed';
-    updatePayoutStatusFromWebhook(event.data.reference, 'failed', message).catch((err) =>
+    updatePayoutStatusFromWebhook(event.data.reference, 'failed', message, 'paystack').catch((err) =>
       console.error('Transfer webhook update error', event.data.reference, err)
     );
     return res.status(200).json({ received: true });
   }
+  if (event.event === 'subscription.create' && event.data) {
+    handleSubscriptionCreate(event.data)
+      .then(() => res.status(200).json({ received: true }))
+      .catch((err) => {
+        console.error('subscription.create webhook error:', err);
+        res.status(500).json({ received: false });
+      });
+    return;
+  }
+  if (event.event === 'invoice.create' && event.data) {
+    handleInvoiceCreate(event.data)
+      .then(() => res.status(200).json({ received: true }))
+      .catch((err) => {
+        console.error('invoice.create webhook error:', err);
+        res.status(500).json({ received: false });
+      });
+    return;
+  }
+  if (event.event === 'invoice.payment_failed' && event.data) {
+    handleSubscriptionPaymentFailed(event.data)
+      .then(() => res.status(200).json({ received: true }))
+      .catch((err) => {
+        console.error('invoice.payment_failed webhook error:', err);
+        res.status(500).json({ received: false });
+      });
+    return;
+  }
+  if (event.event === 'charge.dispute.create' && event.data) {
+    const txRef = event.data.transaction?.reference || event.data.reference;
+    if (txRef) {
+      supabase
+        .from('orders')
+        .update({ dispute_status: 'open', payment_status: 'disputed' })
+        .eq('id', txRef)
+        .then(() => res.status(200).json({ received: true }))
+        .catch((err) => {
+          console.error('Dispute webhook error:', err);
+          res.status(500).json({ received: false });
+        });
+      return;
+    }
+  }
+  if (event.event === 'charge.dispute.resolve' && event.data) {
+    const txRef = event.data.transaction?.reference || event.data.reference;
+    if (txRef) {
+      const resolved = event.data.status === 'won' ? 'resolved' : 'chargeback';
+      supabase
+        .from('orders')
+        .update({
+          dispute_status: resolved,
+          payment_status: resolved === 'chargeback' ? 'chargeback' : 'paid'
+        })
+        .eq('id', txRef)
+        .then(() => res.status(200).json({ received: true }))
+        .catch((err) => {
+          console.error('Dispute resolve webhook error:', err);
+          res.status(500).json({ received: false });
+        });
+      return;
+    }
+  }
   res.status(200).json({ received: true });
 });
 
-// Initialize order payment (ZURI's key only)
+// Monnify webhook health (browser/dashboard URL checks use GET; events are POST only).
+router.get('/monnify-webhook', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    ok: true,
+    configured: isMonnifyConfigured(),
+    webhookUrl: monnifyWebhookUrl(),
+    message: 'Monnify webhook endpoint is active. Transaction events are delivered via POST.'
+  });
+});
+
+async function processMonnifyWebhook(req) {
+  if (!isMonnifyConfigured()) {
+    console.warn('Monnify webhook received but Monnify is not configured');
+    return;
+  }
+
+  const signature = req.headers['monnify-signature'];
+  const rawBody = webhookRawBody(req);
+
+  let payload;
+  try {
+    payload = parseWebhookPayload(req);
+  } catch (e) {
+    console.error('Monnify webhook invalid JSON', e);
+    return;
+  }
+  if (!payload) return;
+
+  const verified = rawBody.length > 0 && verifyWebhookSignature(rawBody, signature);
+  const sandbox = MONNIFY_BASE_URL.includes('sandbox');
+  if (!verified) {
+    console.error('Monnify webhook signature mismatch', {
+      hasSignature: Boolean(signature),
+      bodyLength: rawBody.length,
+      sandbox
+    });
+    if (!sandbox) return;
+    console.warn('Monnify sandbox: processing webhook without verified signature');
+  }
+
+  const eventType = String(payload?.eventType || '').toUpperCase();
+  const eventData = payload?.eventData || payload?.event_data || {};
+
+  if (eventType.includes('DISBURSEMENT') || eventType.includes('DISBURSE')) {
+    const ref = eventData?.reference || eventData?.transactionReference;
+    if (!ref || !String(ref).startsWith('payout_')) return;
+    if (eventType.includes('SUCCESS')) {
+      await updatePayoutStatusFromWebhook(ref, 'success', null, 'monnify');
+    } else if (eventType.includes('FAIL') || eventType.includes('REVERSED')) {
+      const msg = eventData?.completeMessage || eventData?.responseMessage || 'Disbursement failed';
+      await updatePayoutStatusFromWebhook(ref, 'failed', msg, 'monnify');
+    }
+    return;
+  }
+
+  const paymentReference = eventData?.paymentReference || eventData?.product?.reference;
+  if (!paymentReference) return;
+
+  const eventPaid =
+    String(eventData?.paymentStatus || '').toUpperCase() === 'PAID' ||
+    eventType.includes('SUCCESSFUL');
+
+  if (String(paymentReference).startsWith('sub_') && eventPaid) {
+    await activateSubscriptionFromMonnify({
+      paymentReference,
+      paymentStatus: 'PAID',
+      amountPaid: eventData?.amountPaid ?? eventData?.totalPayable,
+      metaData: eventData?.metaData || eventData?.metadata
+    });
+    return;
+  }
+
+  const tx = await getTransactionByPaymentReference(paymentReference);
+  if (!tx || !isPaidTransaction(tx)) return;
+
+  if (String(paymentReference).startsWith('sub_')) {
+    await activateSubscriptionFromMonnify(tx);
+    return;
+  }
+
+  const orderId = orderIdFromMonnifyMeta(tx) || paymentReference;
+  const { data: order } = await supabase
+    .from('orders')
+    .select('id, business_id, total_amount, payment_status, receipt_sent_at')
+    .eq('id', orderId)
+    .single();
+  if (!order) {
+    console.warn('[ZURI] Monnify webhook order not found', {
+      orderId,
+      paymentReference,
+      reason: 'order_not_found',
+      cause: 'could not resolve order for paid Monnify transaction'
+    });
+    return;
+  }
+  if (order.payment_status === 'paid') {
+    // Same as Paystack: re-queue receipt only if it was never delivered.
+    const queued = queueOrderReceiptIfNeeded(order, {
+      paidAt: tx.paidOn || null,
+      reference: paymentReference || order.id
+    });
+    if (queued?.queued) {
+      console.log('[ZURI] Monnify webhook already paid — receipt re-queued', {
+        orderId: order.id,
+        paymentReference,
+        reason: 'already_paid_requeue_receipt',
+        cause: 'order was already marked paid but receipt_sent_at is null; re-queueing ticket/receipt email'
+      });
+    }
+    return;
+  }
+
+  const paid = amountPaidNaira(tx);
+  if (!isAcceptableOrderPaymentAmount(order.total_amount, paid)) {
+    console.error('Monnify webhook amount mismatch', { orderId, orderTotal: order.total_amount, paid });
+    return;
+  }
+
+  const meta = normalizeMetaData(tx.metaData || tx.metadata);
+  const marked = await finalizePaidOrder({
+    req,
+    orderId,
+    businessId: meta.businessId || order.business_id,
+    paymentProvider: 'monnify',
+    paidAt: tx.paidOn || null,
+    reference: paymentReference,
+    payoutAmount: paid,
+    tap: meta.tap === 'true'
+  });
+  if (!marked.ok) {
+    console.error('Monnify webhook mark paid failed', { orderId });
+  }
+}
+
+// Monnify webhook: acknowledge immediately — checkout fails if this endpoint is slow or non-200.
+router.post('/monnify-webhook', (req, res) => {
+  console.log('[Monnify webhook] received', {
+    at: new Date().toISOString(),
+    ip: req.headers['x-forwarded-for'] || req.ip,
+    hasSignature: Boolean(req.headers['monnify-signature'])
+  });
+  res.status(200).send('OK');
+  setImmediate(() => {
+    processMonnifyWebhook(req).catch((err) => console.error('Monnify webhook processing error', err));
+  });
+});
+
+// Initialize order payment (ZURI's gateway keys)
 router.post('/initialize', async (req, res) => {
   try {
     const { email, amount, orderId, businessId, callbackUrl, saveCard, tap } = req.body;
@@ -133,100 +633,257 @@ router.post('/initialize', async (req, res) => {
       return res.status(400).json({ error: 'Order is already paid' });
     }
 
+    const { data: biz } = await supabase
+      .from('businesses')
+      .select('account_status')
+      .eq('id', businessId)
+      .single();
+    if (!biz || !canAcceptPayments(biz.account_status)) {
+      return res.status(403).json({ error: statusMessage(biz?.account_status) || 'Payments are not available for this venue' });
+    }
+
     const orderTotal = Number(order.total_amount);
+    if (orderTotal <= 0) {
+      return res.status(400).json({ error: 'This order does not require payment' });
+    }
     const requestedAmount = Number(amount);
     if (requestedAmount !== orderTotal) {
       return res.status(400).json({ error: `Amount must equal order total (₦${orderTotal.toFixed(2)})` });
     }
 
-    if (!appPaystack) return res.status(503).json({ error: 'Payment not configured' });
-
-    const amountInKobo = Math.round(orderTotal * 100);
-    const metadata = buildOrderPaymentMetadata({
+    const paymentProvider = await getBusinessPaymentProvider(businessId);
+    const payload = await initializeOrderPayment({
+      email,
+      orderTotal,
       orderId,
       businessId,
+      callbackUrl,
       saveCard: !!saveCard,
-      tap: !!tap
+      tap: !!tap,
+      paymentProvider,
+      customerName: String(email).split('@')[0] || 'Customer'
     });
 
-    const response = await appPaystack.transaction.initialize({
-      email,
-      amount: amountInKobo,
-      reference: orderId,
-      callback_url: callbackUrl || null,
-      currency: 'NGN',
-      metadata,
-      ...paystackCheckoutExtras()
-    });
-
-    if (response.status) {
-      res.json({
-        authorizationUrl: response.data.authorization_url,
-        accessCode: response.data.access_code,
-        reference: response.data.reference,
-        publicKey: process.env.PAYSTACK_PUBLIC_KEY || null
-      });
-    } else {
-      res.status(400).json({ error: 'Failed to initialize payment' });
-    }
+    res.json(payload);
   } catch (error) {
     console.error('Payment initialization error:', error);
-    res.status(500).json({ error: 'Failed to initialize payment' });
+    const status = error.code === 'MONNIFY_AUTH_FAILED' ? 502 : (error.status || 500);
+    res.status(status).json({
+      error: error.message || 'Failed to initialize payment',
+      code: error.code || undefined
+    });
   }
 });
 
-// Verify order payment (ZURI's key only)
+const ORDER_VERIFY_SELECT =
+  'id, business_id, total_amount, payment_status, payment_method, payment_provider, monnify_payment_reference, paystack_payment_reference, receipt_sent_at';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function paystackVerifyReference(order, rawReference) {
+  const raw = String(rawReference || '').trim();
+  if (raw.startsWith('zuri_ps_')) return raw;
+  return order.paystack_payment_reference || order.id;
+}
+
+async function findOrderForPaymentVerify(rawReference) {
+  const parsed = parseMonnifyReturnRefs(rawReference);
+  const ids = [...new Set([parsed.orderId, parsed.raw].filter(Boolean))];
+
+  for (const id of ids) {
+    const { data } = await supabase.from('orders').select(ORDER_VERIFY_SELECT).eq('id', id).maybeSingle();
+    if (data) return data;
+  }
+
+  const monnifyRefs = [...new Set([parsed.monnifyPaymentReference, parsed.raw].filter(
+    (r) => r && String(r).startsWith('zuri_') && !String(r).startsWith('zuri_ps_')
+  ))];
+  for (const mref of monnifyRefs) {
+    const { data } = await supabase
+      .from('orders')
+      .select(ORDER_VERIFY_SELECT)
+      .eq('monnify_payment_reference', mref)
+      .maybeSingle();
+    if (data) return data;
+  }
+
+  const raw = String(rawReference || '').trim();
+  if (raw.startsWith('zuri_ps_')) {
+    const { data } = await supabase
+      .from('orders')
+      .select(ORDER_VERIFY_SELECT)
+      .eq('paystack_payment_reference', raw)
+      .maybeSingle();
+    if (data) return data;
+  }
+
+  if (UUID_RE.test(raw)) {
+    const { data } = await supabase.from('orders').select(ORDER_VERIFY_SELECT).eq('id', raw).maybeSingle();
+    if (data) return data;
+  }
+
+  if (isMonnifyConfigured()) {
+    for (const mref of monnifyRefs.length ? monnifyRefs : [parsed.raw].filter(Boolean)) {
+      const tx = await getTransactionByPaymentReference(mref);
+      const orderId = orderIdFromMonnifyMeta(tx);
+      if (orderId) {
+        const { data } = await supabase.from('orders').select(ORDER_VERIFY_SELECT).eq('id', orderId).maybeSingle();
+        if (data) return data;
+      }
+    }
+  }
+
+  return null;
+}
+
+// Verify order payment
 router.get('/verify/:reference', async (req, res) => {
   try {
     const { reference } = req.params;
 
-    if (!appPaystack) return res.status(503).json({ success: false, message: 'Payment not configured' });
-
-    const response = await appPaystack.transaction.verify({ reference });
-    if (!response.status || response.data.status !== 'success') {
-      return res.json({ success: false, message: 'Payment not successful' });
-    }
-
-    const { data: order } = await supabase.from('orders').select('id, business_id, total_amount, payment_status').eq('id', reference).single();
+    const order = await findOrderForPaymentVerify(reference);
     if (!order) {
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
 
+    const orderId = order.id;
+    const paymentProvider = normalizeProvider(
+      order.payment_provider || (await getBusinessPaymentProvider(order.business_id))
+    );
+
+    if (paymentProvider === 'monnify') {
+      if (!isMonnifyConfigured()) {
+        return res.status(503).json({ success: false, message: 'Payment not configured' });
+      }
+
+      if (order.payment_status === 'paid') {
+        queueOrderReceiptIfNeeded(order, {
+          paidAt: null,
+          reference: orderId
+        });
+        return res.json({
+          success: true,
+          data: {
+            reference: orderId,
+            amount: Number(order.total_amount),
+            status: 'success',
+            paidAt: null,
+            customer: null
+          }
+        });
+      }
+
+      const parsed = parseMonnifyReturnRefs(reference);
+      const monnifyRef =
+        order.monnify_payment_reference ||
+        parsed.monnifyPaymentReference ||
+        (String(reference).startsWith('zuri_') ? reference : null);
+      if (!monnifyRef) {
+        return res.json({ success: false, message: 'Payment not successful' });
+      }
+      const tx = await getTransactionByPaymentReference(monnifyRef);
+      if (!tx || !isPaidTransaction(tx)) {
+        return res.json({ success: false, message: 'Payment not successful' });
+      }
+      const paid = amountPaidNaira(tx);
+      if (!isAcceptableOrderPaymentAmount(order.total_amount, paid)) {
+        console.error('Monnify verify amount mismatch', { orderId, orderTotal: order.total_amount, paid });
+        return res.status(400).json({ success: false, message: 'Payment amount does not match order' });
+      }
+      const meta = normalizeMetaData(tx.metaData || tx.metadata);
+      const marked = await finalizePaidOrder({
+        req,
+        orderId,
+        businessId: meta.businessId || order.business_id,
+        paymentProvider: 'monnify',
+        paidAt: tx.paidOn || null,
+        reference: monnifyRef,
+        payoutAmount: paid,
+        tap: meta.tap === 'true'
+      });
+      if (!marked.ok) {
+        return res.status(500).json({ success: false, message: 'Failed to confirm payment' });
+      }
+
+      return res.json({
+        success: true,
+        data: {
+          reference: orderId,
+          amount: paid,
+          status: 'success',
+          paidAt: tx.paidOn || null,
+          customer: tx.customer || null
+        }
+      });
+    }
+
+    if (!appPaystack) return res.status(503).json({ success: false, message: 'Payment not configured' });
+
+    if (order.payment_status === 'paid') {
+      queueOrderReceiptIfNeeded(order, {
+        paidAt: null,
+        reference: order.paystack_payment_reference || orderId
+      });
+      return res.json({
+        success: true,
+        data: {
+          reference: order.paystack_payment_reference || orderId,
+          amount: Number(order.total_amount),
+          status: 'success',
+          paidAt: null,
+          customer: null
+        }
+      });
+    }
+
+    const paystackRef = paystackVerifyReference(order, reference);
+    const response = await appPaystack.transaction.verify({ reference: paystackRef });
+    if (!response.status || response.data.status !== 'success') {
+      return res.json({ success: false, message: 'Payment not successful' });
+    }
+
     const paystackAmountNaira = response.data.amount / 100;
-    if (Math.abs(paystackAmountNaira - Number(order.total_amount)) > 0.01) {
-      console.error('Payment verify amount mismatch', { reference, orderTotal: order.total_amount, paystackAmount: paystackAmountNaira });
+    if (!isAcceptableOrderPaymentAmount(order.total_amount, paystackAmountNaira)) {
+      console.error('Payment verify amount mismatch', { orderId, orderTotal: order.total_amount, paystackAmount: paystackAmountNaira });
       return res.status(400).json({ success: false, message: 'Payment amount does not match order' });
     }
 
-    if (order.payment_status !== 'paid') {
-      await supabase.from('orders').update({ payment_status: 'paid' }).eq('id', reference);
-      const auth = response.data.authorization;
-      const saveCard = response.data.metadata?.save_card === 'true';
-      const businessId = response.data.metadata?.businessId || order.business_id;
-      if (saveCard && auth?.authorization_code && businessId && response.data.customer?.email) {
-        await supabase.from('saved_cards').upsert({
-          email: response.data.customer.email,
-          business_id: businessId,
-          authorization_code: auth.authorization_code,
-          last4: auth.last4,
-          card_type: auth.card_type
-        }, { onConflict: 'email,business_id' });
-      }
-      const isTap = response.data.metadata?.tap === 'true';
-      if (isTap && businessId) {
-        const io = req.app.get('io');
-        if (io) io.to(`business-${businessId}`).emit('tap-payment-success', { orderId: reference });
-      }
-      setImmediate(() => {
-        processOrderPayout(reference, paystackAmountNaira).catch((err) =>
-          console.error('Paystack payout error (verify)', reference, err)
-        );
-      });
-      queueOrderReceiptOnce({
-        orderId: reference,
-        paidAt: response.data.paid_at || null,
-        reference: response.data.reference || reference
-      });
+    const paystackPaidAt = response.data.paid_at || null;
+    const paystackReference = response.data.reference || paystackRef;
+    const paymentMethod =
+      parsePaymentMethodFromPaystackMetadata(response.data.metadata) ||
+      (order.payment_method === 'split' ? 'split' : undefined);
+    const businessId = response.data.metadata?.businessId || order.business_id;
+    const isTap = response.data.metadata?.tap === 'true';
+
+    const marked = await finalizePaidOrder({
+      req,
+      orderId,
+      businessId,
+      paymentProvider: 'paystack',
+      markExtra: {
+        paymentMethod,
+        paystack_transaction_id: response.data.id || null
+      },
+      paidAt: paystackPaidAt,
+      reference: paystackReference,
+      payoutAmount: paystackAmountNaira,
+      tap: isTap
+    });
+    if (!marked.ok) {
+      return res.status(500).json({ success: false, message: 'Failed to confirm payment' });
+    }
+
+    const auth = response.data.authorization;
+    const saveCard = response.data.metadata?.save_card === 'true';
+    if (saveCard && isReusableCardAuthorization(auth) && businessId && response.data.customer?.email) {
+      await supabase.from('saved_cards').upsert({
+        email: response.data.customer.email,
+        business_id: businessId,
+        authorization_code: auth.authorization_code,
+        last4: auth.last4,
+        card_type: auth.card_type
+      }, { onConflict: 'email,business_id' });
     }
 
     res.json({
@@ -245,11 +902,17 @@ router.get('/verify/:reference', async (req, res) => {
   }
 });
 
-// List saved cards for customer (email + businessId)
+// List saved cards for customer (email + businessId) — Paystack only
 router.get('/saved-cards', async (req, res) => {
   try {
     const { email, businessId } = req.query;
     if (!email || !businessId) return res.status(400).json({ error: 'email and businessId required' });
+
+    const provider = await getBusinessPaymentProvider(String(businessId));
+    if (provider === 'monnify') {
+      return res.json([]);
+    }
+
     const { data, error } = await supabase
       .from('saved_cards')
       .select('id, last4, card_type, created_at')
@@ -263,12 +926,17 @@ router.get('/saved-cards', async (req, res) => {
   }
 });
 
-// Charge with saved card (order payment to ZURI's account)
+// Charge with saved card (Paystack only)
 router.post('/charge-saved', async (req, res) => {
   try {
     const { email, businessId, orderId, amount, saved_card_id } = req.body;
     if (!email || !businessId || !orderId || amount == null || !saved_card_id) {
       return res.status(400).json({ error: 'email, businessId, orderId, amount, and saved_card_id are required' });
+    }
+
+    const provider = await getBusinessPaymentProvider(businessId);
+    if (provider === 'monnify') {
+      return res.status(400).json({ error: 'Saved cards are not available with Monnify checkout' });
     }
 
     const { data: order, error: orderError } = await supabase
@@ -307,27 +975,33 @@ router.post('/charge-saved', async (req, res) => {
     if (!appPaystack) return res.status(503).json({ error: 'Payment not configured' });
 
     const amountInKobo = Math.round(orderTotal * 100);
-    const reference = orderId;
+    const paymentReference = buildPaystackPaymentReference(orderId);
+    await supabase
+      .from('orders')
+      .update({ paystack_payment_reference: paymentReference, payment_method: 'transfer' })
+      .eq('id', orderId);
 
     const response = await appPaystack.transaction.chargeAuthorization({
       email,
       amount: amountInKobo,
-      reference,
+      reference: paymentReference,
       authorization_code: savedCard.authorization_code
     });
 
     if (response.status && response.data.status === 'success') {
-      await supabase.from('orders').update({ payment_status: 'paid' }).eq('id', orderId).eq('business_id', businessId);
-      queueOrderReceiptOnce({
+      const marked = await finalizePaidOrder({
+        req,
         orderId,
+        businessId,
+        paymentProvider: 'paystack',
+        markExtra: { paystack_transaction_id: response.data.id || null },
         paidAt: new Date().toISOString(),
-        reference: response.data.reference || orderId
+        reference: response.data.reference || paymentReference,
+        payoutAmount: orderTotal
       });
-      setImmediate(() => {
-        processOrderPayout(orderId, orderTotal).catch((err) =>
-          console.error('Paystack payout error (charge-saved)', orderId, err)
-        );
-      });
+      if (!marked.ok) {
+        return res.status(500).json({ error: 'Failed to confirm payment' });
+      }
       res.json({
         success: true,
         data: {
@@ -345,4 +1019,31 @@ router.post('/charge-saved', async (req, res) => {
   }
 });
 
+// Refund endpoint (business auth — same as /api/order/:id/refund)
+router.post('/refund/:orderId', requireBusinessAuth, async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { amountNaira, reason } = req.body || {};
+
+    const { data: order } = await supabase
+      .from('orders')
+      .select('id, business_id')
+      .eq('id', orderId)
+      .single();
+
+    if (!order || order.business_id !== req.businessId) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    const result = await refundOrderPayment(orderId, { amountNaira, reason });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json(result);
+  } catch (error) {
+    console.error('Payment refund error:', error);
+    res.status(500).json({ error: 'Refund failed' });
+  }
+});
+
 module.exports = router;
+module.exports.finalizePaidOrder = finalizePaidOrder;
+module.exports.emitTapSuccess = emitTapSuccess;

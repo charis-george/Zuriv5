@@ -21,7 +21,9 @@ Set these in your hosting provider (e.g. Vercel) or in `server/.env` for self-ho
 | `BUSINESS_JWT_SECRET` or `JWT_SECRET` | Production | Strong secret for business JWTs (required in production; server will not start without it) |
 | `PAYSTACK_SECRET_KEY` | Payments | Paystack secret key (test key for staging, live for production) |
 | `PAYSTACK_PUBLIC_KEY` | Optional | Paystack public key for client (if not using per-business keys) |
-| `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS` | Optional | For password reset and contact form emails; if missing, reset link is only returned in dev |
+| `RESEND_API_KEY` | Yes (prod) | All outbound email (receipts, ticket QR, welcome, password reset, contact form) |
+| `RESEND_FROM` | Yes (prod) | Verified sender, e.g. `ZURI <no-reply@yourdomain.com>` |
+| `CONTACT_EMAIL` | Optional | Inbox for waitlist/contact form forwards |
 
 ## Vercel configuration
 
@@ -58,7 +60,7 @@ Set these in your hosting provider (e.g. Vercel) or in `server/.env` for self-ho
 - [ ] Business login and onboarding
 - [ ] Menu and QR code generation
 - [ ] Place test order and payment (Paystack test mode)
-- [ ] Password reset (with SMTP configured)
+- [ ] Password reset and ticket receipt email (with Resend configured)
 - [ ] Invalid URL shows 404 page
 - [ ] `/api/health` returns `{ "status": "ok" }`
 

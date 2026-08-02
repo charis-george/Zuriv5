@@ -1,4 +1,5 @@
 import type { AiGuestStorefrontConfig, StorefrontConfig } from '../types'
+import { ensureGoogleFontPairingLoaded, getFontPairing, normalizeFontPairingId } from './storefrontFontPairings'
 
 export const DEFAULT_AI_GUEST: AiGuestStorefrontConfig = {
   trendingOnMenu: true,
@@ -17,7 +18,7 @@ export const DEFAULT_STOREFRONT_CONFIG: StorefrontConfig = {
   backgroundTone: 'light',
   heroOverlay: 'gradient',
   priceTextColor: '#ffbd59',
-  fontFamily: 'sans',
+  fontFamily: 'modern',
   titleSize: 32,
   menuItemFontScale: 1,
   menuTemplate: 'classic',
@@ -52,6 +53,7 @@ export function mergeStorefrontConfig(partial?: Partial<StorefrontConfig> | null
   const merged = { ...DEFAULT_STOREFRONT_CONFIG, ...(partial ?? {}) }
   merged.aiGuest = { ...DEFAULT_AI_GUEST, ...(partial?.aiGuest ?? {}) }
   if (!merged.cardLayout) merged.cardLayout = 'stacked'
+  merged.fontFamily = normalizeFontPairingId(merged.fontFamily) as StorefrontConfig['fontFamily']
   return merged
 }
 
@@ -65,10 +67,22 @@ export function getStorefrontTheme(config: StorefrontConfig): StorefrontThemeCol
   return { page: '#F5F5F5', panel: '#FFFFFF', text: '#111827', sub: '#6B7280', border: '#E5E7EB' }
 }
 
+export type StorefrontFontStyles = {
+  body: string
+  heading: string
+  pairingId: ReturnType<typeof normalizeFontPairingId>
+}
+
+export function storefrontFontStyles(config: StorefrontConfig): StorefrontFontStyles {
+  const pairingId = normalizeFontPairingId(config.fontFamily)
+  ensureGoogleFontPairingLoaded(pairingId)
+  const preset = getFontPairing(pairingId)
+  return { body: preset.bodyFont, heading: preset.headingFont, pairingId }
+}
+
+/** Body font stack for layout chrome and menu items. */
 export function storefrontFontFamily(config: StorefrontConfig): string {
-  if (config.fontFamily === 'serif') return 'Georgia, "Times New Roman", serif'
-  if (config.fontFamily === 'mono') return '"JetBrains Mono", ui-monospace, monospace'
-  return 'Inter, system-ui, sans-serif'
+  return storefrontFontStyles(config).body
 }
 
 function hexToRgba(hex: string, alpha: number): string {

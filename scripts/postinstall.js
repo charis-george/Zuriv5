@@ -15,15 +15,21 @@ function run(cmd, cwd) {
   execSync(cmd, { cwd, stdio: 'inherit', env: process.env });
 }
 
+// Use npm install (not ci) so deploy succeeds when lockfiles drift; --ignore-scripts
+// prevents nested installs from re-invoking this postinstall with the wrong cwd.
+function nestedInstallCmd(includeDev) {
+  return `npm install${includeDev ? ' --include=dev' : ' --omit=dev'} --no-audit --no-fund --ignore-scripts`;
+}
+
 try {
   if (fs.existsSync(clientDir)) {
-    run('npm install --include=dev --no-audit --no-fund', clientDir);
+    run(nestedInstallCmd(true), clientDir);
   } else {
     console.warn('[postinstall] Skipping client: no client/ directory (server-only deploy?).');
   }
 
   if (fs.existsSync(serverDir)) {
-    run('npm install --no-audit --no-fund', serverDir);
+    run(nestedInstallCmd(false), serverDir);
   } else {
     console.warn('[postinstall] Skipping server: no server/ directory.');
   }

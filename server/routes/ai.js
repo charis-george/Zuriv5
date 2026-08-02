@@ -1,7 +1,9 @@
 const express = require('express');
+const multer = require('multer');
 const router = express.Router();
 
 const { getDb } = require('../database');
+const { generateStorefrontWithClaude } = require('../lib/storefrontAiGenerate');
 const { requireBusinessAuth } = require('../middleware/auth');
 const {
   getBusinessPlan,
@@ -46,22 +48,19 @@ function clamp01(x) {
   return Math.max(0, Math.min(1, n));
 }
 
-function extractHexColors(text) {
-  const t = String(text || '');
-  const matches = t.match(/#[0-9a-fA-F]{6}\b/g) || [];
-  return [...new Set(matches.map((m) => m.toLowerCase()))];
-}
+const storefrontAiUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 6 * 1024 * 1024, files: 3 }
+});
 
-function pickBrandConfigFromReferences(brandReferences) {
-  const raw = Array.isArray(brandReferences) ? brandReferences.join(' ') : '';
-  const colors = extractHexColors(raw);
-  const brandColor = colors[0] || '#f97316';
-  const priceTextColor = colors[1] || brandColor;
-  const lowered = raw.toLowerCase();
-  const backgroundTone = /dark|black|midnight|charcoal/.test(lowered) ? 'dark' : /warm|cream|beige|earth/.test(lowered) ? 'warm' : 'light';
-  const heroOverlay = /minimal|flat|clean/.test(lowered) ? 'solid' : /split/.test(lowered) ? 'split' : 'gradient';
-  const fontFamily = /serif|editorial|classic/.test(lowered) ? 'serif' : /mono|tech/.test(lowered) ? 'mono' : 'sans';
-  return { brandColor, priceTextColor, backgroundTone, heroOverlay, fontFamily };
+function handleStorefrontAiUpload(req, res, next) {
+  storefrontAiUpload.array('referenceImages', 3)(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ error: 'Each reference image must be 6 MB or smaller.' });
+    }
+    return res.status(400).json({ error: err.message || 'Invalid upload' });
+  });
 }
 
 async function assertOwnBusinessAndPlan(req, res, businessId) {
@@ -642,23 +641,48 @@ router.get('/slow-hours', requireBusinessAuth, async (req, res) => {
 
 /**
  * POST /api/ai/storefront-generate
- * One AI storefront generation on Growth, unlimited on Scale/Enterprise (legacy Pro/Zuri AI).
+ * Claude-powered storefront design from a prompt + optional reference images.
+ * Growth: one generation; Scale+: unlimited.
  */
-router.post('/storefront-generate', requireBusinessAuth, async (req, res) => {
+router.post('/storefront-generate', requireBusinessAuth, handleStorefrontAiUpload, async (req, res) => {
   try {
-    const { businessId, brandReferences, storeName, taglineHint } = req.body || {};
-    if (!businessId || typeof businessId !== 'string') {
+    const businessId =
+      typeof req.body?.businessId === 'string'
+        ? req.body.businessId
+        : typeof req.body?.businessId === 'number'
+          ? String(req.body.businessId)
+          : '';
+    const prompt = String(req.body?.prompt || req.body?.designPrompt || '').trim();
+    const storeName = typeof req.body?.storeName === 'string' ? req.body.storeName : '';
+    const taglineHint = typeof req.body?.taglineHint === 'string' ? req.body.taglineHint : '';
+
+    let currentConfig = {};
+    let currentDetails = {};
+    try {
+      if (req.body?.currentConfig) {
+        currentConfig =
+          typeof req.body.currentConfig === 'string'
+            ? JSON.parse(req.body.currentConfig)
+            : req.body.currentConfig;
+      }
+      if (req.body?.currentDetails) {
+        currentDetails =
+          typeof req.body.currentDetails === 'string'
+            ? JSON.parse(req.body.currentDetails)
+            : req.body.currentDetails;
+      }
+    } catch {
+      return res.status(400).json({ error: 'Invalid currentConfig or currentDetails JSON.' });
+    }
+
+    if (!businessId) {
       return res.status(400).json({ error: 'businessId is required' });
     }
     if (businessId !== req.businessId) {
       return res.status(403).json({ error: 'Forbidden' });
     }
-    if (!Array.isArray(brandReferences)) {
-      return res.status(400).json({ error: 'brandReferences is required (3-4 items)' });
-    }
-    const refs = brandReferences.map((x) => String(x || '').trim()).filter(Boolean);
-    if (refs.length < 3 || refs.length > 4) {
-      return res.status(400).json({ error: 'Please provide 3-4 brand design references.' });
+    if (!prompt || prompt.length < 12) {
+      return res.status(400).json({ error: 'Please describe your desired storefront design (at least 12 characters).' });
     }
 
     const plan = await getBusinessPlan(businessId);
@@ -668,7 +692,7 @@ router.post('/storefront-generate', requireBusinessAuth, async (req, res) => {
 
     const { data: business, error: bErr } = await supabase
       .from('businesses')
-      .select('id,name,storefront_ai_generations')
+      .select('id,name,business_mode,storefront_ai_generations,storefront_config,storefront_details')
       .eq('id', businessId)
       .single();
     if (bErr || !business) {
@@ -683,34 +707,39 @@ router.post('/storefront-generate', requireBusinessAuth, async (req, res) => {
       });
     }
 
-    const generatedBase = pickBrandConfigFromReferences(refs);
-    const generatedConfig = {
-      ...generatedBase,
-      layout: 'cards',
-      gridStyle: 'wide_cards',
-      showPhotos: true,
-      showDescriptions: true,
-      showCalories: false,
-      showRatings: false,
-      cardSize: 1,
-      cardImageShape: 'rounded',
-      cardGap: 14,
-      cardRadius: 18,
-      dividerStyle: 'soft',
-      fontFamily: generatedBase.fontFamily,
-      titleSize: 36,
-      menuItemFontScale: 1,
-      pillShape: 'pill',
-      sectionTitleTreatment: 'underlined',
-      shadowDepth: 'soft',
-      categoryStripBorder: true,
-      heroHeight: 220
-    };
-    const generatedDetails = {
-      name: String(storeName || business.name || 'Your store').trim(),
-      tagline: String(taglineHint || 'Crafted to match your brand style').trim(),
-      cuisineTags: ['Signature', 'Curated', 'Premium']
-    };
+    const baseConfig = { ...(business.storefront_config || {}), ...(currentConfig || {}) };
+    const baseDetails = { ...(business.storefront_details || {}), ...(currentDetails || {}) };
+    if (storeName) baseDetails.name = storeName;
+    if (taglineHint) baseDetails.tagline = taglineHint;
+
+    const referenceImages = (req.files || []).filter(
+      (f) => f && f.mimetype && String(f.mimetype).startsWith('image/')
+    );
+
+    let generatedConfig;
+    let generatedDetails;
+    let reasoning = null;
+
+    try {
+      const aiResult = await generateStorefrontWithClaude({
+        prompt,
+        businessName: business.name,
+        businessMode: business.business_mode || 'menu',
+        currentConfig: baseConfig,
+        currentDetails: baseDetails,
+        referenceImages
+      });
+      generatedConfig = aiResult.storefrontConfig;
+      generatedDetails = aiResult.storefrontDetails;
+      reasoning = aiResult.reasoning;
+    } catch (aiErr) {
+      const status = aiErr?.status || 500;
+      if (status === 503 || status === 502) {
+        return res.status(status).json({ error: aiErr.message || 'AI generation failed' });
+      }
+      console.error('[ZURI] ai.storefront-generate claude error:', aiErr);
+      return res.status(500).json({ error: 'Failed to generate storefront with AI' });
+    }
 
     const { error: upErr } = await supabase
       .from('businesses')
@@ -742,6 +771,7 @@ router.post('/storefront-generate', requireBusinessAuth, async (req, res) => {
       success: true,
       storefrontConfig: generatedConfig,
       storefrontDetails: generatedDetails,
+      reasoning,
       generationsUsed: used + 1,
       generationsRemainingOnGrowth: Math.max(0, 1 - (used + 1))
     });

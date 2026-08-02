@@ -29,7 +29,14 @@ function ZuriTapPage(): JSX.Element {
               <span className="text-[11px] tracking-[0.32em] text-zuri-black uppercase">Z U R I</span>
             </Link>
             <nav className="hidden md:flex items-center gap-6 text-sm text-gray-600">
-              <Link to="/scan" className="hover:text-zuri-orange transition-colors">How it works</Link>
+              <a
+                href="https://api.zuriqo.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:text-zuri-orange transition-colors"
+              >
+                Zuri API
+              </a>
               <Link to="/zuri-tap" className="text-zuri-orange">Zuri Tap</Link>
               <Link to="/business/login" className="hover:text-zuri-orange transition-colors">For Businesses</Link>
               <Link to="/business/login" className="text-zuri-black hover:text-gray-600">Log in</Link>

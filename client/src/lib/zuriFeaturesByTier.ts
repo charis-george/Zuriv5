@@ -22,6 +22,7 @@ export const ZURI_FEATURES_BY_TIER: TierFeatureBlock[] = [
     bullets: [
       'QR link & customer order page',
       'Menu categories & items (text-only; no item photos)',
+      'Free AI menu upload from photo or PDF (limited uses)',
       'Orders, statuses, reservations inbox, post-payment reviews',
       'Payments via Paystack when you add keys',
       'No Analytics tab, no Zuri Tap, no guest-side AI menu'
@@ -34,7 +35,7 @@ export const ZURI_FEATURES_BY_TIER: TierFeatureBlock[] = [
     bullets: [
       'Everything in Free',
       'Item photos & business logo',
-      'AI-assisted menu upload from photo or PDF',
+      'More AI menu uploads from photo or PDF',
       'Still no Analytics tab, Zuri Tap, or guest AI menu (upgrade to unlock)'
     ]
   },

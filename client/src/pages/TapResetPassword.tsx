@@ -58,7 +58,7 @@ function TapResetPassword(): JSX.Element {
           <img src="/ZURI.png" alt="ZURI" className="h-8 w-auto" />
         </Link>
         <h1 className="text-xl font-bold text-zuri-black">Set new password</h1>
-        <p className="text-sm text-gray-500 mt-1">Choose a new password for your Zuri Tap account (at least 6 characters).</p>
+        <p className="text-sm text-gray-500 mt-1">Choose a new password for your Zuri Tap account (at least 8 characters).</p>
         {error && (
           <div className="mt-4 p-3 bg-red-50 border border-red-100 text-red-700 rounded-lg text-sm">
             {error}
@@ -70,11 +70,11 @@ function TapResetPassword(): JSX.Element {
           <form onSubmit={handleSubmit} className="mt-6 space-y-4">
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">New password</label>
-              <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} required minLength={6} className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50" placeholder="••••••••" />
+              <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} required minLength={8} className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50" placeholder="••••••••" />
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Confirm password</label>
-              <input type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} required minLength={6} className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50" placeholder="••••••••" />
+              <input type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} required minLength={8} className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50" placeholder="••••••••" />
             </div>
             <button type="submit" disabled={loading} className="w-full bg-zuri-black text-white py-3 rounded-xl font-semibold disabled:opacity-50">
               {loading ? 'Updating…' : 'Update password'}

@@ -4,6 +4,11 @@ providers = ["node"]
 
 # npm 10+ "production" warning: NODE_ENV=development only for `npm ci`; `--omit=dev` skips dev deps.
 
+[phases.setup]
+# sharp/libvips logs "Fontconfig error" without fontconfig installed (harmless but noisy).
+aptPkgs = ["fontconfig"]
+cmds = ["fc-cache -f"]
+
 [phases.install]
 cmds = ["cd server && NODE_ENV=development npm ci --omit=dev"]
 
@@ -11,4 +16,4 @@ cmds = ["cd server && NODE_ENV=development npm ci --omit=dev"]
 cmds = ["cd client && NODE_ENV=development npm ci --omit=dev && npm run build"]
 
 [start]
-cmd = "cd server && npm start"
+cmd = "node server/index.js"

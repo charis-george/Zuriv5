@@ -1,10 +1,14 @@
 import { useState, useEffect, useRef, useCallback, FormEvent } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import axios from 'axios'
 import io, { Socket } from 'socket.io-client'
 import { Business, MenuCategory, MenuItem, Order, CustomerInfo, OrderItem, SavedCard, StorefrontDetails, type GuestMenuLang } from '../types'
 import { PaperPlaneLoader } from '../components/PaperPlaneLoader'
 import { mergeStorefrontConfig, getStorefrontTheme } from '../lib/storefrontTheme'
+import { findEventPage, formatRefundPolicyLabel } from '../lib/storefrontEventPages'
+import { normalizeStorefrontProfiles, resolveActiveStorefrontProfile, storefrontSeoPath } from '../lib/storefrontProfiles'
+import { formatZuriEventTitle, formatZuriStorefrontTitle } from '../lib/storefrontSeoTitles'
+import { EventLandingView } from '../components/storefront/EventLandingView'
 import { ticketPreviewQrImageUrl, ticketPreviewQrPayload, ticketOrderHoldQrPayload } from '../lib/ticketPreviewQr'
 import { StorefrontCustomerLayout } from '../components/storefront/StorefrontCustomerLayout'
 import { StorefrontMenuGrid, type GuestDietaryPrefs } from '../components/storefront/StorefrontMenuGrid'
@@ -18,10 +22,22 @@ import {
   EMPTY_GUEST_INSIGHTS,
   type GuestPersonalizationInsights
 } from '../types/guestPersonalization'
-import { preloadPaystackInline, startZuriPayment } from '../lib/paystackZuri'
+import { preloadZuriPayment, startZuriPayment, type ZuriPaymentInitializePayload } from '../lib/zuriPayment'
 import { clearStorefrontCache, readStorefrontCache, writeStorefrontCache } from '../lib/storefrontCache'
 import { usePageSeo } from '../lib/seo'
 import { formatUserFacingError } from '../lib/formatApiError'
+import {
+  getMinTicketQty,
+  getMaxTicketQty,
+  getTicketStep,
+  nextTicketQty,
+  normalizeTicketQty,
+  ticketQtyOptions,
+  validateCartTicketQuantities,
+  isTicketSoldOut,
+  getTicketsRemaining
+} from '../lib/ticketQuantityRules'
+import { normalizeUuidParam } from '../lib/normalizeUuid'
 
 const WS_URL =
   (import.meta.env.VITE_WS_URL as string) ||
@@ -51,8 +67,16 @@ function formatReserveCountdown(deadlineMs: number, _tick: number): string {
 }
 
 function OrderPage(): JSX.Element {
-  const { businessId: rawBusinessId } = useParams<{ businessId: string }>()
-  const businessId = rawBusinessId ? decodeURIComponent(rawBusinessId).trim() : undefined
+  const {
+    businessId: rawBusinessId,
+    eventSlug: routeEventSlug,
+    storefrontSlug: routeStorefrontSlug
+  } = useParams<{ businessId: string; eventSlug?: string; storefrontSlug?: string }>()
+  const [searchParams] = useSearchParams()
+  const inviteOrderId = (searchParams.get('inviteOrder') || '').trim()
+  const businessId = normalizeUuidParam(rawBusinessId)
+  const activeEventSlug = (routeEventSlug || searchParams.get('event') || '').trim()
+  const activeStorefrontSlug = (routeStorefrontSlug || searchParams.get('storefront') || '').trim()
   const [business, setBusiness] = useState<Business | null>(null)
   const [menu, setMenu] = useState<MenuCategory[]>([])
   const [cart, setCart] = useState<CartItem[]>([])
@@ -83,15 +107,39 @@ function OrderPage(): JSX.Element {
   const [reorderHintIds, setReorderHintIds] = useState<string[]>([])
   const [staleMenuCache, setStaleMenuCache] = useState(false)
 
+  const refetchStorefrontMenu = useCallback(async (): Promise<MenuCategory[] | null> => {
+    if (!businessId) return null
+    try {
+      const params = new URLSearchParams()
+      if (activeEventSlug) params.set('event', activeEventSlug)
+      else if (activeStorefrontSlug) params.set('storefront', activeStorefrontSlug)
+      const qs = params.toString()
+      const { data } = await axios.get<MenuCategory[]>(
+        `/api/menu/business/${businessId}${qs ? `?${qs}` : ''}`
+      )
+      setMenu(data)
+      setStaleMenuCache(false)
+      return data
+    } catch {
+      return null
+    }
+  }, [businessId, activeEventSlug, activeStorefrontSlug])
+
   const refetchQrBusiness = useCallback(async (): Promise<void> => {
     if (!businessId) return
     try {
-      const { data } = await axios.get<Business>(`/api/qr/business/${businessId}`)
+      const params = new URLSearchParams()
+      if (activeEventSlug) params.set('event', activeEventSlug)
+      else if (activeStorefrontSlug) params.set('storefront', activeStorefrontSlug)
+      const qs = params.toString()
+      const { data } = await axios.get<Business>(
+        `/api/qr/business/${businessId}${qs ? `?${qs}` : ''}`
+      )
       setBusiness((prev) => (prev ? { ...prev, ...data } : data))
     } catch {
       /* keep existing state */
     }
-  }, [businessId])
+  }, [businessId, activeEventSlug, activeStorefrontSlug])
 
   const refetchGuestInsights = useCallback(async (): Promise<void> => {
     if (!businessId) return
@@ -145,31 +193,65 @@ function OrderPage(): JSX.Element {
     void syncGuestIdentity().then(() => refetchGuestInsights())
   }, [businessId, business?.businessMode, syncGuestIdentity, refetchGuestInsights])
 
-  const storefrontConfig = mergeStorefrontConfig(business?.storefrontConfig ?? undefined)
+  const storefrontProfiles = normalizeStorefrontProfiles(business ?? undefined)
+  const activeStorefrontProfile =
+    resolveActiveStorefrontProfile(business ?? undefined, {
+      storefrontSlug: activeStorefrontSlug || business?.activeStorefrontSlug,
+      eventSlug: activeEventSlug || undefined
+    }) ?? null
+
+  const storefrontConfig = mergeStorefrontConfig(
+    activeStorefrontProfile?.config ?? business?.storefrontConfig ?? undefined
+  )
   const storefrontDetails: StorefrontDetails = {
     ...DEFAULT_STOREFRONT_DETAILS,
-    ...(business?.storefrontDetails ?? {})
+    ...(activeStorefrontProfile?.details ?? business?.storefrontDetails ?? {})
   }
   const theme = getStorefrontTheme(storefrontConfig)
   const isTicketing = business?.businessMode === 'ticketing'
   const brand = storefrontConfig.brandColor || '#f97316'
   const ag = storefrontConfig.aiGuest ?? {}
   const storefrontName = storefrontDetails.name?.trim() || business?.name?.trim() || 'Storefront'
+  const activeEvent = isTicketing ? findEventPage(storefrontDetails.eventPages, activeEventSlug) : null
+  const displayPhone = storefrontDetails.contactPhone?.trim() || business?.phone?.trim() || ''
+
+  const storefrontShareImage =
+    activeEvent?.coverImageUrl ||
+    storefrontConfig.heroBannerUrl ||
+    business?.logoUrl ||
+    undefined
+
+  const seoTitle = activeEvent
+    ? formatZuriEventTitle(activeEvent.title, storefrontName)
+    : formatZuriStorefrontTitle(storefrontName)
+  const seoDescription = activeEvent
+    ? activeEvent.subtitle
+      ? `${activeEvent.subtitle} — ${formatZuriEventTitle(activeEvent.title, storefrontName)}`
+      : formatZuriEventTitle(activeEvent.title, storefrontName)
+    : business
+      ? `${storefrontName} on ZURI. Browse ${isTicketing ? 'tickets' : 'the menu'} and place your order online.`
+      : 'Browse this ZURI storefront and place your order online.'
+  const seoPath = activeEvent && businessId
+    ? `/event/${businessId}/${activeEvent.slug}`
+    : businessId && activeStorefrontProfile
+      ? storefrontSeoPath(businessId, activeStorefrontProfile)
+      : businessId
+        ? `/order/${businessId}`
+        : '/order'
 
   usePageSeo({
-    title: `ZURI | ${storefrontName}`,
-    description: business
-      ? `${storefrontName} on ZURI. Browse ${isTicketing ? 'tickets' : 'the menu'} and place your order online.`
-      : 'Browse this ZURI storefront and place your order online.',
-    path: businessId ? `/order/${businessId}` : '/order',
+    title: seoTitle,
+    description: seoDescription,
+    path: seoPath,
+    image: storefrontShareImage,
   })
 
   useEffect(() => {
     if (!businessId) return
 
-    preloadPaystackInline()
+    preloadZuriPayment(business?.paymentProvider)
 
-    const cached = readStorefrontCache(businessId)
+    const cached = readStorefrontCache(businessId, activeStorefrontSlug || activeEventSlug || undefined)
     if (cached) {
       setBusiness(cached.business)
       setMenu(cached.menu)
@@ -177,9 +259,15 @@ function OrderPage(): JSX.Element {
       setStaleMenuCache(true)
     }
 
+    const bizParams = new URLSearchParams()
+    if (activeEventSlug) bizParams.set('event', activeEventSlug)
+    else if (activeStorefrontSlug) bizParams.set('storefront', activeStorefrontSlug)
+    const bizQs = bizParams.toString()
+    const menuQs = bizQs
+
     void Promise.allSettled([
-      axios.get<Business>(`/api/qr/business/${businessId}`),
-      axios.get<MenuCategory[]>(`/api/menu/business/${businessId}`),
+      axios.get<Business>(`/api/qr/business/${businessId}${bizQs ? `?${bizQs}` : ''}`),
+      axios.get<MenuCategory[]>(`/api/menu/business/${businessId}${menuQs ? `?${menuQs}` : ''}`),
     ]).then(([bizResult, menuResult]) => {
       let nextBusiness: Business | null = cached?.business ?? null
       let nextMenu: MenuCategory[] = cached?.menu ?? []
@@ -218,7 +306,12 @@ function OrderPage(): JSX.Element {
       }
 
       if (nextBusiness && nextMenu.length >= 0) {
-        writeStorefrontCache(businessId, nextBusiness, nextMenu)
+        writeStorefrontCache(
+          businessId,
+          nextBusiness,
+          nextMenu,
+          activeStorefrontSlug || nextBusiness.activeStorefrontSlug || activeEventSlug || undefined
+        )
         setStaleMenuCache(false)
       }
       setLoading(false)
@@ -227,22 +320,42 @@ function OrderPage(): JSX.Element {
     const socket: Socket = io(WS_URL)
     socket.emit('join-storefront', businessId)
 
-    socket.on('storefront-updated', (payload: { config?: unknown; details?: unknown; businessMode?: Business['businessMode'] }) => {
-      setBusiness((prev) => {
-        if (!prev) return prev
-        return {
-          ...prev,
-          storefrontConfig: (payload.config as Business['storefrontConfig']) ?? prev.storefrontConfig,
-          storefrontDetails: (payload.details as Business['storefrontDetails']) ?? prev.storefrontDetails,
-          ...(payload.businessMode === 'menu' || payload.businessMode === 'ticketing'
-            ? { businessMode: payload.businessMode }
-            : {})
-        }
-      })
-      void refetchQrBusiness().then(() => {
-        void refetchGuestInsights()
-      })
-    })
+    socket.on(
+      'storefront-updated',
+      (payload: {
+        config?: unknown
+        details?: unknown
+        profiles?: Business['storefrontProfiles']
+        profileId?: string | null
+        businessMode?: Business['businessMode']
+      }) => {
+        const activeId =
+          activeStorefrontProfile?.id ||
+          business?.activeStorefrontId ||
+          payload.profileId ||
+          null
+        const shouldApply =
+          !payload.profileId || !activeId || payload.profileId === activeId || !activeStorefrontSlug
+        if (!shouldApply) return
+
+        setBusiness((prev) => {
+          if (!prev) return prev
+          const nextProfiles = payload.profiles ?? prev.storefrontProfiles
+          return {
+            ...prev,
+            storefrontProfiles: nextProfiles ?? prev.storefrontProfiles,
+            storefrontConfig: (payload.config as Business['storefrontConfig']) ?? prev.storefrontConfig,
+            storefrontDetails: (payload.details as Business['storefrontDetails']) ?? prev.storefrontDetails,
+            ...(payload.businessMode === 'menu' || payload.businessMode === 'ticketing'
+              ? { businessMode: payload.businessMode }
+              : {})
+          }
+        })
+        void refetchQrBusiness().then(() => {
+          void refetchStorefrontMenu()
+        })
+      }
+    )
 
     socket.on('order-ready', (order: Order) => {
       setOrderDetails((current) => {
@@ -256,22 +369,31 @@ function OrderPage(): JSX.Element {
     return () => {
       socket.disconnect()
     }
-  }, [businessId, refetchQrBusiness, refetchGuestInsights])
+  }, [
+    businessId,
+    activeEventSlug,
+    activeStorefrontSlug,
+    refetchQrBusiness,
+    refetchStorefrontMenu,
+    refetchGuestInsights,
+    activeStorefrontProfile?.id,
+    business?.activeStorefrontId
+  ])
 
   useEffect(() => {
     if (!businessId) return
     const onVis = (): void => {
       if (document.visibilityState !== 'visible') return
       void refetchQrBusiness().then(() => {
-        void refetchGuestInsights()
+        void refetchStorefrontMenu()
       })
     }
     document.addEventListener('visibilitychange', onVis)
     return () => document.removeEventListener('visibilitychange', onVis)
-  }, [businessId, refetchQrBusiness, refetchGuestInsights])
+  }, [businessId, refetchQrBusiness, refetchStorefrontMenu])
 
   useEffect(() => {
-    if (orderPlaced) preloadPaystackInline()
+    if (orderPlaced) preloadZuriPayment(business?.paymentProvider)
   }, [orderPlaced])
 
   useEffect(() => {
@@ -295,6 +417,57 @@ function OrderPage(): JSX.Element {
       /* ignore */
     }
   }, [businessId])
+
+  useEffect(() => {
+    if (!menu.length) return
+    const validIds = new Set(menu.flatMap((cat) => cat.items.map((item) => item.id)))
+    setCart((prev) => {
+      if (!prev.length) return prev
+      const nextCart = prev.filter((item) => validIds.has(item.id))
+      if (nextCart.length === prev.length) return prev
+      if (nextCart.length === 0 && staleMenuCache) {
+        setError('Some tickets in your cart are no longer available. Please select tickets again.')
+      }
+      return nextCart
+    })
+  }, [menu, staleMenuCache])
+
+  useEffect(() => {
+    if (!inviteOrderId || !businessId || orderPlaced) return
+    let cancelled = false
+    void axios
+      .get<Order & { payment_status?: string; customer_name?: string; customer_phone?: string; customer_email?: string; total_amount?: number }>(
+        `/api/order/${inviteOrderId}`
+      )
+      .then(({ data }) => {
+        if (cancelled) return
+        const orderBusinessId = (data as Order & { business_id?: string }).business_id ?? data.businessId
+        if (orderBusinessId && orderBusinessId !== businessId) return
+        const paymentStatus = (data as Order & { payment_status?: string }).payment_status
+        if (paymentStatus === 'paid') {
+          window.location.href = `${window.location.origin}/payment-done?reference=${data.id}`
+          return
+        }
+        setOrderDetails(data)
+        setOrderPlaced(true)
+        setCustomerInfo({
+          name: data.customerName || (data as Order & { customer_name?: string }).customer_name || '',
+          phone: data.customerPhone || (data as Order & { customer_phone?: string }).customer_phone || '',
+          email: data.customerEmail || (data as Order & { customer_email?: string }).customer_email || ''
+        })
+        setTickFirstName((data.customerName || '').split(' ')[0] || '')
+        setTickLastName((data.customerName || '').split(' ').slice(1).join(' ') || '')
+        setTickEmail(data.customerEmail || (data as Order & { customer_email?: string }).customer_email || '')
+        setTickPhone(data.customerPhone || (data as Order & { customer_phone?: string }).customer_phone || '')
+        if (isTicketing) setTicketingStep('summary')
+      })
+      .catch(() => {
+        if (!cancelled) alert('Could not load your invite. Ask the organizer for a new link.')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [inviteOrderId, businessId, orderPlaced, isTicketing])
 
   useEffect(() => {
     if (!businessId) return
@@ -376,19 +549,32 @@ function OrderPage(): JSX.Element {
 
   const addToCart = (item: MenuItem): void => {
     if (!item.available) return
-    const groupSize = item.groupSize && item.groupSize > 1 ? item.groupSize : 1
-    const minQty = Math.max(item.minPerOrder || 1, groupSize)
-    const maxQty = item.maxPerUser || Infinity
+    if (item.pricingType === 'invite_only') return
 
     const existingItem = cart.find((cartItem) => cartItem.id === item.id)
+    if (!isTicketing) {
+      if (existingItem) {
+        setCart(
+          cart.map((cartItem) =>
+            cartItem.id === item.id ? { ...cartItem, quantity: cartItem.quantity + 1 } : cartItem
+          )
+        )
+      } else {
+        setCart([...cart, { ...item, quantity: 1 }])
+      }
+      persistReorderIds([item.id])
+      return
+    }
+
     if (existingItem) {
-      const next = existingItem.quantity + groupSize
-      if (next > maxQty) return
+      const next = nextTicketQty(existingItem.quantity, 'up', item)
+      if (next === existingItem.quantity) return
       setCart(
         cart.map((cartItem) => (cartItem.id === item.id ? { ...cartItem, quantity: next } : cartItem))
       )
     } else {
-      const startQty = Math.min(minQty, maxQty)
+      const startQty = normalizeTicketQty(getMinTicketQty(item), item)
+      if (startQty <= 0) return
       setCart([...cart, { ...item, quantity: startQty }])
     }
     persistReorderIds([item.id])
@@ -399,12 +585,21 @@ function OrderPage(): JSX.Element {
   }
 
   const updateQuantity = (itemId: string, quantity: number): void => {
+    const item = cart.find((cartItem) => cartItem.id === itemId)
+    if (!item) return
     if (quantity <= 0) {
       removeFromCart(itemId)
       return
     }
-    setCart(cart.map(item =>
-      item.id === itemId ? { ...item, quantity } : item
+    const nextQty = isTicketing
+      ? normalizeTicketQty(quantity, item)
+      : Math.min(99, Math.max(1, quantity))
+    if (nextQty <= 0) {
+      removeFromCart(itemId)
+      return
+    }
+    setCart(cart.map((cartItem) =>
+      cartItem.id === itemId ? { ...cartItem, quantity: nextQty } : cartItem
     ))
   }
 
@@ -416,6 +611,12 @@ function OrderPage(): JSX.Element {
     if (!businessId) return false
     if (cart.length === 0) {
       alert('Your cart is empty')
+      return false
+    }
+
+    const ticketRuleErr = isTicketing ? validateCartTicketQuantities(cart) : null
+    if (ticketRuleErr) {
+      alert(ticketRuleErr)
       return false
     }
 
@@ -441,16 +642,24 @@ function OrderPage(): JSX.Element {
         customerEmail: info.email,
         guestToken: getOrCreateGuestToken(),
         items: orderItems,
-        estimatedPrepTime
+        estimatedPrepTime,
+        eventSlug: activeEventSlug || routeEventSlug || undefined,
+        storefrontSlug: activeStorefrontSlug || undefined
       })
 
       setOrderDetails(response.data)
       setOrderPlaced(true)
       persistReorderIds(cart.map((i) => i.id))
       setCart([])
+
+      const total = Number((response.data as Order & { total_amount?: number }).total_amount ?? response.data.totalAmount ?? 0)
+      if (total <= 0) {
+        window.location.href = `${window.location.origin}/payment-done?reference=${response.data.id}`
+      }
       return true
     } catch (err) {
-      alert('Failed to place order. Please try again.')
+      const msg = axios.isAxiosError(err) ? (err.response?.data as { error?: string })?.error : null
+      alert(msg || 'Failed to place order. Please try again.')
       console.error(err)
       return false
     }
@@ -500,9 +709,73 @@ function OrderPage(): JSX.Element {
   if (business && isTicketing && !orderPlaced && !loading) {
     const deadline = reserveDeadlineRef.current ?? Date.now() + 10 * 60 * 1000
     const timerStr = formatReserveCountdown(deadline, reserveTick)
-    const eventTitle = storefrontDetails.name?.trim() || business.name || 'Event'
-    const flatItems = menu.flatMap((cat) => cat.items.map((it) => ({ ...it, categoryName: cat.name })))
+    const eventTitle = activeEvent?.title || storefrontDetails.name?.trim() || business.name || 'Event'
+    const flatItems = menu
+      .flatMap((cat) => cat.items.map((it) => ({ ...it, categoryName: cat.name })))
+      .filter((item) => item.pricingType !== 'invite_only')
     const ticketQty = cart.reduce((sum, i) => sum + i.quantity, 0)
+
+    const cartQtyById = Object.fromEntries(cart.map((c) => [c.id, c.quantity]))
+
+    const handleTicketQty = (item: (typeof flatItems)[0], qty: number): void => {
+      if (!item.available || item.pricingType === 'invite_only') return
+      const normalized = normalizeTicketQty(qty, item)
+      if (normalized <= 0) {
+        removeFromCart(item.id)
+        return
+      }
+      const inCart = cart.find((c) => c.id === item.id)
+      if (inCart) updateQuantity(item.id, normalized)
+      else setCart([...cart, { ...item, quantity: normalized }])
+    }
+
+    const continueFromTickets = (): void => {
+      if (cart.length === 0) {
+        alert('Select at least one ticket.')
+        return
+      }
+      const ticketRuleErr = validateCartTicketQuantities(cart)
+      if (ticketRuleErr) {
+        alert(ticketRuleErr)
+        return
+      }
+      setTicketingStep('contact')
+    }
+
+    if (activeEvent && ticketingStep === 'tickets') {
+      return (
+        <div
+          className="relative min-h-screen"
+          style={{ paddingBottom: 'max(7.5rem, calc(env(safe-area-inset-bottom, 0px) + 5.5rem))', background: theme.page }}
+        >
+          <EventLandingView
+            event={activeEvent}
+            config={storefrontConfig}
+            details={storefrontDetails}
+            business={{ id: businessId || '', name: business.name, logoUrl: business.logoUrl, phone: business.phone }}
+            ticketItems={flatItems}
+            cartQtyById={cartQtyById}
+            onQtyChange={handleTicketQty}
+            brandColor={brand}
+            showShare
+          />
+          <div
+            className="fixed bottom-0 left-0 right-0 z-40 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] flex items-center justify-between gap-3 shadow-lg border-t"
+            style={{ backgroundColor: theme.panel, borderColor: theme.border }}
+          >
+            <p className="text-lg font-bold tabular-nums" style={{ color: theme.text }}>₦{getTotal().toFixed(2)}</p>
+            <button
+              type="button"
+              className="rounded-xl px-5 py-2.5 text-sm font-bold shadow-sm text-white transition hover:opacity-95"
+              style={{ backgroundColor: brand }}
+              onClick={continueFromTickets}
+            >
+              Continue
+            </button>
+          </div>
+        </div>
+      )
+    }
 
     const stepCircle = (opts: { n: string; active: boolean; done: boolean }): JSX.Element => {
       const { n, active, done } = opts
@@ -583,7 +856,7 @@ function OrderPage(): JSX.Element {
           details={storefrontDetails}
           businessNameFallback={business.name}
           logoUrl={business.logoUrl}
-          phone={business.phone}
+          phone={displayPhone || undefined}
           headerRight={
             <div className="flex items-center gap-3 sm:gap-4 shrink-0">
               <div className="text-right min-w-[52px]">
@@ -640,7 +913,8 @@ function OrderPage(): JSX.Element {
                     flatItems.map((item) => {
                       const inCart = cart.find((c) => c.id === item.id)
                       const qty = inCart?.quantity ?? 0
-                      const expanded = expandedTicketId === item.id && item.available
+                      const soldOut = !item.available || isTicketSoldOut(item)
+                      const expanded = expandedTicketId === item.id && !soldOut
                       const qrSrc = ticketPreviewQrImageUrl(
                         ticketPreviewQrPayload(businessId || '', item.id),
                         120
@@ -653,7 +927,10 @@ function OrderPage(): JSX.Element {
                         >
                           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                             <div className="min-w-0 flex-1">
-                              <p className="font-bold" style={{ color: theme.text }}>{item.name}</p>
+                              <p className="font-bold" style={{ color: theme.text }}>
+                                {item.name}
+                                {soldOut ? <span className="ml-2 text-[10px] uppercase text-red-600">Sold out</span> : null}
+                              </p>
                               <p className="text-lg font-bold mt-1" style={{ color: brand }}>₦{Number(item.price).toFixed(2)}</p>
                               {item.description ? (
                                 <p className="text-sm mt-2 line-clamp-3" style={{ color: theme.sub }}>{item.description}</p>
@@ -672,21 +949,12 @@ function OrderPage(): JSX.Element {
                             <div className="shrink-0 min-w-[80px]">
                               <label className="sr-only" htmlFor={`qty-${item.id}`}>Quantity</label>
                               {(() => {
-                                const groupSz = item.groupSize && item.groupSize > 1 ? item.groupSize : 1
-                                const maxQty = item.maxPerUser || 20
-                                const minQty = Math.max(item.minPerOrder || 1, groupSz)
-                                const qtyOptions: { value: string; label: string }[] = [{ value: '0', label: '0' }]
-                                for (let v = minQty; v <= maxQty; v += groupSz) {
-                                  qtyOptions.push({
-                                    value: String(v),
-                                    label: groupSz > 1 ? `${v} (${v / groupSz} group${v / groupSz > 1 ? 's' : ''})` : String(v)
-                                  })
-                                }
+                                const qtyOptions = ticketQtyOptions(item)
                                 return (
                                   <CustomDropdown
                                     options={qtyOptions}
                                     value={String(qty)}
-                                    disabled={!item.available}
+                                    disabled={soldOut}
                                     onChange={(val) => {
                                       const n = parseInt(val, 10)
                                       if (!Number.isFinite(n) || n < 0 || !item.available) return
@@ -702,15 +970,24 @@ function OrderPage(): JSX.Element {
                                     }}
                                     triggerClassName="font-semibold min-w-[72px]"
                                     triggerStyle={{ borderColor: theme.border, background: theme.page, color: theme.text }}
+                                    brandColor={brand}
+                                    panelStyle={{ background: theme.panel, borderColor: theme.border }}
+                                    optionTextColor={theme.text}
                                     size="sm"
                                   />
                                 )
                               })()}
-                              {item.maxPerUser ? (
-                                <p className="text-[10px] mt-1 text-center" style={{ color: theme.sub }}>Max {item.maxPerUser}</p>
+                              {item.maxPerUser != null && Number(item.maxPerUser) >= 1 ? (
+                                <p className="text-[10px] mt-1 text-center" style={{ color: theme.sub }}>Max {getMaxTicketQty(item)} per buyer</p>
                               ) : null}
-                              {item.groupSize && item.groupSize > 1 ? (
-                                <p className="text-[10px] mt-0.5 text-center" style={{ color: theme.sub }}>Sold in {item.groupSize}s</p>
+                              {getTicketsRemaining(item) != null && (getTicketsRemaining(item) ?? 0) > 0 && (getTicketsRemaining(item) ?? 0) <= 20 ? (
+                                <p className="text-[10px] mt-0.5 text-center font-semibold" style={{ color: brand }}>{getTicketsRemaining(item)} left</p>
+                              ) : null}
+                              {getTicketStep(item) > 1 ? (
+                                <p className="text-[10px] mt-0.5 text-center" style={{ color: theme.sub }}>Sold in {getTicketStep(item)}s</p>
+                              ) : null}
+                              {getMinTicketQty(item) > 1 ? (
+                                <p className="text-[10px] mt-0.5 text-center" style={{ color: theme.sub }}>Min {getMinTicketQty(item)} per order</p>
                               ) : null}
                             </div>
                           </div>
@@ -876,6 +1153,22 @@ function OrderPage(): JSX.Element {
                     >
                       Promos or discounts, if any, are applied on the payment step.
                     </div>
+                    {activeEvent && (activeEvent.refundPolicy || activeEvent.refundPolicyText) ? (
+                      <div
+                        className="rounded-xl border px-3 py-2.5 text-sm"
+                        style={{ borderColor: theme.border, background: theme.page, color: theme.sub }}
+                      >
+                        <p className="font-semibold mb-1" style={{ color: theme.text }}>
+                          Refund policy — {formatRefundPolicyLabel(activeEvent.refundPolicy)}
+                        </p>
+                        <p className="leading-relaxed">
+                          {activeEvent.refundPolicyText?.trim() ||
+                            (activeEvent.refundPolicy === 'no_refunds'
+                              ? 'All ticket sales are final unless the venue cancels the event.'
+                              : 'If the venue cancels this event, buyers receive a full refund.')}
+                        </p>
+                      </div>
+                    ) : null}
                     <div className="flex justify-between items-center pt-2">
                       <span className="text-xl font-bold" style={{ color: theme.text }}>Total</span>
                       <span className="text-xl font-bold tabular-nums" style={{ color: theme.text }}>₦{getTotal().toFixed(2)}</span>
@@ -897,13 +1190,7 @@ function OrderPage(): JSX.Element {
               type="button"
               className="rounded-xl px-5 py-2.5 text-sm font-bold shadow-sm text-white transition hover:opacity-95"
               style={{ backgroundColor: brand }}
-              onClick={() => {
-                if (cart.length === 0) {
-                  alert('Select at least one ticket.')
-                  return
-                }
-                setTicketingStep('contact')
-              }}
+              onClick={continueFromTickets}
             >
               Continue
             </button>
@@ -1146,9 +1433,9 @@ function OrderPage(): JSX.Element {
               </div>
             )}
 
-            {/* Payment section */}
+            {/* Payment section — saved cards are Paystack-only */}
             <div className="space-y-4 mb-6">
-              {savedCards.length > 0 && (
+              {business?.paymentProvider !== 'monnify' && savedCards.length > 0 && (
                 <div className="text-left">
                   <p className="text-sm font-semibold text-zuri-black mb-2">Saved cards</p>
                   <div className="space-y-2">
@@ -1178,7 +1465,7 @@ function OrderPage(): JSX.Element {
                   </div>
                 </div>
               )}
-              {selectedSavedCardId === '' && (
+              {business?.paymentProvider !== 'monnify' && selectedSavedCardId === '' && (
                 <label className="flex items-center gap-2 text-left">
                   <input
                     type="checkbox"
@@ -1214,19 +1501,28 @@ function OrderPage(): JSX.Element {
                         return
                       } else alert('Payment failed. Try again.')
                     } else {
-                      const { data } = await axios.post<{ authorizationUrl: string; accessCode?: string; reference: string }>('/api/payment/initialize', {
+                      const { data } = await axios.post<ZuriPaymentInitializePayload>('/api/payment/initialize', {
                         email,
                         amount: orderTotal,
                         orderId: orderDetails.id,
                         businessId,
-                        callbackUrl: `${window.location.origin}/payment-done?reference=${orderDetails.id}`,
+                        callbackUrl: `${window.location.origin}/payment-done?orderId=${orderDetails.id}`,
                         saveCard
                       })
                       await startZuriPayment(
                         {
+                          provider: data.provider,
                           authorizationUrl: data.authorizationUrl,
                           accessCode: data.accessCode,
                           reference: data.reference || orderDetails.id,
+                          orderId: data.orderId || orderDetails.id,
+                          checkoutUrl: data.checkoutUrl,
+                          apiKey: data.apiKey,
+                          contractCode: data.contractCode,
+                          amount: data.amount ?? orderTotal,
+                          customerEmail: data.customerEmail || email,
+                          customerName: data.customerName,
+                          isTestMode: data.isTestMode,
                         },
                         { onError: (msg) => alert(msg || 'Failed to start payment') },
                       )
@@ -1291,19 +1587,28 @@ function OrderPage(): JSX.Element {
                       return
                     } else alert('Payment failed. Try again.')
                   } else {
-                    const { data } = await axios.post<{ authorizationUrl: string; accessCode?: string; reference: string }>('/api/payment/initialize', {
+                    const { data } = await axios.post<ZuriPaymentInitializePayload>('/api/payment/initialize', {
                       email,
                       amount: orderTotal,
                       orderId: orderDetails.id,
                       businessId,
-                      callbackUrl: `${window.location.origin}/payment-done?reference=${orderDetails.id}`,
+                      callbackUrl: `${window.location.origin}/payment-done?orderId=${orderDetails.id}`,
                       saveCard
                     })
                     await startZuriPayment(
                       {
+                        provider: data.provider,
                         authorizationUrl: data.authorizationUrl,
                         accessCode: data.accessCode,
                         reference: data.reference || orderDetails.id,
+                        orderId: data.orderId || orderDetails.id,
+                        checkoutUrl: data.checkoutUrl,
+                        apiKey: data.apiKey,
+                        contractCode: data.contractCode,
+                        amount: data.amount ?? orderTotal,
+                        customerEmail: data.customerEmail || email,
+                        customerName: data.customerName,
+                        isTestMode: data.isTestMode,
                       },
                       { onError: (msg) => alert(msg || 'Failed to start payment') },
                     )
@@ -1329,7 +1634,7 @@ function OrderPage(): JSX.Element {
       details={storefrontDetails}
       businessNameFallback={business?.name || 'Menu'}
       logoUrl={business?.logoUrl}
-      phone={business?.phone}
+      phone={displayPhone || undefined}
       headerRight={
         <div className="flex items-center gap-3 sm:gap-4 shrink-0">
           <div className="text-right min-w-[52px]">
@@ -1382,6 +1687,9 @@ function OrderPage(): JSX.Element {
                       onChange={(v) => setMenuLang(v as GuestMenuLang)}
                       placeholder="Language"
                       triggerStyle={{ background: theme.page, color: theme.text, borderColor: theme.border }}
+                      brandColor={brand}
+                      panelStyle={{ background: theme.panel, borderColor: theme.border }}
+                      optionTextColor={theme.text}
                     />
                   </div>
                 ) : null}

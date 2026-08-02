@@ -3,10 +3,16 @@ import { useSearchParams, Link } from 'react-router-dom'
 import axios from 'axios'
 import { PaperPlaneLoader } from '../components/PaperPlaneLoader'
 import { formatUserFacingError } from '../lib/formatApiError'
+import {
+  clearPendingPaymentReference,
+  resolvePaymentReference,
+  readPaymentReferenceFromLocation,
+} from '../lib/paymentReferenceStorage'
+import { apiUrl } from '../lib/apiBase'
 
 function PaymentDone(): JSX.Element {
   const [searchParams] = useSearchParams()
-  const reference = searchParams.get('reference')
+  const [reference, setReference] = useState<string | null>(null)
   const tap = searchParams.get('tap') === '1'
   const [status, setStatus] = useState<'loading' | 'success' | 'failed'>('loading')
   const [message, setMessage] = useState<string>('')
@@ -17,26 +23,37 @@ function PaymentDone(): JSX.Element {
   const [reviewError, setReviewError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!reference) {
-      setStatus('failed')
-      setMessage('Missing payment reference')
-      return
-    }
-    axios
-      .get(`/api/payment/verify/${reference}`)
-      .then((res) => {
-        if (res.data?.success) {
-          setStatus('success')
-        } else {
-          setStatus('failed')
-          setMessage(res.data?.message || 'Payment was not successful')
-        }
-      })
-      .catch((err) => {
+    const run = (): void => {
+      const ref =
+        resolvePaymentReference(searchParams, 'order') ||
+        readPaymentReferenceFromLocation()
+      if (!ref) {
         setStatus('failed')
-        setMessage('Failed to verify payment')
-      })
-  }, [reference])
+        setMessage('Missing payment reference')
+        return
+      }
+      setReference(ref)
+      setStatus('loading')
+      axios
+        .get(apiUrl(`/api/payment/verify/${encodeURIComponent(ref)}`))
+        .then((res) => {
+          if (res.data?.success) {
+            clearPendingPaymentReference()
+            setStatus('success')
+          } else {
+            setStatus('failed')
+            setMessage(res.data?.message || 'Payment was not successful')
+          }
+        })
+        .catch(() => {
+          setStatus('failed')
+          setMessage('Failed to verify payment')
+        })
+    }
+    run()
+    window.addEventListener('pageshow', run)
+    return () => window.removeEventListener('pageshow', run)
+  }, [searchParams])
 
   useEffect(() => {
     if (status !== 'success' || !reference) return
@@ -107,7 +124,9 @@ function PaymentDone(): JSX.Element {
             {tap ? 'Your Zuri Tap payment was successful' : 'Your payment was successful'}
           </h1>
           <p className="text-gray-500 text-sm text-center mb-8">
-            {tap ? 'Your card has been saved for faster Zuri Tap payments next time.' : 'Your order has been paid. Thank you.'}
+            {tap
+              ? 'Your card has been saved for faster Zuri Tap payments next time.'
+              : 'Your order has been paid. Check your email for your receipt and ticket QR codes for entry.'}
           </p>
           <div className="space-y-3 mb-8">
             <div className="flex justify-between text-sm">
