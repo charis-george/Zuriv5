@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import axios from 'axios'
 import type { BusinessMode } from '../../types'
+import { getBusinessToken } from '../../lib/businessAuthStorage'
 import { formatUserFacingError } from '../../lib/formatApiError'
 import { isGrowthPlusPlan } from '../../lib/planAccess'
+import { useDialog } from '../DialogProvider'
 
 export type MenuCatalogPreset = {
   id: string
@@ -16,6 +18,7 @@ type PresetsPayload = {
   presets: MenuCatalogPreset[]
   activePresetId: string | null
   presetsEnabled: boolean
+  presetsHint?: string
 }
 
 type Props = {
@@ -28,7 +31,7 @@ type Props = {
 }
 
 function getAuthHeaders(): { Authorization: string } | Record<string, never> {
-  const token = localStorage.getItem('zuri_business_token')
+  const token = getBusinessToken()
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
@@ -40,6 +43,7 @@ export function MenuCatalogPresets({
   onEditingPresetChange,
   onCatalogChanged,
 }: Props): JSX.Element | null {
+  const dialog = useDialog()
   const growthPlus = isGrowthPlusPlan(plan)
   const [presets, setPresets] = useState<MenuCatalogPreset[]>([])
   const [activePresetId, setActivePresetId] = useState<string | null>(null)
@@ -47,6 +51,7 @@ export function MenuCatalogPresets({
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [presetsHint, setPresetsHint] = useState<string | null>(null)
 
   const loadPresets = useCallback(() => {
     if (!businessId || !growthPlus) {
@@ -61,6 +66,7 @@ export function MenuCatalogPresets({
         setPresets(res.data.presets || [])
         setActivePresetId(res.data.activePresetId || null)
         setPresetsEnabled(!!res.data.presetsEnabled)
+        setPresetsHint(res.data.presetsHint || null)
         const first = res.data.presets?.[0]?.id
         const nextEdit =
           editingPresetId && res.data.presets?.some((p) => p.id === editingPresetId)
@@ -102,14 +108,32 @@ export function MenuCatalogPresets({
 
   if (!presetsEnabled) {
     return (
-      <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
-        Catalog presets need database migration <code className="font-mono">016_menu_catalog_presets.sql</code> applied on Supabase.
+      <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900 space-y-2">
+        <p className="font-semibold text-amber-950">Catalog presets unavailable</p>
+        <p>
+          {presetsHint ||
+            'The API could not read menu_presets. If you already ran migration 016, reload the Supabase schema cache and restart the API.'}
+        </p>
+        {error && <p className="text-red-700">{error}</p>}
+        <button
+          type="button"
+          onClick={() => loadPresets()}
+          className="text-[11px] font-semibold rounded-lg border border-amber-300 bg-white px-2 py-1 hover:bg-amber-100"
+        >
+          Retry
+        </button>
       </div>
     )
   }
 
   const createPreset = async (): Promise<void> => {
-    const name = window.prompt('Name for this catalog preset', `Preset ${presets.length + 1}`)
+    const name = await dialog.prompt({
+      title: 'Create catalog preset',
+      message: 'Enter a name for this preset.',
+      defaultValue: `Preset ${presets.length + 1}`,
+      placeholder: 'e.g. Breakfast menu',
+      confirmLabel: 'Create'
+    })
     if (!name?.trim()) return
     setBusy(true)
     try {
@@ -121,7 +145,7 @@ export function MenuCatalogPresets({
       loadPresets()
       onCatalogChanged()
     } catch (err) {
-      alert(
+      dialog.alert(
         axios.isAxiosError(err)
           ? formatUserFacingError(err.response?.data, 'Could not create preset.')
           : 'Could not create preset.'
@@ -144,7 +168,7 @@ export function MenuCatalogPresets({
       onCatalogChanged()
       loadPresets()
     } catch (err) {
-      alert(
+      dialog.alert(
         axios.isAxiosError(err)
           ? formatUserFacingError(err.response?.data, 'Could not switch live catalog.')
           : 'Could not switch live catalog.'
@@ -166,7 +190,7 @@ export function MenuCatalogPresets({
       loadPresets()
       onCatalogChanged()
     } catch (err) {
-      alert(
+      dialog.alert(
         axios.isAxiosError(err)
           ? formatUserFacingError(err.response?.data, 'Could not duplicate preset.')
           : 'Could not duplicate preset.'
@@ -177,7 +201,13 @@ export function MenuCatalogPresets({
   }
 
   const renamePreset = async (preset: MenuCatalogPreset): Promise<void> => {
-    const name = window.prompt('Rename preset', preset.name)
+    const name = await dialog.prompt({
+      title: 'Rename catalog preset',
+      message: 'Update the preset name.',
+      defaultValue: preset.name,
+      placeholder: 'Preset name',
+      confirmLabel: 'Rename'
+    })
     if (!name?.trim() || name.trim() === preset.name) return
     setBusy(true)
     try {
@@ -188,7 +218,7 @@ export function MenuCatalogPresets({
       )
       loadPresets()
     } catch (err) {
-      alert(
+      dialog.alert(
         axios.isAxiosError(err)
           ? formatUserFacingError(err.response?.data, 'Could not rename preset.')
           : 'Could not rename preset.'

@@ -89,12 +89,18 @@ function TapLoginPage(): JSX.Element {
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Password</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs font-medium text-gray-500">Password</label>
+              <Link to="/tap/forgot-password" className="text-xs font-semibold text-zuri-orange hover:underline">
+                Forgot password?
+              </Link>
+            </div>
             <input
               type="password"
               value={password}
               onChange={e => setPassword(e.target.value)}
               required
+              minLength={8}
               className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50"
               placeholder="••••••••"
             />

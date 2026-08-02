@@ -80,3 +80,6 @@ WHERE b.id = mp.business_id
   AND b.active_menu_preset_id IS NULL
   AND mp.preset_mode = COALESCE(NULLIF(b.business_mode, ''), 'menu')
   AND mp.display_order = 0;
+
+-- Refresh PostgREST schema cache (run if API still cannot see menu_presets).
+NOTIFY pgrst, 'reload schema';

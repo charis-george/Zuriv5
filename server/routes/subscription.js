@@ -3,48 +3,33 @@ const crypto = require('crypto');
 const Paystack = require('@paystack/paystack-sdk');
 const { getDb } = require('../database');
 const { requireBusinessAuth } = require('../middleware/auth');
+const { normalizeProvider } = require('../lib/paymentProvider');
+const { initializeSubscriptionPayment } = require('../lib/paymentInitialize');
+const {
+  isMonnifyConfigured,
+  getTransactionByPaymentReference,
+  isPaidTransaction,
+  parseMonnifyReturnRefs
+} = require('../lib/monnify');
+const {
+  activateSubscriptionFromCharge,
+  activateSubscriptionFromMonnify,
+  normalizeMetadata,
+  subReferenceMatchesBusiness
+} = require('../lib/subscriptionActivate');
+const { amountNairaFor } = require('../lib/subscriptionPlans');
+const {
+  cancelBusinessSubscription,
+  getSubscriptionStatus,
+  getManagePaymentUrlForBusiness,
+  recurringEnabled
+} = require('../lib/paystack-subscription');
 
 const router = express.Router();
 const supabase = getDb();
 const appPaystack = process.env.PAYSTACK_SECRET_KEY ? new Paystack(process.env.PAYSTACK_SECRET_KEY) : null;
-const { buildSubscriptionPaymentMetadata, paystackCheckoutExtras } = require('../lib/paystackCheckout');
-
-/** Naira amounts — must match client PLAN_PRICES / PLAN_PRICES_YEARLY */
-const PLAN_AMOUNTS_MONTHLY = {
-  starter: 9900,
-  growth: 24900,
-  scale: 59900,
-  /** Legacy verification only */
-  pro: 40000,
-  zuri_plus: 60000
-};
-
-const PLAN_AMOUNTS_YEARLY = {
-  starter: 95040,
-  growth: 239040,
-  scale: 575040,
-  pro: 384000,
-  zuri_plus: 576000
-};
 
 const INITIALIZE_PLANS = new Set(['starter', 'growth', 'scale']);
-const VERIFY_PLANS = new Set(['starter', 'growth', 'scale', 'pro', 'zuri_plus']);
-
-function amountNairaFor(plan, interval) {
-  const table = interval === 'yearly' ? PLAN_AMOUNTS_YEARLY : PLAN_AMOUNTS_MONTHLY;
-  return table[plan] || 0;
-}
-
-function normalizeMetadata(meta) {
-  if (!meta || typeof meta !== 'object') return {};
-  const out = {};
-  for (const [k, v] of Object.entries(meta)) {
-    if (v == null) out[k] = '';
-    else if (typeof v === 'object') out[k] = v;
-    else out[k] = String(v);
-  }
-  return out;
-}
 
 router.post('/initialize', requireBusinessAuth, async (req, res) => {
   try {
@@ -67,12 +52,11 @@ router.post('/initialize', requireBusinessAuth, async (req, res) => {
 
     const { data: business, error } = await supabase
       .from('businesses')
-      .select('id, email')
+      .select('id, email, name, payment_provider')
       .eq('id', businessId)
       .single();
 
     if (error || !business) {
-      // 422 (not 404) so clients and DevTools don’t confuse this with a missing HTTP route
       return res.status(422).json({
         error: 'Business not found for this account. Log out and sign in again, or contact support.',
         code: 'BUSINESS_NOT_FOUND'
@@ -84,91 +68,228 @@ router.post('/initialize', requireBusinessAuth, async (req, res) => {
       return res.status(400).json({ error: 'Business email required for payment' });
     }
 
-    if (!appPaystack) {
-      return res.status(503).json({ error: 'Payment not configured' });
-    }
-
     const reference = `sub_${businessId.replace(/-/g, '').slice(0, 12)}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-    const amountInKobo = Math.round(amountNaira * 100);
+    const paymentProvider = normalizeProvider(business.payment_provider);
 
-    const metadata = buildSubscriptionPaymentMetadata({
+    await supabase
+      .from('businesses')
+      .update({ subscription_interval: billing })
+      .eq('id', businessId);
+
+    const payload = await initializeSubscriptionPayment({
+      email: payEmail,
+      reference,
+      amountNaira,
       businessId,
       plan,
       billing,
-      callbackUrl: callbackUrl || null
+      callbackUrl,
+      paymentProvider,
+      customerName: business.name || 'Business'
     });
 
-    const response = await appPaystack.transaction.initialize({
-      email: payEmail,
-      amount: amountInKobo,
-      reference,
-      callback_url: callbackUrl || null,
-      currency: 'NGN',
-      metadata,
-      ...paystackCheckoutExtras()
+    return res.json({
+      ...payload,
+      recurring: payload.recurring ?? (paymentProvider === 'paystack' && recurringEnabled())
     });
-
-    if (response.status && response.data) {
-      return res.json({
-        authorizationUrl: response.data.authorization_url,
-        accessCode: response.data.access_code,
-        reference: response.data.reference,
-        publicKey: process.env.PAYSTACK_PUBLIC_KEY || null
-      });
-    }
-    return res.status(400).json({ error: 'Failed to initialize payment' });
   } catch (err) {
     console.error('Subscription initialize error:', err);
-    return res.status(500).json({ error: 'Failed to initialize subscription payment' });
+    const status = err.code === 'MONNIFY_AUTH_FAILED' ? 502 : (err.status || 500);
+    return res.status(status).json({
+      error: err.message || 'Failed to initialize subscription payment',
+      code: err.code || undefined
+    });
   }
 });
 
+function subscriptionVerifyCandidates(rawReference) {
+  const parsed = parseMonnifyReturnRefs(rawReference);
+  return [...new Set(
+    [parsed.orderId, parsed.monnifyPaymentReference, parsed.raw, rawReference]
+      .map((r) => (r ? String(r).trim() : ''))
+      .filter(Boolean)
+  )];
+}
+
 router.get('/verify/:reference', async (req, res) => {
   try {
-    const { reference } = req.params;
-    if (!reference || !String(reference).startsWith('sub_')) {
-      return res.status(400).json({ success: false, message: 'Invalid subscription reference' });
+    const rawReference = String(req.params.reference || '').trim();
+    if (!rawReference) {
+      return res.json({ success: false, message: 'Missing payment reference' });
+    }
+
+    const candidates = subscriptionVerifyCandidates(rawReference);
+    const subReference = candidates.find((r) => r.startsWith('sub_'));
+
+    if (isMonnifyConfigured() && subReference) {
+      const tx = await getTransactionByPaymentReference(subReference);
+      if (tx && isPaidTransaction(tx)) {
+        const result = await activateSubscriptionFromMonnify(tx);
+        if (result.ok) {
+          return res.json({ success: true, plan: result.plan, message: result.message || 'Subscription activated' });
+        }
+      }
     }
 
     if (!appPaystack) {
       return res.status(503).json({ success: false, message: 'Payment not configured' });
     }
 
-    const response = await appPaystack.transaction.verify({ reference });
-    if (!response.status || !response.data || response.data.status !== 'success') {
-      return res.json({ success: false, message: 'Payment not successful' });
+    let lastMessage = 'Payment not successful';
+    for (const reference of candidates) {
+      let response;
+      try {
+        response = await appPaystack.transaction.verify({ reference });
+      } catch (verifyErr) {
+        console.warn('Paystack verify attempt failed', reference, verifyErr?.message || verifyErr);
+        continue;
+      }
+
+      if (!response?.status || !response?.data) continue;
+
+      const charge = response.data;
+      if (charge.status === 'pending' || charge.status === 'processing') {
+        lastMessage = 'Payment is still processing. Please wait a moment and refresh.';
+        continue;
+      }
+      if (charge.status !== 'success') continue;
+
+      const result = await activateSubscriptionFromCharge(charge);
+      if (result.ok) {
+        return res.json({
+          success: true,
+          plan: result.plan,
+          message: result.message || 'Subscription activated',
+          reference: charge.reference || reference
+        });
+      }
+      lastMessage = result.message || lastMessage;
+      console.warn('Subscription activate failed', {
+        reference: charge.reference || reference,
+        message: result.message,
+        metadata: charge.metadata
+      });
     }
 
-    const meta = normalizeMetadata(response.data.metadata);
-    if (meta.type !== 'subscription') {
-      return res.json({ success: false, message: 'Not a subscription payment' });
-    }
-
-    const businessId = meta.businessId;
-    const plan = meta.plan;
-    const billing = meta.interval === 'yearly' ? 'yearly' : 'monthly';
-
-    if (!businessId || !plan || !VERIFY_PLANS.has(plan)) {
-      return res.json({ success: false, message: 'Invalid subscription data' });
-    }
-
-    const expected = amountNairaFor(plan, billing);
-    const paid = Number(response.data.amount) / 100;
-    if (!expected || Math.abs(paid - expected) > 0.02) {
-      console.error('Subscription verify amount mismatch', { reference, expected, paid, plan, billing });
-      return res.json({ success: false, message: 'Payment amount does not match plan' });
-    }
-
-    const { error: upErr } = await supabase.from('businesses').update({ plan }).eq('id', businessId);
-    if (upErr) {
-      console.error('Subscription verify DB error:', upErr);
-      return res.status(500).json({ success: false, message: 'Failed to update subscription' });
-    }
-
-    return res.json({ success: true, plan, message: 'Subscription activated' });
+    return res.json({ success: false, message: lastMessage });
   } catch (err) {
     console.error('Subscription verify error:', err);
     return res.status(500).json({ success: false, message: 'Failed to verify payment' });
+  }
+});
+
+/** When redirect drops ?reference=, recover the latest successful sub_* charge for this business. */
+router.get('/recover', requireBusinessAuth, async (req, res) => {
+  try {
+    const businessId = req.businessId;
+    const { data: business, error } = await supabase
+      .from('businesses')
+      .select('id, email, plan, payment_provider')
+      .eq('id', businessId)
+      .single();
+
+    if (error || !business) {
+      return res.status(404).json({ success: false, message: 'Business not found' });
+    }
+
+    const provider = normalizeProvider(business.payment_provider);
+    if (provider === 'monnify') {
+      return res.json({
+        success: false,
+        message: 'Missing payment reference. If you were charged, open Payment & pricing from your dashboard — your plan may already be active.'
+      });
+    }
+
+    if (!appPaystack) {
+      return res.status(503).json({ success: false, message: 'Payment not configured' });
+    }
+
+    const queryRef = String(req.query?.reference || '').trim();
+    if (queryRef) {
+      const verifyRes = await appPaystack.transaction.verify({ reference: queryRef });
+      if (verifyRes?.status && verifyRes?.data?.status === 'success') {
+        const result = await activateSubscriptionFromCharge(verifyRes.data);
+        if (result.ok) {
+          return res.json({
+            success: true,
+            plan: result.plan,
+            reference: queryRef,
+            message: 'Subscription activated',
+            recovered: true
+          });
+        }
+      }
+    }
+
+    const listRes = await appPaystack.transaction.list({ perPage: 50, status: 'success' });
+    const rows = Array.isArray(listRes?.data)
+      ? listRes.data
+      : (Array.isArray(listRes?.data?.data) ? listRes.data.data : []);
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+
+    const candidate = rows.find((tx) => {
+      const ref = String(tx?.reference || '');
+      if (!ref.startsWith('sub_') || tx?.status !== 'success') return false;
+      if (!subReferenceMatchesBusiness(ref, businessId)) return false;
+      const paidAt = tx?.paid_at || tx?.paidAt || tx?.transaction_date;
+      if (paidAt) {
+        const t = new Date(paidAt).getTime();
+        if (!Number.isNaN(t) && t < cutoff) return false;
+      }
+      const meta = normalizeMetadata(tx?.metadata);
+      return meta.type === 'subscription' || meta.plan || ref.startsWith('sub_');
+    });
+
+    if (!candidate?.reference) {
+      return res.json({
+        success: false,
+        message: 'Missing payment reference. If you were charged, open Payment & pricing from your dashboard — your plan may already be active.'
+      });
+    }
+
+    const verifyRes = await appPaystack.transaction.verify({ reference: candidate.reference });
+    if (!verifyRes?.status || !verifyRes?.data) {
+      return res.json({ success: false, message: 'Payment not successful' });
+    }
+
+    const result = await activateSubscriptionFromCharge(verifyRes.data);
+    if (!result.ok) {
+      return res.json({ success: false, message: result.message || 'Payment not successful' });
+    }
+
+    return res.json({
+      success: true,
+      plan: result.plan,
+      reference: candidate.reference,
+      message: 'Subscription activated',
+      recovered: true
+    });
+  } catch (err) {
+    console.error('Subscription recover error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to recover payment' });
+  }
+});
+
+router.get('/status', requireBusinessAuth, async (req, res) => {
+  try {
+    const status = await getSubscriptionStatus(req.businessId);
+    if (!status) return res.status(404).json({ error: 'Business not found' });
+    return res.json(status);
+  } catch (err) {
+    console.error('Subscription status error:', err);
+    return res.status(500).json({ error: 'Failed to load subscription status' });
+  }
+});
+
+/** Paystack hosted page to update subscription card on file */
+router.get('/manage-payment-link', requireBusinessAuth, async (req, res) => {
+  try {
+    const result = await getManagePaymentUrlForBusiness(req.businessId);
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    return res.json({ link: result.link });
+  } catch (err) {
+    console.error('Manage payment link error:', err);
+    return res.status(500).json({ error: 'Failed to get manage payment link' });
   }
 });
 
@@ -182,28 +303,16 @@ router.post('/cancel', requireBusinessAuth, async (req, res) => {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    const { data: business, error: fetchErr } = await supabase
-      .from('businesses')
-      .select('id, plan')
-      .eq('id', businessId)
-      .single();
-    if (fetchErr || !business) {
-      return res.status(404).json({ error: 'Business not found' });
-    }
-    if (!business.plan || business.plan === 'free') {
-      return res.json({ success: true, plan: 'free', message: 'Your plan is already Free.' });
+    const result = await cancelBusinessSubscription(businessId);
+    if (!result.ok) {
+      return res.status(400).json({ error: result.error || 'Failed to cancel subscription' });
     }
 
-    const { error: upErr } = await supabase
-      .from('businesses')
-      .update({ plan: 'free' })
-      .eq('id', businessId);
-    if (upErr) {
-      console.error('Subscription cancel DB error:', upErr);
-      return res.status(500).json({ error: 'Failed to cancel subscription' });
-    }
-
-    return res.json({ success: true, plan: 'free', message: 'Subscription cancelled. Your account is now on the Free plan.' });
+    return res.json({
+      success: true,
+      plan: result.plan || undefined,
+      message: result.message
+    });
   } catch (err) {
     console.error('Subscription cancel error:', err);
     return res.status(500).json({ error: 'Failed to cancel subscription' });

@@ -2,23 +2,53 @@ const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../database');
 const { getBusinessPlan, canAccessAnalytics } = require('./plans');
 
-const supabase = getDb();
+function db() {
+  return getDb();
+}
 
 function normalizeCatalogMode(value) {
   return value === 'ticketing' ? 'ticketing' : 'menu';
 }
 
 let presetsTableAvailable = null;
+let presetsTableCheckHint = null;
+
+function classifyPresetsTableError(error) {
+  const code = String(error?.code || '');
+  const msg = String(error?.message || '');
+  if (code === '42P01' || /relation.*menu_presets.*does not exist/i.test(msg)) {
+    return 'migration_missing';
+  }
+  if (/schema cache/i.test(msg) || code === 'PGRST204' || code === 'PGRST205') {
+    return 'schema_cache';
+  }
+  if (/permission denied/i.test(msg) || code === '42501') {
+    return 'permission_denied';
+  }
+  return 'unknown';
+}
 
 async function checkPresetsTable() {
-  if (presetsTableAvailable !== null) return presetsTableAvailable;
-  const { error } = await supabase.from('menu_presets').select('id').limit(1);
-  presetsTableAvailable = !error;
-  return presetsTableAvailable;
+  if (presetsTableAvailable === true) return true;
+  const { error } = await db().from('menu_presets').select('id').limit(1);
+  if (!error) {
+    presetsTableAvailable = true;
+    presetsTableCheckHint = null;
+    return true;
+  }
+  const kind = classifyPresetsTableError(error);
+  presetsTableCheckHint = kind;
+  console.warn('[menuPresets] menu_presets check failed:', error?.message || error, { kind });
+  if (kind === 'migration_missing') {
+    presetsTableAvailable = false;
+    return false;
+  }
+  // Do not permanently cache false for schema-cache / transient errors.
+  return false;
 }
 
 async function getBusinessCatalogMode(businessId) {
-  const { data, error } = await supabase
+  const { data, error } = await db()
     .from('businesses')
     .select('business_mode')
     .eq('id', businessId)
@@ -31,7 +61,14 @@ async function ensureDefaultPresets(businessId, catalogMode) {
   const mode = normalizeCatalogMode(catalogMode);
   if (!(await checkPresetsTable())) return null;
 
-  const { data: existing } = await supabase
+  const { data: businessRow, error: businessError } = await db()
+    .from('businesses')
+    .select('id')
+    .eq('id', businessId)
+    .maybeSingle();
+  if (businessError || !businessRow) return null;
+
+  const { data: existing } = await db()
     .from('menu_presets')
     .select('id, name, preset_mode, display_order, created_at')
     .eq('business_id', businessId)
@@ -42,7 +79,7 @@ async function ensureDefaultPresets(businessId, catalogMode) {
 
   const id = uuidv4();
   const name = mode === 'ticketing' ? 'Main tickets' : 'Main menu';
-  const { data: created, error } = await supabase
+  const { data: created, error } = await db()
     .from('menu_presets')
     .insert({
       id,
@@ -59,14 +96,14 @@ async function ensureDefaultPresets(businessId, catalogMode) {
     return null;
   }
 
-  const { data: biz } = await supabase
+  const { data: biz } = await db()
     .from('businesses')
     .select('active_menu_preset_id')
     .eq('id', businessId)
     .maybeSingle();
 
   if (!biz?.active_menu_preset_id) {
-    await supabase
+    await db()
       .from('businesses')
       .update({ active_menu_preset_id: id })
       .eq('id', businessId);
@@ -80,14 +117,14 @@ async function resolveActivePresetId(businessId, catalogMode) {
   const mode = normalizeCatalogMode(catalogMode);
   await ensureDefaultPresets(businessId, mode);
 
-  const { data: biz } = await supabase
+  const { data: biz } = await db()
     .from('businesses')
     .select('active_menu_preset_id')
     .eq('id', businessId)
     .maybeSingle();
 
   if (biz?.active_menu_preset_id) {
-    const { data: active } = await supabase
+    const { data: active } = await db()
       .from('menu_presets')
       .select('id, preset_mode')
       .eq('id', biz.active_menu_preset_id)
@@ -98,7 +135,7 @@ async function resolveActivePresetId(businessId, catalogMode) {
     }
   }
 
-  const { data: fallback } = await supabase
+  const { data: fallback } = await db()
     .from('menu_presets')
     .select('id')
     .eq('business_id', businessId)
@@ -122,16 +159,52 @@ function formatPresetRow(row, isActive) {
   };
 }
 
+function presetsUnavailablePayload() {
+  if (presetsTableCheckHint === 'schema_cache') {
+    return {
+      presets: [],
+      activePresetId: null,
+      presetsEnabled: false,
+      presetsHint:
+        'Supabase schema cache is stale. In SQL Editor run: NOTIFY pgrst, \'reload schema\'; then restart the API.'
+    };
+  }
+  if (presetsTableCheckHint === 'permission_denied') {
+    return {
+      presets: [],
+      activePresetId: null,
+      presetsEnabled: false,
+      presetsHint:
+        'Server cannot read menu_presets. Use SUPABASE_SERVICE_ROLE_KEY (not anon) on the API, or apply migration 017_menu_presets_rls.sql.'
+    };
+  }
+  if (presetsTableCheckHint === 'migration_missing') {
+    return {
+      presets: [],
+      activePresetId: null,
+      presetsEnabled: false,
+      presetsHint: 'Apply migration 016_menu_catalog_presets.sql on the same Supabase project as your API env vars.'
+    };
+  }
+  return {
+    presets: [],
+    activePresetId: null,
+    presetsEnabled: false,
+    presetsHint:
+      'Could not reach menu_presets. Confirm migration 016 on this project, reload schema (NOTIFY pgrst), and restart the API.'
+  };
+}
+
 async function listPresetsForBusiness(businessId, catalogMode) {
   const mode = normalizeCatalogMode(catalogMode);
   if (!(await checkPresetsTable())) {
-    return { presets: [], activePresetId: null, presetsEnabled: false };
+    return presetsUnavailablePayload();
   }
 
   await ensureDefaultPresets(businessId, mode);
   const activePresetId = await resolveActivePresetId(businessId, mode);
 
-  const { data: rows, error } = await supabase
+  const { data: rows, error } = await db()
     .from('menu_presets')
     .select('id, business_id, name, preset_mode, display_order, created_at')
     .eq('business_id', businessId)
@@ -140,7 +213,8 @@ async function listPresetsForBusiness(businessId, catalogMode) {
 
   if (error) {
     console.error('listPresetsForBusiness', error);
-    return { presets: [], activePresetId: null, presetsEnabled: false };
+    presetsTableCheckHint = classifyPresetsTableError(error);
+    return presetsUnavailablePayload();
   }
 
   return {
@@ -167,7 +241,7 @@ async function createPreset(businessId, name, catalogMode) {
 
   const mode = normalizeCatalogMode(catalogMode);
   const trimmed = String(name || '').trim() || 'New preset';
-  const { data: maxRow } = await supabase
+  const { data: maxRow } = await db()
     .from('menu_presets')
     .select('display_order')
     .eq('business_id', businessId)
@@ -178,7 +252,7 @@ async function createPreset(businessId, name, catalogMode) {
 
   const id = uuidv4();
   const displayOrder = (maxRow?.display_order ?? -1) + 1;
-  const { data, error } = await supabase
+  const { data, error } = await db()
     .from('menu_presets')
     .insert({
       id,
@@ -205,7 +279,7 @@ async function renamePreset(businessId, presetId, name) {
   const trimmed = String(name || '').trim();
   if (!trimmed) return { error: 'Name is required', status: 400 };
 
-  const { data, error } = await supabase
+  const { data, error } = await db()
     .from('menu_presets')
     .update({ name: trimmed.slice(0, 80), updated_at: new Date().toISOString() })
     .eq('id', presetId)
@@ -222,7 +296,7 @@ async function activatePreset(businessId, presetId) {
   const gate = await requireGrowthPlus(businessId);
   if (gate.error) return { error: gate.error, status: 403 };
 
-  const { data: preset, error } = await supabase
+  const { data: preset, error } = await db()
     .from('menu_presets')
     .select('id, preset_mode')
     .eq('id', presetId)
@@ -232,7 +306,7 @@ async function activatePreset(businessId, presetId) {
   if (error || !preset) return { error: 'Preset not found', status: 404 };
 
   const catalogMode = normalizeCatalogMode(preset.preset_mode);
-  const { error: updErr } = await supabase
+  const { error: updErr } = await db()
     .from('businesses')
     .update({ active_menu_preset_id: presetId })
     .eq('id', businessId);
@@ -249,7 +323,7 @@ async function deletePreset(businessId, presetId) {
   const gate = await requireGrowthPlus(businessId);
   if (gate.error) return { error: gate.error, status: 403 };
 
-  const { data: preset } = await supabase
+  const { data: preset } = await db()
     .from('menu_presets')
     .select('id, preset_mode')
     .eq('id', presetId)
@@ -258,7 +332,7 @@ async function deletePreset(businessId, presetId) {
 
   if (!preset) return { error: 'Preset not found', status: 404 };
 
-  const { count } = await supabase
+  const { count } = await db()
     .from('menu_presets')
     .select('id', { count: 'exact', head: true })
     .eq('business_id', businessId)
@@ -273,10 +347,10 @@ async function deletePreset(businessId, presetId) {
     return { error: 'Switch to another live preset before deleting this one.', status: 400 };
   }
 
-  await supabase.from('menu_items').delete().eq('business_id', businessId).eq('preset_id', presetId);
-  await supabase.from('categories').delete().eq('business_id', businessId).eq('preset_id', presetId);
+  await db().from('menu_items').delete().eq('business_id', businessId).eq('preset_id', presetId);
+  await db().from('categories').delete().eq('business_id', businessId).eq('preset_id', presetId);
 
-  const { error } = await supabase.from('menu_presets').delete().eq('id', presetId).eq('business_id', businessId);
+  const { error } = await db().from('menu_presets').delete().eq('id', presetId).eq('business_id', businessId);
   if (error) {
     console.error('deletePreset', error);
     return { error: 'Failed to delete preset', status: 500 };
@@ -289,7 +363,7 @@ async function duplicatePreset(businessId, presetId) {
   const gate = await requireGrowthPlus(businessId);
   if (gate.error) return { error: gate.error, status: 403 };
 
-  const { data: source } = await supabase
+  const { data: source } = await db()
     .from('menu_presets')
     .select('*')
     .eq('id', presetId)
@@ -300,7 +374,7 @@ async function duplicatePreset(businessId, presetId) {
 
   const newPresetId = uuidv4();
   const newName = `${source.name} copy`.slice(0, 80);
-  const { data: maxRow } = await supabase
+  const { data: maxRow } = await db()
     .from('menu_presets')
     .select('display_order')
     .eq('business_id', businessId)
@@ -309,7 +383,7 @@ async function duplicatePreset(businessId, presetId) {
     .limit(1)
     .maybeSingle();
 
-  const { error: insErr } = await supabase.from('menu_presets').insert({
+  const { error: insErr } = await db().from('menu_presets').insert({
     id: newPresetId,
     business_id: businessId,
     name: newName,
@@ -322,7 +396,7 @@ async function duplicatePreset(businessId, presetId) {
     return { error: 'Failed to duplicate preset', status: 500 };
   }
 
-  const { data: categories } = await supabase
+  const { data: categories } = await db()
     .from('categories')
     .select('*')
     .eq('business_id', businessId)
@@ -332,7 +406,7 @@ async function duplicatePreset(businessId, presetId) {
   for (const cat of categories || []) {
     const newCatId = uuidv4();
     categoryIdMap.set(cat.id, newCatId);
-    await supabase.from('categories').insert({
+    await db().from('categories').insert({
       id: newCatId,
       business_id: businessId,
       name: cat.name,
@@ -342,14 +416,14 @@ async function duplicatePreset(businessId, presetId) {
     });
   }
 
-  const { data: items } = await supabase
+  const { data: items } = await db()
     .from('menu_items')
     .select('*')
     .eq('business_id', businessId)
     .eq('preset_id', presetId);
 
   for (const item of items || []) {
-    await supabase.from('menu_items').insert({
+    await db().from('menu_items').insert({
       id: uuidv4(),
       business_id: businessId,
       category_id: item.category_id ? categoryIdMap.get(item.category_id) || null : null,
@@ -386,6 +460,97 @@ function matchesPreset(row, presetId) {
   return row.preset_id === presetId;
 }
 
+async function ensureCatalogPresetsForProfiles(businessId, profiles, catalogMode) {
+  const mode = normalizeCatalogMode(catalogMode);
+  if (!Array.isArray(profiles) || !profiles.length) return profiles || [];
+  if (!(await checkPresetsTable())) return profiles;
+
+  await ensureDefaultPresets(businessId, mode);
+
+  const { data: allPresets } = await db()
+    .from('menu_presets')
+    .select('id, name, display_order')
+    .eq('business_id', businessId)
+    .eq('preset_mode', mode)
+    .order('display_order', { ascending: true });
+
+  const presetPool = [...(allPresets || [])];
+  const usedPresetIds = new Set();
+  const result = [];
+
+  for (let i = 0; i < profiles.length; i += 1) {
+    const profile = profiles[i];
+    let presetId = profile.catalogPresetId || null;
+
+    if (presetId && presetPool.some((p) => p.id === presetId)) {
+      usedPresetIds.add(presetId);
+      result.push({ ...profile, catalogPresetId: presetId });
+      continue;
+    }
+
+    const unused = presetPool.filter((p) => !usedPresetIds.has(p.id));
+    const byName = unused.find((p) => String(p.name || '').trim() === String(profile.name || '').trim());
+    if (byName) {
+      presetId = byName.id;
+      usedPresetIds.add(presetId);
+      result.push({ ...profile, catalogPresetId: presetId });
+      continue;
+    }
+
+    if ((profile.isDefault || i === 0) && unused.length > 0) {
+      presetId = unused[0].id;
+      usedPresetIds.add(presetId);
+      result.push({ ...profile, catalogPresetId: presetId });
+      continue;
+    }
+
+    const newId = uuidv4();
+    const displayOrder =
+      presetPool.reduce((max, p) => Math.max(max, p.display_order ?? 0), -1) + 1 + result.length;
+    const { error } = await db().from('menu_presets').insert({
+      id: newId,
+      business_id: businessId,
+      name: String(profile.name || (mode === 'ticketing' ? 'Tickets' : 'Menu')).slice(0, 80),
+      preset_mode: mode,
+      display_order: displayOrder
+    });
+    if (!error) {
+      presetId = newId;
+      presetPool.push({ id: newId, name: profile.name, display_order: displayOrder });
+      usedPresetIds.add(newId);
+    }
+    result.push({ ...profile, catalogPresetId: presetId });
+  }
+
+  return result;
+}
+
+async function resolvePresetIdFromStorefront(businessId, storefrontSlugOrId, eventSlug) {
+  const { data: biz } = await db()
+    .from('businesses')
+    .select('storefront_profiles, storefront_config, storefront_details, business_mode')
+    .eq('id', businessId)
+    .maybeSingle();
+  if (!biz) return null;
+
+  const { normalizeStorefrontProfiles, findProfileBySlugOrId, findProfileForEvent } = require('./storefrontProfiles');
+  const mode = normalizeCatalogMode(biz.business_mode);
+  let profiles = normalizeStorefrontProfiles(biz);
+  profiles = await ensureCatalogPresetsForProfiles(businessId, profiles, mode);
+
+  let profile = null;
+  if (eventSlug) {
+    profile = findProfileForEvent(profiles, eventSlug)?.profile || null;
+  }
+  if (!profile && storefrontSlugOrId) {
+    profile = findProfileBySlugOrId(profiles, storefrontSlugOrId);
+  }
+  if (!profile) {
+    profile = profiles.find((p) => p.isDefault) || profiles[0] || null;
+  }
+  return profile?.catalogPresetId || (await resolveActivePresetId(businessId, mode));
+}
+
 module.exports = {
   normalizeCatalogMode,
   checkPresetsTable,
@@ -398,5 +563,7 @@ module.exports = {
   deletePreset,
   duplicatePreset,
   matchesPreset,
+  ensureCatalogPresetsForProfiles,
+  resolvePresetIdFromStorefront,
   requireGrowthPlus
 };

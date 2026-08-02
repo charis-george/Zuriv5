@@ -1,9 +1,16 @@
 import type { MutableRefObject } from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Html5Qrcode } from 'html5-qrcode'
 import { organizationJsonLd, usePageSeo } from '../lib/seo'
 import { apiUrl } from '../lib/apiBase'
+import { getBusinessToken, isBusinessLoggedIn } from '../lib/businessAuthStorage'
+import {
+  clearScannerSession,
+  getScannerBusinessName,
+  getTicketVerifyAuthToken,
+  isScannerConnected
+} from '../lib/scannerAuthStorage'
 
 /**
  * html5-qrcode (mebjas/html5-qrcode): only one active scanner should own a given DOM node.
@@ -16,10 +23,20 @@ import { apiUrl } from '../lib/apiBase'
 function parseBusinessIdFromText(text: string): string | null {
   const trimmed = text.trim()
   const fromPath = trimmed.match(/\/order\/([^/?#]+)/i)
-  if (fromPath?.[1]) return fromPath[1]
+  if (fromPath?.[1]) {
+    let segment = fromPath[1]
+    try {
+      segment = decodeURIComponent(segment)
+    } catch {
+      /* keep raw */
+    }
+    const cleaned = segment.replace(/[\s\u200B-\u200D\uFEFF]/g, '')
+    return cleaned || null
+  }
+  const cleaned = trimmed.replace(/[\s\u200B-\u200D\uFEFF]/g, '')
   const uuidLike = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-  if (uuidLike.test(trimmed)) return trimmed
-  if (trimmed.length === 36 && trimmed.includes('-')) return trimmed
+  if (uuidLike.test(cleaned)) return cleaned
+  if (cleaned.length === 36 && cleaned.includes('-')) return cleaned
   return null
 }
 
@@ -171,16 +188,27 @@ function QRScanner(): JSX.Element {
     title: string
     message: string
     meta?: string
+    guestName?: string
+    ticketType?: string
   } | null>(null)
+  const [businessSignedIn, setBusinessSignedIn] = useState(() => isBusinessLoggedIn())
+  const [scannerConnected, setScannerConnected] = useState(() => isScannerConnected())
+  const [scannerBusinessName, setScannerBusinessName] = useState(() => getScannerBusinessName() || '')
   const ticketFromQuery = new URLSearchParams(location.search).get('ticket')?.trim() || ''
 
+  useEffect(() => {
+    setBusinessSignedIn(isBusinessLoggedIn())
+    setScannerConnected(isScannerConnected())
+    setScannerBusinessName(getScannerBusinessName() || '')
+  }, [location.pathname, location.search])
+
   const verifyTicketToken = async (token: string): Promise<void> => {
-    const businessToken = localStorage.getItem('zuri_business_token')
-    if (!businessToken) {
+    const authToken = getTicketVerifyAuthToken()
+    if (!authToken) {
       setTicketVerification({
         status: 'error',
-        title: 'Business login required',
-        message: 'Log in with your ZURI business account on this device before verifying ticket receipts.'
+        title: 'Scanner not connected',
+        message: 'Connect this phone with an access code from your organizer, or log in with your full ZURI business account.'
       })
       return
     }
@@ -196,7 +224,7 @@ function QRScanner(): JSX.Element {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${businessToken}`
+          Authorization: `Bearer ${authToken}`
         },
         body: JSON.stringify({ token })
       })
@@ -204,20 +232,31 @@ function QRScanner(): JSX.Element {
       const data = await res.json().catch(() => ({}))
       if (res.ok && data?.success) {
         const amount = Number(data?.order?.totalAmount || 0)
+        const guestName = data?.order?.customerName || 'Guest'
+        const ticketType = data?.ticket?.typeName || 'Ticket'
+        const ticketNumber = data?.ticket?.number
+        const ticketLabel =
+          ticketNumber != null ? `Ticket ${ticketNumber}` : ticketType
         setTicketVerification({
           status: 'confirmed',
-          title: 'Ticket confirmed',
-          message: `${data?.order?.customerName || 'Guest'} has a valid paid ticket. This QR has now been locked and cannot be reused.`,
+          title: guestName,
+          guestName,
+          ticketType,
+          message: `${ticketLabel} confirmed — ${ticketType}. This QR is now locked and cannot be reused.`,
           meta: `${amount > 0 ? `₦${amount.toFixed(2)}` : 'Paid'}${data?.business?.name ? ` · ${data.business.name}` : ''}`
         })
         return
       }
 
       if (res.status === 409 && data?.status === 'used') {
+        const guestName = data?.order?.customerName || 'Guest'
+        const ticketType = data?.ticket?.typeName || 'Ticket'
         setTicketVerification({
           status: 'used',
-          title: 'Ticket already used',
-          message: 'This receipt QR has already been scanned and cannot be used again.',
+          title: guestName,
+          guestName,
+          ticketType,
+          message: `${ticketType} — this receipt QR was already scanned and cannot be used again.`,
           meta: data?.order?.scannedAt ? `First confirmed: ${new Date(data.order.scannedAt).toLocaleString()}` : undefined
         })
         return
@@ -398,6 +437,49 @@ function QRScanner(): JSX.Element {
                 ? 'Checking this ticket receipt for a logged-in business account.'
                 : 'Point your camera at a menu QR code or a ticket receipt QR.'}
             </p>
+            {businessSignedIn ? (
+              <p className="mt-2 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-1.5 inline-block">
+                Business account signed in — ticket QR codes will verify automatically.
+              </p>
+            ) : scannerConnected ? (
+              <p className="mt-2 text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-1.5 inline-block">
+                Scanner connected{scannerBusinessName ? ` for ${scannerBusinessName}` : ''} — ticket QR codes will verify
+                automatically.
+              </p>
+            ) : (
+              <div className="mt-3 text-xs text-gray-600 space-y-1">
+                <p>
+                  Verifying tickets?{' '}
+                  <Link
+                    to="/scan/connect"
+                    className="font-medium text-zuri-orange hover:underline"
+                  >
+                    Connect with an access code
+                  </Link>{' '}
+                  or{' '}
+                  <Link
+                    to="/business/login?redirect=%2Fscan"
+                    className="font-medium text-zuri-orange hover:underline"
+                  >
+                    log in with your business account
+                  </Link>
+                  .
+                </p>
+              </div>
+            )}
+            {scannerConnected && !businessSignedIn ? (
+              <button
+                type="button"
+                onClick={() => {
+                  clearScannerSession()
+                  setScannerConnected(false)
+                  setScannerBusinessName('')
+                }}
+                className="mt-2 text-[11px] text-gray-500 hover:text-zuri-black underline"
+              >
+                Disconnect scanner
+              </button>
+            ) : null}
           </div>
 
           {scanError && (
@@ -419,6 +501,9 @@ function QRScanner(): JSX.Element {
               }`}
             >
               <p className="text-sm font-semibold text-zuri-black">{ticketVerification.title}</p>
+              {ticketVerification.ticketType ? (
+                <p className="text-base font-bold text-zuri-orange mt-1">{ticketVerification.ticketType}</p>
+              ) : null}
               <p className="text-sm text-gray-700 mt-1">{ticketVerification.message}</p>
               {ticketVerification.meta ? (
                 <p className="text-xs text-gray-500 mt-2">{ticketVerification.meta}</p>

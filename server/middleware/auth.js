@@ -1,33 +1,46 @@
 const jwt = require('jsonwebtoken');
-
-const BUSINESS_JWT_SECRET = process.env.BUSINESS_JWT_SECRET || process.env.JWT_SECRET || (process.env.NODE_ENV !== 'production' ? 'zuri-business-secret-change-in-production' : null);
-
-// In production we prefer env-provided secrets, but do not hard-crash the whole server
-// if secrets are missing (deploys can momentarily start without env).
-if (!BUSINESS_JWT_SECRET) {
-  console.warn('[ZURI] Missing BUSINESS_JWT_SECRET/JWT_SECRET. Using a temporary in-memory fallback; auth may fail until env is set.');
-}
+const { getJwtSecret } = require('../lib/jwtSecret');
+const { normalizeUuid } = require('../lib/normalizeUuid');
 
 function signBusinessToken(businessId) {
-  return jwt.sign(
-    { sub: businessId },
-    BUSINESS_JWT_SECRET || 'zuri-missing-jwt-secret',
-    { expiresIn: '7d' }
-  );
+  const sub = normalizeUuid(businessId) || businessId;
+  return jwt.sign({ sub }, getJwtSecret(), { expiresIn: '7d' });
+}
+
+/** Limited token for ticket scanning only — no dashboard access. */
+function signScannerToken(businessId, scannerCodeId) {
+  const sub = normalizeUuid(businessId) || businessId;
+  return jwt.sign({ sub, scope: 'scanner', sid: scannerCodeId }, getJwtSecret(), {
+    expiresIn: '30d'
+  });
+}
+
+function readBearerToken(req) {
+  const auth = req.headers.authorization;
+  return auth && auth.startsWith('Bearer ') ? auth.slice(7) : null;
+}
+
+function attachBusinessFromPayload(req, payload) {
+  if (!payload?.sub) return false;
+  req.businessId = normalizeUuid(payload.sub) || payload.sub;
+  req.isScannerSession = payload.scope === 'scanner';
+  req.scannerCodeId = payload.sid || null;
+  return true;
 }
 
 function requireBusinessAuth(req, res, next) {
-  const auth = req.headers.authorization;
-  const token = auth && auth.startsWith('Bearer ') ? auth.slice(7) : null;
+  const token = readBearerToken(req);
   if (!token) {
     return res.status(401).json({ error: 'Authentication required' });
   }
   try {
-    const payload = jwt.verify(token, BUSINESS_JWT_SECRET || 'zuri-missing-jwt-secret');
-    if (!payload.sub) {
+    const payload = jwt.verify(token, getJwtSecret());
+    if (!attachBusinessFromPayload(req, payload)) {
       return res.status(401).json({ error: 'Invalid token' });
     }
-    req.businessId = payload.sub;
+    if (req.isScannerSession) {
+      return res.status(403).json({ error: 'Scanner access cannot use this endpoint. Log in with your full business account.' });
+    }
     next();
   } catch (err) {
     if (err.name === 'TokenExpiredError') {
@@ -37,10 +50,30 @@ function requireBusinessAuth(req, res, next) {
   }
 }
 
+/** Full business login or scanner-only session (ticket verify). */
+function requireBusinessOrScannerAuth(req, res, next) {
+  const token = readBearerToken(req);
+  if (!token) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  try {
+    const payload = jwt.verify(token, getJwtSecret());
+    if (!attachBusinessFromPayload(req, payload)) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+    next();
+  } catch (err) {
+    if (err.name === 'TokenExpiredError') {
+      return res.status(401).json({ error: 'Session expired. Please connect again or log in.' });
+    }
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+}
+
 function verifyBusinessToken(token) {
   if (!token) return null;
   try {
-    const payload = jwt.verify(token, BUSINESS_JWT_SECRET || 'zuri-missing-jwt-secret');
+    const payload = jwt.verify(token, getJwtSecret());
     return payload && payload.sub ? payload : null;
   } catch {
     return null;
@@ -49,6 +82,8 @@ function verifyBusinessToken(token) {
 
 module.exports = {
   signBusinessToken,
+  signScannerToken,
   requireBusinessAuth,
+  requireBusinessOrScannerAuth,
   verifyBusinessToken
 };

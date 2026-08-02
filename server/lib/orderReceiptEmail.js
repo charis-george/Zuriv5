@@ -1,43 +1,232 @@
 const { getDb } = require('../database');
-const { ensureTicketReceiptQrForOrder } = require('./ticketReceiptQr');
+const {
+  ensureTicketReceiptQrsForOrder,
+  generateTicketReceiptQrImagePng
+} = require('./ticketReceiptQr');
+const { sendResendEmail, isResendConfigured } = require('./resendMail');
+
+// After crash/deploy, reclaim faster so undelivered tickets are not stuck for minutes.
+const SEND_LOCK_STALE_MS = Math.max(60_000, Number(process.env.ORDER_RECEIPT_LOCK_STALE_MS) || 2 * 60_000);
+const LOCK_RELEASE_RETRIES = Math.max(2, Number(process.env.ORDER_RECEIPT_LOCK_RELEASE_RETRIES) || 5);
 
 function getSupabase() {
   return getDb();
 }
 
-const RESEND_FROM =
-  process.env.RESEND_FROM || process.env.SMTP_FROM || 'ZURI <onboarding@resend.dev>';
-
-function getResendApiKey() {
-  const key = process.env.RESEND_API_KEY;
-  if (!key || typeof key !== 'string' || !key.trim()) return null;
-  return key.trim();
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function sendViaResendApi(apiKey, payload, timeoutMs = 10_000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload),
-      signal: controller.signal
-    });
-    if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      const err = new Error(
-        `Resend API ${response.status}${text ? `: ${text.slice(0, 300)}` : ''}`
-      );
-      err.code = `RESEND_HTTP_${response.status}`;
-      throw err;
-    }
-  } finally {
-    clearTimeout(timer);
+/** Reasons that will never succeed by retrying — sweep must stop re-enqueueing. */
+const PERMANENT_RECEIPT_REASONS = new Set([
+  'no_tickets',
+  'business_not_found',
+  'order_not_found',
+  'no_recipients',
+  'missing_resend_key',
+  'no_customer_email'
+]);
+
+function isPermanentReceiptReason(reason) {
+  return PERMANENT_RECEIPT_REASONS.has(String(reason || ''));
+}
+
+function formatReceiptErrorMessage(reason, cause) {
+  const body = String(cause || reason || 'unknown').slice(0, 460);
+  if (isPermanentReceiptReason(reason)) {
+    return `permanent:${reason}|${body}`.slice(0, 500);
   }
+  return body.slice(0, 500);
+}
+
+function skipped(reason, retryable = false, cause = null) {
+  return {
+    ok: false,
+    skipped: true,
+    reason,
+    retryable: isPermanentReceiptReason(reason) ? false : retryable,
+    cause: cause || reason,
+    permanent: isPermanentReceiptReason(reason)
+  };
+}
+
+async function claimReceiptSendLock(orderId) {
+  const supabase = getSupabase();
+  const nowIso = new Date().toISOString();
+  const staleBefore = new Date(Date.now() - SEND_LOCK_STALE_MS).toISOString();
+
+  let claimed = null;
+  let claimError = null;
+
+  try {
+    ({ data: claimed, error: claimError } = await supabase
+      .from('orders')
+      .update({ receipt_sending_at: nowIso })
+      .eq('id', orderId)
+      .is('receipt_sent_at', null)
+      .is('receipt_sending_at', null)
+      .select('id,payment_status,receipt_sent_at,receipt_send_attempts')
+      .maybeSingle());
+  } catch (err) {
+    claimError = err;
+  }
+
+  if (claimError) {
+    console.error('[ZURI] Receipt email lock claim failed', {
+      orderId,
+      reason: 'lock_claim_error',
+      cause: claimError.message || String(claimError)
+    });
+  }
+
+  if (!claimed) {
+    try {
+      ({ data: claimed, error: claimError } = await supabase
+        .from('orders')
+        .update({ receipt_sending_at: nowIso })
+        .eq('id', orderId)
+        .is('receipt_sent_at', null)
+        .lt('receipt_sending_at', staleBefore)
+        .select('id,payment_status,receipt_sent_at,receipt_send_attempts')
+        .maybeSingle());
+    } catch (err) {
+      claimError = err;
+    }
+
+    if (claimError) {
+      console.error('[ZURI] Receipt email stale lock reclaim failed', {
+        orderId,
+        reason: 'stale_lock_reclaim_error',
+        cause: claimError.message || String(claimError)
+      });
+    }
+  }
+
+  if (claimed) {
+    const attempts = (Number(claimed.receipt_send_attempts) || 0) + 1;
+    const { error: attemptsError } = await supabase
+      .from('orders')
+      .update({ receipt_send_attempts: attempts })
+      .eq('id', orderId);
+    if (attemptsError) {
+      console.warn('[ZURI] Receipt email attempt counter update failed', {
+        orderId,
+        reason: 'attempt_counter_error',
+        cause: attemptsError.message || String(attemptsError)
+      });
+    }
+    return { claimed: true, order: { ...claimed, receipt_send_attempts: attempts } };
+  }
+
+  // If both claim attempts failed with a transport error, retry later — do not treat as in_flight.
+  if (claimError) {
+    return {
+      claimed: false,
+      result: skipped(
+        'lock_claim_error',
+        true,
+        claimError.message || String(claimError)
+      )
+    };
+  }
+
+  let current = null;
+  let currentError = null;
+  try {
+    ({ data: current, error: currentError } = await supabase
+      .from('orders')
+      .select('receipt_sent_at,receipt_sending_at,receipt_email_error,payment_status')
+      .eq('id', orderId)
+      .maybeSingle());
+  } catch (err) {
+    currentError = err;
+  }
+
+  if (currentError) {
+    console.error('[ZURI] Receipt email lock status lookup failed', {
+      orderId,
+      reason: 'lock_status_lookup_error',
+      cause: currentError.message || String(currentError)
+    });
+    return {
+      claimed: false,
+      result: skipped(
+        'lock_status_lookup_error',
+        true,
+        currentError.message || String(currentError)
+      )
+    };
+  }
+
+  if (!current) {
+    return {
+      claimed: false,
+      result: skipped('order_not_found', true, 'order row not found while claiming receipt send lock')
+    };
+  }
+  if (current.receipt_sent_at) {
+    return {
+      claimed: false,
+      result: skipped(
+        'already_sent',
+        false,
+        `receipt_sent_at already set (${current.receipt_sent_at})`
+      )
+    };
+  }
+  return {
+    claimed: false,
+    result: skipped(
+      'in_flight',
+      true,
+      `another send holds receipt_sending_at=${current.receipt_sending_at}` +
+        (current.receipt_email_error ? `; last_error=${current.receipt_email_error}` : '')
+    )
+  };
+}
+
+async function releaseReceiptSendLock(orderId, { sent = false, errorMessage = null } = {}) {
+  const supabase = getSupabase();
+  const updates = sent
+    ? {
+        receipt_sent_at: new Date().toISOString(),
+        receipt_sending_at: null,
+        receipt_email_error: null
+      }
+    : {
+        receipt_sending_at: null,
+        ...(errorMessage ? { receipt_email_error: String(errorMessage).slice(0, 500) } : {})
+      };
+
+  let lastError = null;
+  for (let attempt = 0; attempt < LOCK_RELEASE_RETRIES; attempt += 1) {
+    try {
+      const { error } = await supabase.from('orders').update(updates).eq('id', orderId);
+      if (!error) return { ok: true };
+      lastError = error;
+    } catch (err) {
+      lastError = err;
+    }
+    await sleep(200 * 2 ** attempt);
+  }
+
+  console.error('[ZURI] Receipt email lock release failed', {
+    orderId,
+    reason: 'lock_release_error',
+    cause: lastError?.message || String(lastError),
+    sent,
+    errorMessage,
+    retries: LOCK_RELEASE_RETRIES
+  });
+  return { ok: false, error: lastError };
+}
+
+/**
+ * Persist receipt_sent_at after Resend already accepted the message.
+ * Used when the post-send DB write fails so we never re-email the guest.
+ */
+async function forceMarkReceiptSent(orderId) {
+  return releaseReceiptSendLock(orderId, { sent: true });
 }
 
 function money(n) {
@@ -51,6 +240,18 @@ function escapeHtml(s) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/\"/g, '&quot;');
+}
+
+function ticketQrAttachmentFilename(reference, orderId, ticketNumber, ticketCount) {
+  const refSlug = String(reference || orderId)
+    .replace(/[^\w.-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+  const suffix =
+    ticketCount > 1 && ticketNumber
+      ? `-${ticketNumber}-of-${ticketCount}`
+      : '';
+  return `ticket-check-in-${refSlug || 'receipt'}${suffix}.png`;
 }
 
 function summarizeItems(items) {
@@ -88,24 +289,52 @@ async function loadOrderReceiptData(orderId) {
     .select('id,business_id,total_amount,customer_name,customer_phone,customer_email,created_at,payment_status,receipt_sent_at')
     .eq('id', orderId)
     .single();
-  if (oErr || !order) return { error: 'order_not_found' };
+  if (oErr || !order) {
+    return {
+      error: 'order_not_found',
+      cause: oErr?.message || 'order row missing for receipt load'
+    };
+  }
 
-  const { data: biz } = await supabase
+  const { data: biz, error: bizErr } = await supabase
     .from('businesses')
     .select('id,name,email,business_mode')
     .eq('id', order.business_id)
     .single();
+  if (bizErr) {
+    console.warn('[ZURI] Receipt email business load warning', {
+      orderId,
+      businessId: order.business_id,
+      reason: 'business_load_error',
+      cause: bizErr.message || String(bizErr)
+    });
+  }
 
   const { data: lines, error: liErr } = await supabase
     .from('order_items')
     .select('menu_item_id,quantity,price,special_notes')
     .eq('order_id', orderId);
-  if (liErr) return { error: 'order_items_error' };
+  if (liErr) {
+    return {
+      error: 'order_items_error',
+      cause: liErr.message || 'failed to load order_items for receipt'
+    };
+  }
 
   const ids = [...new Set((lines || []).map((l) => l.menu_item_id).filter(Boolean))];
   let nameById = {};
   if (ids.length) {
-    const { data: items } = await supabase.from('menu_items').select('id,name').in('id', ids);
+    const { data: items, error: itemsErr } = await supabase
+      .from('menu_items')
+      .select('id,name')
+      .in('id', ids);
+    if (itemsErr) {
+      console.warn('[ZURI] Receipt email menu names load warning', {
+        orderId,
+        reason: 'menu_items_load_error',
+        cause: itemsErr.message || String(itemsErr)
+      });
+    }
     nameById = (items || []).reduce((acc, m) => {
       acc[m.id] = m.name || 'Item';
       return acc;
@@ -126,37 +355,237 @@ async function loadOrderReceiptData(orderId) {
  * Best-effort: if RESEND_API_KEY is missing, does nothing.
  */
 async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
-  const resendKey = getResendApiKey();
-  if (!resendKey) return { skipped: true, reason: 'missing_resend_key' };
+  if (!isResendConfigured()) {
+    const cause = 'RESEND_API_KEY is not set on this server';
+    console.error('[ZURI] Receipt email skipped', {
+      orderId,
+      reason: 'missing_resend_key',
+      cause
+    });
+    return skipped('missing_resend_key', false, cause);
+  }
+
+  const lock = await claimReceiptSendLock(orderId);
+  if (!lock.claimed) {
+    const result = lock.result;
+    // already_sent is expected when verify/webhook re-queue after a successful send — not an error
+    if (result.reason === 'already_sent') {
+      return result;
+    }
+    console.warn('[ZURI] Receipt email skipped', {
+      orderId,
+      reason: result.reason,
+      cause: result.cause || result.reason,
+      retryable: Boolean(result.retryable)
+    });
+    return result;
+  }
 
   const loaded = await loadOrderReceiptData(orderId);
-  if (loaded.error) return { skipped: true, reason: loaded.error };
+  if (loaded.error) {
+    console.warn('[ZURI] Receipt email skipped', {
+      orderId,
+      reason: loaded.error,
+      cause: loaded.cause || loaded.error,
+      retryable: true
+    });
+    await releaseReceiptSendLock(orderId, {
+      sent: false,
+      errorMessage: loaded.cause || loaded.error
+    });
+    const retryable = loaded.error === 'order_not_found' || loaded.error === 'order_items_error';
+    return skipped(loaded.error, retryable, loaded.cause || loaded.error);
+  }
 
   const { order, biz, receiptItems } = loaded;
-  if (order.receipt_sent_at) return { skipped: true, reason: 'already_sent' };
-  if (order.payment_status !== 'paid') return { skipped: true, reason: 'not_paid' };
+  if (order.receipt_sent_at) {
+    await releaseReceiptSendLock(orderId, { sent: true });
+    return skipped(
+      'already_sent',
+      false,
+      `receipt_sent_at already set (${order.receipt_sent_at})`
+    );
+  }
+  if (order.payment_status !== 'paid') {
+    const cause = `payment_status is "${order.payment_status}" (expected paid)`;
+    console.warn('[ZURI] Receipt email waiting: order not paid yet', {
+      orderId,
+      reason: 'not_paid',
+      cause,
+      payment_status: order.payment_status
+    });
+    await releaseReceiptSendLock(orderId, { sent: false, errorMessage: 'not_paid' });
+    return skipped('not_paid', true, cause);
+  }
 
-  const ticketQr = biz?.business_mode === 'ticketing'
-    ? await ensureTicketReceiptQrForOrder(orderId)
+  const ticketQrResult = biz?.business_mode === 'ticketing'
+    ? await ensureTicketReceiptQrsForOrder(orderId)
     : null;
+
+  if (biz?.business_mode === 'ticketing' && ticketQrResult?.error) {
+    const cause = ticketQrResult.cause || ticketQrResult.error;
+    const permanent = isPermanentReceiptReason(ticketQrResult.error);
+    console.warn(
+      permanent
+        ? '[ZURI] Ticket QR generation failed — permanent, will not retry'
+        : '[ZURI] Ticket QR generation failed — will retry',
+      {
+        orderId,
+        reason: ticketQrResult.error,
+        cause,
+        permanent
+      }
+    );
+    await releaseReceiptSendLock(orderId, {
+      sent: false,
+      errorMessage: formatReceiptErrorMessage(ticketQrResult.error, cause)
+    });
+    return skipped(ticketQrResult.error, !permanent, cause);
+  }
+
+  if (biz?.business_mode === 'ticketing' && ticketQrResult?.skipped) {
+    console.warn('[ZURI] Ticket QR ensure skipped', {
+      orderId,
+      reason: ticketQrResult.reason,
+      cause: ticketQrResult.cause || ticketQrResult.reason
+    });
+  }
+
+  const ticketQrs =
+    ticketQrResult && !ticketQrResult.error && !ticketQrResult.skipped
+      ? ticketQrResult.tickets || []
+      : [];
+  const ticketCount = ticketQrs.length;
+
+  // Never mark a ticketing order "sent" without QR tokens — guest cannot check in.
+  if (biz?.business_mode === 'ticketing' && ticketCount < 1) {
+    const underlying = ticketQrResult?.error || ticketQrResult?.reason || 'missing_ticket_qrs';
+    // Empty order_items is permanent; other missing-token races may still recover.
+    const reason = underlying === 'no_tickets' ? 'no_tickets' : 'missing_ticket_qrs';
+    const cause =
+      ticketQrResult?.cause ||
+      ticketQrResult?.reason ||
+      'ticketing order produced 0 QR tokens — refusing to send empty ticket email';
+    const permanent = isPermanentReceiptReason(reason);
+    console.error('[ZURI] Ticket receipt blocked — missing QR tokens', {
+      orderId,
+      reason,
+      cause,
+      permanent,
+      severity: permanent ? 'permanent' : 'critical'
+    });
+    await releaseReceiptSendLock(orderId, {
+      sent: false,
+      errorMessage: formatReceiptErrorMessage(reason, cause)
+    });
+    return skipped(reason, !permanent, cause);
+  }
+
+  // Generate PNGs in parallel so multi-ticket orders stay fast under load.
+  const ticketQrAttachments = (
+    await Promise.all(
+      ticketQrs.map(async (ticket) => {
+        const png = await generateTicketReceiptQrImagePng(ticket.token);
+        if (!png.error && png.pngBuffer) {
+          return {
+            filename: ticketQrAttachmentFilename(reference, orderId, ticket.ticketNumber, ticketCount),
+            content: png.pngBuffer.toString('base64'),
+            content_type: 'image/png',
+            content_id: `ticket-qr-${ticket.ticketNumber}`
+          };
+        }
+        console.warn('[ZURI] Ticket QR PNG attachment failed', {
+          orderId,
+          ticketNumber: ticket.ticketNumber,
+          reason: png.error || 'missing_png_buffer',
+          cause: png.cause || png.error || 'generateTicketReceiptQrImagePng returned no PNG buffer'
+        });
+        return null;
+      })
+    )
+  ).filter(Boolean);
+
+  if (ticketCount > 0 && ticketQrAttachments.length === 0) {
+    console.warn('[ZURI] Receipt email sending without QR PNG attachments', {
+      orderId,
+      reason: 'qr_png_all_failed',
+      cause: `had ${ticketCount} ticket QR token(s) but 0 PNG attachments; email will use image URLs / verification links`,
+      ticketCount
+    });
+  } else if (ticketCount > 0 && ticketQrAttachments.length < ticketCount) {
+    console.warn('[ZURI] Receipt email partial QR PNG attachments', {
+      orderId,
+      reason: 'qr_png_partial_failed',
+      cause: `attached ${ticketQrAttachments.length} of ${ticketCount} ticket QR PNGs`,
+      ticketCount,
+      attached: ticketQrAttachments.length
+    });
+  }
 
   const customerEmail = (order.customer_email && String(order.customer_email).trim().toLowerCase()) || '';
   const businessEmail = (biz?.email && String(biz.email).trim().toLowerCase()) || '';
-  const to = [customerEmail, businessEmail].filter(Boolean);
-  if (!to.length) return { skipped: true, reason: 'no_recipients' };
+  const isTicketing = biz?.business_mode === 'ticketing';
+  const to = [...new Set([customerEmail, businessEmail].filter(Boolean))];
+  if (!to.length) {
+    const cause =
+      'order.customer_email and business.email are both empty — nowhere to deliver the receipt';
+    console.warn('[ZURI] Receipt email skipped', {
+      orderId,
+      reason: 'no_recipients',
+      cause,
+      customerEmailPresent: Boolean(customerEmail),
+      businessEmailPresent: Boolean(businessEmail)
+    });
+    await releaseReceiptSendLock(orderId, {
+      sent: false,
+      errorMessage: formatReceiptErrorMessage('no_recipients', cause)
+    });
+    return skipped('no_recipients', false, cause);
+  }
+
+  // Ticketing guests need the QR in their inbox — do not "succeed" with business-only delivery.
+  if (isTicketing && !customerEmail) {
+    const cause =
+      'ticketing order has no customer_email — guest cannot receive ticket QR';
+    console.error('[ZURI] Ticket receipt blocked — no customer email', {
+      orderId,
+      reason: 'no_customer_email',
+      cause,
+      businessEmailPresent: Boolean(businessEmail),
+      severity: 'permanent'
+    });
+    await releaseReceiptSendLock(orderId, {
+      sent: false,
+      errorMessage: formatReceiptErrorMessage('no_customer_email', cause)
+    });
+    return skipped('no_customer_email', false, cause);
+  }
 
   const businessName = biz?.name || 'ZURI business';
-  const subject = `ZURI receipt — Ref ${reference || orderId}`;
-  const ticketQrTextBlock =
-    ticketQr && !ticketQr.error && !ticketQr.skipped && ticketQr.verificationUrl
-      ? [
-          '',
-          'Ticket check-in QR:',
-          'Present the QR in this email for entry verification.',
-          `Verification link: ${ticketQr.verificationUrl}`,
-          'Once a business confirms it, the QR cannot be reused.'
-        ]
-      : [];
+  const subject = isTicketing
+    ? `Your ZURI ticket — ${businessName}`
+    : `ZURI receipt — Ref ${reference || orderId}`;
+  const ticketQrTextBlock = ticketQrs.length
+    ? [
+        '',
+        ticketCount > 1 ? `Ticket check-in QRs (${ticketCount} tickets):` : 'Ticket check-in QR:',
+        ticketQrAttachments.length
+          ? ticketCount > 1
+            ? `${ticketQrAttachments.length} PNG files are attached — save each one and show them at the door (one QR per person).`
+            : `A PNG file (${ticketQrAttachments[0].filename}) is attached — save it to your phone and show it at the door.`
+          : ticketCount > 1
+            ? 'Present each QR in this email for entry verification (one QR per person).'
+            : 'Present the QR in this email for entry verification.',
+        'If you cannot open the attachment or images, use these verification links instead:',
+        ...ticketQrs.map(
+          (ticket) =>
+            ticketCount > 1
+              ? `Ticket ${ticket.ticketNumber}: ${ticket.verificationUrl}`
+              : `Verification link: ${ticket.verificationUrl}`
+        ),
+        'Once a business confirms a QR, that ticket cannot be reused.'
+      ]
+    : [];
 
   const text = [
     `Receipt (Ref: ${reference || orderId})`,
@@ -176,33 +605,46 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
     ...ticketQrTextBlock
   ].join('\n');
 
-  const ticketQrHtml =
-    ticketQr && !ticketQr.error && !ticketQr.skipped && ticketQr.qrImageUrl
-      ? `
-            <tr>
-              <td style="padding:0 22px 18px 22px;">
-                <div style="border:1px solid #f0e6d8;border-radius:16px;padding:18px;background:#fffaf2;">
-                  <p style="margin:0 0 8px 0;color:#1a1a1a;font-weight:700;">Ticket check-in QR</p>
+  const ticketQrCardsHtml = ticketQrs
+    .map((ticket) => {
+      const attachment = ticketQrAttachments.find((att) => att.content_id === `ticket-qr-${ticket.ticketNumber}`);
+      const label = ticketCount > 1 ? `Ticket ${ticket.ticketNumber} of ${ticketCount}` : 'Ticket check-in QR';
+      return `
+                <div style="border:1px solid #f0e6d8;border-radius:16px;padding:18px;background:#fffaf2;${ticketCount > 1 ? 'margin-bottom:14px;' : ''}">
+                  <p style="margin:0 0 8px 0;color:#1a1a1a;font-weight:700;">${escapeHtml(label)}</p>
                   <p style="margin:0 0 14px 0;color:#555;font-size:13px;line-height:1.5;">
-                    Show this QR at the door. When your host scans and confirms it, the receipt cannot be used again.
+                    ${
+                      attachment
+                        ? `Attached as <strong>${escapeHtml(attachment.filename)}</strong>. Save it to your phone and show it at the door.`
+                        : 'Show this QR at the door.'
+                    }
+                    When your host scans and confirms it, this ticket cannot be used again.
                   </p>
                   <div style="text-align:center;">
                     <img
-                      src="${escapeHtml(ticketQr.qrImageUrl)}"
-                      alt="Ticket receipt QR"
+                      src="${attachment ? `cid:ticket-qr-${ticket.ticketNumber}` : escapeHtml(ticket.qrImageUrl)}"
+                      alt="${escapeHtml(label)}"
                       width="220"
                       height="220"
                       style="display:inline-block;width:220px;height:220px;border-radius:18px;border:1px solid #f0e6d8;background:#ffffff;padding:10px;"
                     />
                   </div>
                   <p style="margin:14px 0 0 0;color:#666;font-size:12px;line-height:1.5;">
-                    If your mail app blocks images, open this verification link:<br/>
-                    <a href="${escapeHtml(ticketQr.verificationUrl)}" style="color:#b96f00;text-decoration:none;">${escapeHtml(ticketQr.verificationUrl)}</a>
+                    Verification link:<br/>
+                    <a href="${escapeHtml(ticket.verificationUrl)}" style="color:#b96f00;text-decoration:none;">${escapeHtml(ticket.verificationUrl)}</a>
                   </p>
-                </div>
+                </div>`;
+    })
+    .join('');
+
+  const ticketQrHtml = ticketQrs.length
+    ? `
+            <tr>
+              <td style="padding:0 22px 18px 22px;">
+                ${ticketQrCardsHtml}
               </td>
             </tr>`
-      : '';
+    : '';
 
   const html = `
 <!doctype html>
@@ -220,7 +662,7 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
             </tr>
             <tr>
               <td style="padding:0 22px 18px 22px;">
-                <h1 style="margin:0 0 6px 0;font-size:18px;line-height:1.3;color:#1a1a1a;">Payment receipt</h1>
+                <h1 style="margin:0 0 6px 0;font-size:18px;line-height:1.3;color:#1a1a1a;">${isTicketing ? 'Your ticket' : 'Payment receipt'}</h1>
                 <p style="margin:0;color:#555;font-size:13px;">Ref: <strong>${escapeHtml(reference || orderId)}</strong></p>
               </td>
             </tr>
@@ -265,42 +707,86 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
 </html>`.trim();
 
   try {
-    await sendViaResendApi(resendKey, {
-      from: RESEND_FROM,
+    await sendResendEmail(
+      {
+        to,
+        subject,
+        text,
+        html,
+        attachments: ticketQrAttachments.length ? ticketQrAttachments : undefined
+      },
+      { timeoutMs: ticketQrAttachments.length ? 45_000 : 15_000 }
+    );
+
+    const marked = await releaseReceiptSendLock(orderId, { sent: true });
+    if (!marked.ok) {
+      // Email already left Resend — keep retrying the DB mark without treating as a full resend miss.
+      const cause =
+        marked.error?.message ||
+        'receipt delivered via Resend but receipt_sent_at could not be persisted';
+      console.error('[ZURI] Receipt email delivered but mark-sent failed', {
+        orderId,
+        reason: 'mark_sent_failed',
+        cause,
+        to,
+        severity: 'critical'
+      });
+      return skipped('mark_sent_failed', true, cause);
+    }
+
+    console.log('[ZURI] Receipt email sent', {
+      orderId,
       to,
-      subject,
-      text,
-      html
+      ticketing: isTicketing,
+      ticketQrCount: ticketQrAttachments.length,
+      ticketTokenCount: ticketCount,
+      reason: 'sent'
     });
-
-    const supabase = getSupabase();
-    await supabase
-      .from('orders')
-      .update({ receipt_sent_at: new Date().toISOString(), receipt_email_error: null })
-      .eq('id', orderId);
-
-    return { skipped: false, to };
+    return { ok: true, to };
   } catch (err) {
     const msg = err && err.message ? err.message : String(err);
-    const supabase = getSupabase();
-    await supabase
-      .from('orders')
-      .update({ receipt_email_error: msg })
-      .eq('id', orderId);
+    const code = err && err.code ? err.code : undefined;
+    console.error('[ZURI] Receipt email failed', {
+      orderId,
+      reason: 'resend_send_error',
+      cause: msg,
+      code,
+      to
+    });
+    await releaseReceiptSendLock(orderId, { sent: false, errorMessage: msg });
     throw err;
   }
 }
 
 function queueOrderReceiptOnce(args) {
-  setImmediate(() => {
-    sendOrderReceiptOnce(args).catch((err) =>
-      console.error('[ZURI] receipt email error:', args?.orderId, err && err.message ? err.message : err)
-    );
+  const { queueOrderReceiptOnce: enqueue } = require('./orderReceiptQueue');
+  return enqueue(args);
+}
+
+/**
+ * Queue a receipt only when the order is paid and has not already been emailed.
+ * Use on verify/webhook "already paid" recovery paths to avoid already_sent noise.
+ */
+function queueOrderReceiptIfNeeded(order, args = {}) {
+  const orderId = order?.id || args.orderId;
+  if (!orderId) {
+    return { queued: false, reason: 'missing_order_id' };
+  }
+  if (order?.receipt_sent_at) {
+    return { queued: false, reason: 'already_sent', orderId };
+  }
+  return queueOrderReceiptOnce({
+    orderId,
+    paidAt: args.paidAt ?? null,
+    reference: args.reference || orderId
   });
 }
 
 module.exports = {
+  isPermanentReceiptReason,
+  formatReceiptErrorMessage,
   sendOrderReceiptOnce,
-  queueOrderReceiptOnce
+  queueOrderReceiptOnce,
+  queueOrderReceiptIfNeeded,
+  forceMarkReceiptSent
 };
-

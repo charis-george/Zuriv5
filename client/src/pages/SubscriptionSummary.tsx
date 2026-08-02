@@ -4,9 +4,9 @@ import axios from 'axios'
 import { PLAN_LABELS, PLAN_PRICES, PLAN_PRICES_YEARLY, type PlanId, type BillingInterval, type Business } from '../types'
 import { PaperPlaneLoader } from '../components/PaperPlaneLoader'
 import { apiUrl } from '../lib/apiBase'
-import { preloadPaystackInline, startZuriPayment } from '../lib/paystackZuri'
+import { clearBusinessAuth, getBusinessId, getBusinessToken } from '../lib/businessAuthStorage'
+import { preloadZuriPayment, startZuriPayment, type ZuriPaymentInitializePayload } from '../lib/zuriPayment'
 import { formatUserFacingError } from '../lib/formatApiError'
-import { preloadPaystackInline, startZuriPayment } from '../lib/paystackZuri'
 
 function parseAmount(plan: PlanId, interval: BillingInterval): { display: string; numeric: number } {
   const table = interval === 'yearly' ? PLAN_PRICES_YEARLY : PLAN_PRICES
@@ -41,8 +41,8 @@ function SubscriptionSummary(): JSX.Element {
   const handlePay = useCallback(async (): Promise<void> => {
     if (!plan) return
     setError(null)
-    const token = localStorage.getItem('zuri_business_token')
-    const businessId = localStorage.getItem('zuri_business_id')
+    const token = getBusinessToken()
+    const businessId = getBusinessId()
     if (!token || !businessId) {
       setError('Please log in to your business dashboard to complete this subscription.')
       return
@@ -52,29 +52,35 @@ function SubscriptionSummary(): JSX.Element {
       const { data: business } = await axios.get<Business>(apiUrl(`/api/business/${businessId}`), {
         headers: { Authorization: `Bearer ${token}` }
       })
-      if (!business?.email) {
-        setError('Business email not found. Please check your profile.')
-        setLoading(false)
-        return
-      }
       const body = {
         businessId,
         plan,
-        email: business.email,
+        ...(business?.email ? { email: business.email } : {}),
         callbackUrl: `${window.location.origin}/upgrade-done`,
         interval
       }
-      const { data } = await axios.post<{ authorizationUrl: string; accessCode?: string; reference: string }>(apiUrl('/api/subscription/initialize'), body, {
+      const { data } = await axios.post<ZuriPaymentInitializePayload>(apiUrl('/api/subscription/initialize'), body, {
         headers: { Authorization: `Bearer ${token}` }
       })
+      preloadZuriPayment(data.provider)
+      const upgradeDoneUrl = `${window.location.origin}/upgrade-done?reference=${encodeURIComponent(data.reference)}`
       await startZuriPayment(
         {
+          provider: data.provider,
           authorizationUrl: data.authorizationUrl,
           accessCode: data.accessCode,
           reference: data.reference,
+          orderId: data.reference,
+          checkoutUrl: data.checkoutUrl,
+          apiKey: data.apiKey,
+          contractCode: data.contractCode,
+          amount: data.amount ?? numeric,
+          customerEmail: data.customerEmail || business?.email,
+          customerName: data.customerName || business?.name,
+          isTestMode: data.isTestMode,
         },
         {
-          successPath: `${window.location.origin}/upgrade-done`,
+          successPath: upgradeDoneUrl,
           onError: (msg) => setError(msg || 'Could not start payment. Please try again.'),
         },
       )
@@ -82,8 +88,7 @@ function SubscriptionSummary(): JSX.Element {
       if (axios.isAxiosError(err)) {
         if (err.response?.status === 401 || err.response?.status === 403) {
           setError('Please log in to your business dashboard to subscribe to a plan.')
-          localStorage.removeItem('zuri_business_token')
-          localStorage.removeItem('zuri_business_id')
+          clearBusinessAuth()
         } else if (err.response?.status === 404) {
           setError('Subscription is temporarily unavailable. Please try again shortly.')
         } else if (err.response?.status === 422) {
@@ -100,13 +105,13 @@ function SubscriptionSummary(): JSX.Element {
   }, [plan, interval])
 
   useEffect(() => {
-    preloadPaystackInline()
+    preloadZuriPayment()
   }, [])
 
   useEffect(() => {
     if (!autopay || !plan || autopayStarted.current) return
-    const token = localStorage.getItem('zuri_business_token')
-    const businessId = localStorage.getItem('zuri_business_id')
+    const token = getBusinessToken()
+    const businessId = getBusinessId()
     if (!token || !businessId) {
       if (loginRedirectRef.current) return
       loginRedirectRef.current = true
@@ -119,7 +124,7 @@ function SubscriptionSummary(): JSX.Element {
   }, [autopay, plan, interval, navigate, handlePay])
 
   if (autopay && plan) {
-    const tok = typeof localStorage !== 'undefined' ? localStorage.getItem('zuri_business_token') : null
+    const tok = getBusinessToken()
     if (!tok || loading) {
       return (
         <div className="min-h-screen bg-black flex items-center justify-center px-4">
@@ -163,7 +168,9 @@ function SubscriptionSummary(): JSX.Element {
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-8">
           <h1 className="text-lg font-semibold text-zuri-black mb-1">Subscription summary</h1>
-          <p className="text-gray-500 text-sm mb-6">Review your subscription before continuing to Paystack.</p>
+          <p className="text-gray-500 text-sm mb-6">
+            Review your subscription before continuing to Paystack. Plans renew automatically each billing period until you cancel.
+          </p>
 
           <div className="space-y-4 mb-6">
             <div className="flex justify-between text-sm">

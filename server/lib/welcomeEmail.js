@@ -1,13 +1,4 @@
-const { getTransporter, sendMailWithTimeout } = require('./email');
-
-const RESEND_FROM =
-  process.env.RESEND_FROM || process.env.SMTP_FROM || 'ZURI <onboarding@resend.dev>';
-
-function getResendApiKey() {
-  const key = process.env.RESEND_API_KEY;
-  if (!key || typeof key !== 'string' || !key.trim()) return null;
-  return key.trim();
-}
+const { sendResendEmail, isResendConfigured } = require('./resendMail');
 
 function escapeHtml(s) {
   return String(s)
@@ -21,30 +12,6 @@ function firstName(name) {
   if (!name || typeof name !== 'string') return 'there';
   const part = name.trim().split(/\s+/)[0];
   return part || 'there';
-}
-
-async function sendViaResend(apiKey, payload, timeoutMs = 8000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload),
-      signal: controller.signal
-    });
-    if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      const err = new Error(`Resend API ${response.status}${text ? `: ${text.slice(0, 300)}` : ''}`);
-      err.code = `RESEND_HTTP_${response.status}`;
-      throw err;
-    }
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 /**
@@ -109,41 +76,16 @@ async function sendBusinessWelcomeEmail({ to, businessName }) {
 </body>
 </html>`.trim();
 
-  const resendKey = getResendApiKey();
-  if (resendKey) {
-    await sendViaResend(
-      resendKey,
-      {
-        from: RESEND_FROM,
-        to: [to.trim()],
-        subject,
-        html,
-        text
-      },
-      8000
-    );
-    return { skipped: false, via: 'resend' };
+  if (!isResendConfigured()) {
+    console.warn('[ZURI] Welcome email skipped: set RESEND_API_KEY and RESEND_FROM.');
+    return { skipped: true, reason: 'resend not configured' };
   }
 
-  const transporter = getTransporter();
-  if (transporter) {
-    const from = process.env.SMTP_FROM || process.env.SMTP_USER || RESEND_FROM;
-    await sendMailWithTimeout(
-      transporter,
-      {
-        from,
-        to: to.trim(),
-        subject,
-        text,
-        html
-      },
-      8000
-    );
-    return { skipped: false, via: 'smtp' };
-  }
-
-  console.warn('[ZURI] Welcome email skipped: set RESEND_API_KEY or SMTP_HOST/SMTP_USER/SMTP_PASS on Railway.');
-  return { skipped: true, reason: 'no mail transport' };
+  await sendResendEmail(
+    { to: to.trim(), subject, html, text },
+    { timeoutMs: 8000 }
+  );
+  return { skipped: false, via: 'resend' };
 }
 
 function queueBusinessWelcomeEmail({ email, name }) {

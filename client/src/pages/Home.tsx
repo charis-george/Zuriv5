@@ -265,9 +265,14 @@ function Home(): JSX.Element {
               <span className="text-[11px] tracking-[0.32em] text-zuri-black uppercase">Z U R I</span>
             </Link>
             <nav className="hidden md:flex items-center gap-6">
-              <Link to="/scan" className="text-sm text-gray-600 hover:text-zuri-orange transition-colors">
-                How it works
-              </Link>
+              <a
+                href="https://api.zuriqo.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-gray-600 hover:text-zuri-orange transition-colors"
+              >
+                Zuri API
+              </a>
               <Link to="/zuri-tap" className="text-sm text-gray-600 hover:text-zuri-orange transition-colors">
                 Zuri Tap
               </Link>
@@ -931,7 +936,16 @@ function Home(): JSX.Element {
             <div>
               <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-4">Product</h4>
               <ul className="space-y-2.5 text-gray-400 text-sm font-normal">
-                <li><Link to="/scan" className="hover:text-white transition-colors">How it works</Link></li>
+                <li>
+                  <a
+                    href="https://api.zuriqo.com"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="hover:text-white transition-colors"
+                  >
+                    Zuri API
+                  </a>
+                </li>
                 <li><Link to="/pricing" className="hover:text-white transition-colors">Pricing</Link></li>
                 <li><Link to="/waitlist" className="hover:text-white transition-colors">Waitlist</Link></li>
               </ul>

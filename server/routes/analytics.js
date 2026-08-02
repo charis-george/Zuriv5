@@ -50,6 +50,16 @@ function hourBucketUtc(iso) {
   return String(h);
 }
 
+/** Only count orders that have actually been paid (excludes abandoned checkouts). */
+function paidOrdersQuery(businessId, startIso, columns) {
+  return supabase
+    .from('orders')
+    .select(columns)
+    .eq('business_id', businessId)
+    .eq('payment_status', 'paid')
+    .gte('created_at', startIso);
+}
+
 // Sales summary for period (month | week | year)
 router.get('/sales/:businessId', requireBusinessAuth, async (req, res) => {
   try {
@@ -59,11 +69,11 @@ router.get('/sales/:businessId', requireBusinessAuth, async (req, res) => {
     const period = typeof req.query.period === 'string' ? req.query.period : 'month';
     const start = periodStart(period);
 
-    const { data: orders, error } = await supabase
-      .from('orders')
-      .select('status, total_amount')
-      .eq('business_id', businessId)
-      .gte('created_at', start.toISOString());
+    const { data: orders, error } = await paidOrdersQuery(
+      businessId,
+      start.toISOString(),
+      'status, total_amount'
+    );
 
     if (error) {
       console.error('analytics sales error:', error);
@@ -98,11 +108,11 @@ router.get('/sales-by-date/:businessId', requireBusinessAuth, async (req, res) =
     const end = new Date();
     const start = addDays(startOfUtcDay(end), -(days - 1));
 
-    const { data: orders, error } = await supabase
-      .from('orders')
-      .select('status, total_amount, created_at')
-      .eq('business_id', businessId)
-      .gte('created_at', start.toISOString());
+    const { data: orders, error } = await paidOrdersQuery(
+      businessId,
+      start.toISOString(),
+      'status, total_amount, created_at'
+    );
 
     if (error) {
       console.error('analytics sales-by-date error:', error);
@@ -146,11 +156,11 @@ router.get('/popular-items/:businessId', requireBusinessAuth, async (req, res) =
     const days = Math.min(365, Math.max(1, parseInt(req.query.days, 10) || 90));
     const start = addDays(new Date(), -days);
 
-    const { data: orders, error: oErr } = await supabase
-      .from('orders')
-      .select('id')
-      .eq('business_id', businessId)
-      .gte('created_at', start.toISOString());
+    const { data: orders, error: oErr } = await paidOrdersQuery(
+      businessId,
+      start.toISOString(),
+      'id'
+    );
 
     if (oErr) {
       console.error('analytics popular orders error:', oErr);
@@ -226,11 +236,11 @@ router.get('/peak-hours/:businessId', requireBusinessAuth, async (req, res) => {
     const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 30));
     const start = addDays(new Date(), -days);
 
-    const { data: orders, error } = await supabase
-      .from('orders')
-      .select('total_amount, created_at')
-      .eq('business_id', businessId)
-      .gte('created_at', start.toISOString());
+    const { data: orders, error } = await paidOrdersQuery(
+      businessId,
+      start.toISOString(),
+      'total_amount, created_at'
+    );
 
     if (error) {
       console.error('analytics peak-hours error:', error);
@@ -265,11 +275,11 @@ router.get('/profit-margins/:businessId', requireBusinessAuth, async (req, res) 
     const days = Math.min(365, Math.max(1, parseInt(req.query.days, 10) || 90));
     const start = addDays(new Date(), -days);
 
-    const { data: orders, error: oErr } = await supabase
-      .from('orders')
-      .select('id')
-      .eq('business_id', businessId)
-      .gte('created_at', start.toISOString());
+    const { data: orders, error: oErr } = await paidOrdersQuery(
+      businessId,
+      start.toISOString(),
+      'id'
+    );
 
     if (oErr) {
       console.error('analytics profit orders error:', oErr);
@@ -356,11 +366,11 @@ router.get('/customer-intelligence/:businessId', requireBusinessAuth, async (req
     const days = Math.min(365, Math.max(1, parseInt(req.query.days, 10) || 30));
     const start = addDays(new Date(), -days);
 
-    const { data: orders, error } = await supabase
-      .from('orders')
-      .select('customer_email, customer_phone, total_amount, created_at')
-      .eq('business_id', businessId)
-      .gte('created_at', start.toISOString());
+    const { data: orders, error } = await paidOrdersQuery(
+      businessId,
+      start.toISOString(),
+      'customer_email, customer_phone, total_amount, created_at'
+    );
 
     if (error) {
       console.error('analytics customer-intelligence error:', error);

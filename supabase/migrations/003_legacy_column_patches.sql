@@ -5,6 +5,10 @@
 ALTER TABLE public.businesses ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'free';
 ALTER TABLE public.businesses ADD COLUMN IF NOT EXISTS paystack_public_key TEXT;
 ALTER TABLE public.businesses ADD COLUMN IF NOT EXISTS paystack_recipient_code TEXT;
+ALTER TABLE public.businesses ADD COLUMN IF NOT EXISTS payment_provider TEXT NOT NULL DEFAULT 'paystack';
+ALTER TABLE public.orders ADD COLUMN IF NOT EXISTS payment_provider TEXT;
+ALTER TABLE public.orders ADD COLUMN IF NOT EXISTS monnify_payment_reference TEXT;
+ALTER TABLE public.orders ADD COLUMN IF NOT EXISTS paystack_payment_reference TEXT;
 ALTER TABLE public.businesses ADD COLUMN IF NOT EXISTS bank_code TEXT;
 ALTER TABLE public.businesses ADD COLUMN IF NOT EXISTS bank_name TEXT;
 ALTER TABLE public.businesses ADD COLUMN IF NOT EXISTS account_number TEXT;
@@ -12,6 +16,7 @@ ALTER TABLE public.businesses ADD COLUMN IF NOT EXISTS account_name TEXT;
 ALTER TABLE public.businesses ADD COLUMN IF NOT EXISTS logo_url TEXT;
 ALTER TABLE public.businesses ADD COLUMN IF NOT EXISTS storefront_config JSONB;
 ALTER TABLE public.businesses ADD COLUMN IF NOT EXISTS storefront_details JSONB;
+ALTER TABLE public.businesses ADD COLUMN IF NOT EXISTS storefront_profiles JSONB;
 
 -- FK to zuri_network_customers: only valid if that table exists (created in 001).
 DO $$

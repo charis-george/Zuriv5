@@ -1,6 +1,32 @@
 {
+
   "installCommand": "npm install",
+
   "buildCommand": "npm run build",
+
   "outputDirectory": "client/dist",
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+
+  "functions": {
+
+    "api/storefront-html.js": {
+
+      "includeFiles": "client/dist/index.html"
+
+    }
+
+  },
+
+  "rewrites": [
+
+    { "source": "/order/:businessId", "destination": "/api/storefront-html?businessId=:businessId" },
+
+    { "source": "/order/:businessId/:storefrontSlug", "destination": "/api/storefront-html?businessId=:businessId&storefrontSlug=:storefrontSlug" },
+
+    { "source": "/event/:businessId/:eventSlug", "destination": "/api/storefront-html?businessId=:businessId&eventSlug=:eventSlug" },
+
+    { "source": "/(.*)", "destination": "/index.html" }
+
+  ]
+
 }
+

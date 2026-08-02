@@ -14,7 +14,8 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:3000',
+        // Match server PORT (default 3000 in server/.env / server/index.js)
+        target: process.env.VITE_API_PROXY || 'http://127.0.0.1:3000',
         changeOrigin: true
       }
     }

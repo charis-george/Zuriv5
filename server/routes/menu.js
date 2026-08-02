@@ -7,6 +7,12 @@ const { getDb } = require('../database');
 const { getBusinessPlan, canAddMenuPictures, canAccessGuestAiStorefront, canAccessAIFeatures } = require('../lib/plans');
 const { buildGuestPersonalization, resolveGuestCustomerId, setGuestPreferences } = require('../lib/guest-personalization');
 const { enrichDishMetadata } = require('../lib/dish-enrichment');
+const { digitizeMenuFromUpload } = require('../lib/menuDigitize');
+const {
+  assertMenuDigitizeAllowed,
+  recordMenuDigitizeUsage,
+  getMenuDigitizeQuota
+} = require('../lib/menuDigitizeLimits');
 const {
   resolveActivePresetId,
   listPresetsForBusiness,
@@ -15,9 +21,12 @@ const {
   activatePreset,
   deletePreset,
   duplicatePreset,
-  matchesPreset
+  matchesPreset,
+  resolvePresetIdFromStorefront
 } = require('../lib/menuPresets');
 const { requireBusinessAuth, verifyBusinessToken } = require('../middleware/auth');
+const { getTicketsSoldMap } = require('../lib/ticketQuantityRules');
+const { normalizeUuid } = require('../lib/normalizeUuid');
 
 const supabase = getDb();
 
@@ -25,11 +34,19 @@ function normalizeCatalogMode(value) {
   return value === 'ticketing' ? 'ticketing' : 'menu';
 }
 
+/** API uses "uncategorized" for items with no category; DB stores null. */
+function normalizeCategoryId(categoryId) {
+  if (categoryId === undefined) return undefined;
+  if (!categoryId || categoryId === 'uncategorized') return null;
+  return categoryId;
+}
+
 async function getBusinessMode(businessId) {
+  const id = normalizeUuid(businessId) || businessId;
   const { data, error } = await supabase
     .from('businesses')
     .select('business_mode')
-    .eq('id', businessId)
+    .eq('id', id)
     .maybeSingle();
   if (error) {
     console.warn('[menu] getBusinessMode fallback:', error.message || error);
@@ -74,6 +91,18 @@ const upload = multer({
   }
 });
 
+const DIGITIZE_MAX_SIZE = 10 * 1024 * 1024;
+const digitizeUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: DIGITIZE_MAX_SIZE },
+  fileFilter: (_req, file, cb) => {
+    const allowed =
+      /^image\/(jpeg|jpg|png|gif|webp)$/i.test(file.mimetype) || file.mimetype === 'application/pdf';
+    if (allowed) cb(null, true);
+    else cb(new Error('Upload a menu photo (JPEG, PNG, WebP) or PDF'));
+  }
+});
+
 // Upload menu item image (returns public URL) — requires business auth
 router.post('/upload-image', requireBusinessAuth, upload.single('image'), async (req, res) => {
   try {
@@ -112,20 +141,107 @@ router.post('/upload-image', requireBusinessAuth, upload.single('image'), async 
   }
 });
 
+function handleDigitizeUpload(req, res, next) {
+  digitizeUpload.single('file')(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ error: 'File too large. Maximum size is 10MB.' });
+    }
+    return res.status(400).json({ error: err.message || 'Invalid upload' });
+  });
+}
+
+/** Remaining AI menu digitization quota (free on all plans; limits configurable via env). */
+router.get('/digitize-quota', requireBusinessAuth, async (req, res) => {
+  try {
+    const businessId = req.query?.businessId;
+    if (!businessId || businessId !== req.businessId) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    const plan = await getBusinessPlan(businessId);
+    const quota = await getMenuDigitizeQuota(businessId, plan);
+    return res.json({ quota });
+  } catch (err) {
+    console.error('[ZURI] menu digitize-quota error:', err?.message || err);
+    return res.status(500).json({ error: 'Failed to load AI menu upload quota' });
+  }
+});
+
+/** AI digitize: photo/PDF → structured categories + items (Claude vision). */
+router.post('/digitize', requireBusinessAuth, handleDigitizeUpload, async (req, res) => {
+  try {
+    const businessId = req.body?.businessId;
+    if (!businessId || businessId !== req.businessId) {
+      return res.status(403).json({ error: 'You can only digitize menus for your own business' });
+    }
+
+    const plan = await getBusinessPlan(businessId);
+    const gate = await assertMenuDigitizeAllowed(businessId, plan);
+    if (!gate.ok) {
+      return res.status(gate.status).json({ error: gate.error, quota: gate.quota });
+    }
+
+    if (!req.file?.buffer?.length) {
+      return res.status(400).json({ error: 'No file provided. Upload a menu photo or PDF.' });
+    }
+
+    const catalogMode = await getBusinessMode(businessId);
+    const result = await digitizeMenuFromUpload({
+      buffer: req.file.buffer,
+      mimetype: req.file.mimetype,
+      filename: req.file.originalname,
+      catalogMode
+    });
+
+    const recorded = await recordMenuDigitizeUsage(businessId, result.usage?.totalTokens);
+    const quota = await getMenuDigitizeQuota(businessId, plan);
+
+    console.info('[ZURI] menu digitize ok', {
+      businessId,
+      plan,
+      tokens: result.usage?.totalTokens,
+      categories: result.categoryCount,
+      items: result.itemCount,
+      uses: recorded.uses
+    });
+
+    return res.json({ ...result, quota });
+  } catch (err) {
+    if (err.message && err.message.includes('Upload a menu photo')) {
+      return res.status(400).json({ error: err.message });
+    }
+    const status = err.status || 500;
+    console.error('[ZURI] menu digitize error:', err?.message || err);
+    return res.status(status).json({
+      error: err.message || 'Failed to digitize menu'
+    });
+  }
+});
+
 // Get menu for a business
 router.get('/business/:businessId', async (req, res) => {
   try {
     const { businessId } = req.params;
     const activeMode = await getBusinessMode(businessId);
     let catalogPresetId = await resolveActivePresetId(businessId, activeMode);
+
+    const storefrontQ = String(req.query.storefront || req.query.storefrontSlug || '').trim();
+    const eventQ = String(req.query.event || req.query.eventSlug || '').trim();
+
     const requestedPreset = req.query.presetId;
+    let authPresetOverride = false;
     if (typeof requestedPreset === 'string' && requestedPreset.trim()) {
       const auth = req.headers.authorization;
       const token = auth && auth.startsWith('Bearer ') ? auth.slice(7) : null;
       const payload = verifyBusinessToken(token);
       if (payload?.sub === businessId) {
         catalogPresetId = requestedPreset.trim();
+        authPresetOverride = true;
       }
+    }
+    if (!authPresetOverride) {
+      const fromStorefront = await resolvePresetIdFromStorefront(businessId, storefrontQ, eventQ);
+      if (fromStorefront) catalogPresetId = fromStorefront;
     }
 
     // Get all categories for this business
@@ -163,6 +279,15 @@ router.get('/business/:businessId', async (req, res) => {
         matchesPreset(item, catalogPresetId)
     );
 
+    let ticketsSoldMap = {};
+    if (activeMode === 'ticketing' && filteredItems.length) {
+      ticketsSoldMap = await getTicketsSoldMap(
+        supabase,
+        businessId,
+        filteredItems.map((item) => item.id)
+      );
+    }
+
     // Group items by category
     const menu = {};
     
@@ -198,6 +323,7 @@ router.get('/business/:businessId', async (req, res) => {
         imageUrl: item.image_url,
         available: item.available !== false,
         stockOnHand: item.stock_on_hand ?? null,
+        ticketsSold: ticketsSoldMap[item.id] || 0,
         lowStockThreshold: item.low_stock_threshold ?? null,
         soldOutAutoHidden: item.sold_out_auto_hidden === true,
         maxPerUser: item.max_per_user ?? null,
@@ -403,13 +529,16 @@ router.get('/categories/:businessId', async (req, res) => {
 // Create category — requires business auth
 router.post('/category', requireBusinessAuth, async (req, res) => {
   try {
-    const { businessId, name, displayOrder } = req.body;
+    const { businessId, name, displayOrder, presetId: bodyPresetId } = req.body;
     if (!businessId || businessId !== req.businessId) {
       return res.status(403).json({ error: 'You can only create categories for your own business' });
     }
     const categoryId = uuidv4();
     const activeMode = await getBusinessMode(businessId);
-    const presetId = await resolveActivePresetId(businessId, activeMode);
+    const presetId =
+      typeof bodyPresetId === 'string' && bodyPresetId.trim()
+        ? bodyPresetId.trim()
+        : await resolveActivePresetId(businessId, activeMode);
 
     const insertRow = {
       id: categoryId,
@@ -447,6 +576,9 @@ router.post('/category', requireBusinessAuth, async (req, res) => {
 router.patch('/category/:categoryId', requireBusinessAuth, async (req, res) => {
   try {
     const { categoryId } = req.params;
+    if (!categoryId || categoryId === 'uncategorized') {
+      return res.status(400).json({ error: 'Invalid category' });
+    }
     const { businessId, displayOrder, name } = req.body;
     if (!businessId || businessId !== req.businessId) {
       return res.status(403).json({ error: 'You can only update categories for your own business' });
@@ -490,6 +622,9 @@ router.patch('/category/:categoryId', requireBusinessAuth, async (req, res) => {
 router.delete('/category/:categoryId', requireBusinessAuth, async (req, res) => {
   try {
     const { categoryId } = req.params;
+    if (!categoryId || categoryId === 'uncategorized') {
+      return res.status(400).json({ error: 'Invalid category' });
+    }
     const businessId = req.businessId;
     const activeMode = await getBusinessMode(businessId);
     const { data: category, error: fetchError } = await supabase
@@ -591,7 +726,7 @@ router.post('/item', requireBusinessAuth, async (req, res) => {
     const insertItem = {
         id: itemId,
         business_id: businessId,
-        category_id: categoryId || null,
+        category_id: normalizeCategoryId(categoryId !== undefined ? categoryId : req.body.category_id),
         name,
         description: description || null,
         price: parsedPricingType === 'free' ? 0 : price,
@@ -744,7 +879,8 @@ router.put('/item/:id', requireBusinessAuth, async (req, res) => {
     if (imageUrl !== undefined) updateData.image_url = allowImage ? imageUrl : null;
     if (available !== undefined) updateData.available = available;
     if (displayOrder !== undefined) updateData.display_order = displayOrder;
-    if (categoryId !== undefined) updateData.category_id = categoryId || null;
+    const rawCategoryId = categoryId !== undefined ? categoryId : req.body.category_id;
+    if (rawCategoryId !== undefined) updateData.category_id = normalizeCategoryId(rawCategoryId);
     if (stockOnHand !== undefined) {
       updateData.stock_on_hand =
         stockOnHand === null || stockOnHand === ''

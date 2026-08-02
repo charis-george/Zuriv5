@@ -2,7 +2,9 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import { PLAN_LABELS, type PlanId, type Business, type BusinessMode } from '../types'
+import { getBusinessToken } from '../lib/businessAuthStorage'
 import { formatUserFacingError } from '../lib/formatApiError'
+import { normalizeUuidParam } from '../lib/normalizeUuid'
 import { ZURI_FEATURES_BY_TIER, planHighlights } from '../lib/zuriFeaturesByTier'
 import { CustomDropdown } from '../components/CustomDropdown'
 import { formatModeTransactionFee } from '../lib/transactionFees'
@@ -74,6 +76,16 @@ const SAMPLE_MENU_CATEGORIES = [
   }
 ]
 
+type DigitizedMenuCategory = {
+  name: string
+  items: Array<{
+    name: string
+    description?: string
+    price?: number
+    available?: boolean
+  }>
+}
+
 const SAMPLE_TICKET_CATEGORIES = [
   {
     name: 'Admission',
@@ -106,7 +118,8 @@ const SAMPLE_TICKET_CATEGORIES = [
 ]
 
 function BusinessOnboarding(): JSX.Element {
-  const { businessId } = useParams<{ businessId: string }>()
+  const { businessId: rawBusinessId } = useParams<{ businessId: string }>()
+  const businessId = normalizeUuidParam(rawBusinessId)
   const navigate = useNavigate()
   const [step, setStep] = useState(0)
   const [business, setBusiness] = useState<Business | null>(null)
@@ -122,6 +135,18 @@ function BusinessOnboarding(): JSX.Element {
   const [menuChoice, setMenuChoice] = useState<MenuSetupChoice | null>(null)
   const [menuSetupLoading, setMenuSetupLoading] = useState(false)
   const [menuSetupError, setMenuSetupError] = useState<string | null>(null)
+  const [menuDigitizeSummary, setMenuDigitizeSummary] = useState<{
+    categoryCount: number
+    itemCount: number
+    notes: string | null
+  } | null>(null)
+  const [menuDigitizeQuota, setMenuDigitizeQuota] = useState<{
+    used: number
+    limit: number | null
+    remaining: number | null
+    unlimited: boolean
+    hourlyRemaining: number
+  } | null>(null)
   const [banks, setBanks] = useState<{ code: string; name: string }[]>([])
   const [bankForm, setBankForm] = useState({ bankCode: '', bankName: '', accountNumber: '', accountName: '' })
   const [bankResolving, setBankResolving] = useState(false)
@@ -132,7 +157,7 @@ function BusinessOnboarding(): JSX.Element {
   const [showBankForm, setShowBankForm] = useState(true)
 
   const getAuthHeaders = () => {
-    const token = localStorage.getItem('zuri_business_token')
+    const token = getBusinessToken()
     return token ? { Authorization: `Bearer ${token}` } : {}
   }
 
@@ -342,59 +367,83 @@ function BusinessOnboarding(): JSX.Element {
     }
   }
 
+  const importDigitizedMenu = async (categories: DigitizedMenuCategory[]): Promise<void> => {
+    if (!businessId) return
+    const createdCategoryIds: Record<string, string> = {}
+
+    for (let i = 0; i < categories.length; i += 1) {
+      const cat = categories[i]
+      const res = await axios.post(
+        '/api/menu/category',
+        { businessId, name: cat.name, displayOrder: i },
+        { headers: getAuthHeaders() }
+      )
+      const id = res.data?.id as string | undefined
+      if (id) createdCategoryIds[cat.name] = id
+    }
+
+    for (let i = 0; i < categories.length; i += 1) {
+      const cat = categories[i]
+      const categoryId = createdCategoryIds[cat.name]
+      if (!categoryId) continue
+      for (let j = 0; j < cat.items.length; j += 1) {
+        const it = cat.items[j]
+        await axios.post(
+          '/api/menu/item',
+          {
+            businessId,
+            categoryId,
+            name: it.name,
+            description: it.description || null,
+            price: it.price ?? 0,
+            cost: 0,
+            imageUrl: null,
+            available: it.available !== false,
+            displayOrder: j
+          },
+          { headers: getAuthHeaders() }
+        )
+      }
+    }
+  }
+
   const uploadMenuImage = async (file: File): Promise<void> => {
     if (!businessId) return
-    if (!canUploadMenuPictures) {
-      setMenuSetupError('Menu photos are available from Starter plan and above.')
-      return
-    }
     if (menuSetupLoading) return
     setMenuSetupLoading(true)
     setMenuSetupError(null)
+    setMenuDigitizeSummary(null)
     try {
-      if (!file.type.startsWith('image/')) {
-        throw new Error('PDF import is not available yet. Please upload an image.')
+      const isImage = file.type.startsWith('image/')
+      const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+      if (!isImage && !isPdf) {
+        throw new Error('Upload a menu photo (JPEG, PNG) or PDF.')
       }
 
       const form = new FormData()
       form.append('businessId', businessId)
-      form.append('image', file)
+      form.append('file', file)
 
-      const uploadRes = await axios.post('/api/menu/upload-image', form, { headers: getAuthHeaders() })
-      const imageUrl = uploadRes.data?.imageUrl as string | undefined
-      if (!imageUrl) throw new Error('Upload failed')
+      const digitizeRes = await axios.post('/api/menu/digitize', form, {
+        headers: getAuthHeaders(),
+        timeout: 120000
+      })
 
-      const categoryRes = await axios.post(
-        '/api/menu/category',
-        {
-          businessId,
-          name: storefrontUseCase === 'ticketing' ? 'Imported artwork' : 'Imported from photo',
-          displayOrder: 0
-        },
-        { headers: getAuthHeaders() }
-      )
-      const categoryId = categoryRes.data?.id as string | undefined
-      if (!categoryId) throw new Error('Could not create category')
+      const categories = digitizeRes.data?.categories as DigitizedMenuCategory[] | undefined
+      if (!categories?.length) {
+        throw new Error('No menu items were detected. Try a clearer photo with visible prices.')
+      }
 
-      await axios.post(
-        '/api/menu/item',
-        {
-          businessId,
-          categoryId,
-          name: file.name.replace(/\.[^.]+$/, ''),
-          description:
-            storefrontUseCase === 'ticketing'
-              ? 'Imported from your artwork. Rename and set the ticket price in the dashboard.'
-              : 'Imported from your menu photo. Edit item details in the dashboard.',
-          price: 0,
-          cost: 0,
-          imageUrl,
-          available: false,
-          displayOrder: 0
-        },
-        { headers: getAuthHeaders() }
-      )
+      await importDigitizedMenu(categories)
 
+      setMenuDigitizeSummary({
+        categoryCount: Number(digitizeRes.data?.categoryCount) || categories.length,
+        itemCount: Number(digitizeRes.data?.itemCount) || categories.reduce((n, c) => n + c.items.length, 0),
+        notes: (digitizeRes.data?.notes as string | null) || null
+      })
+      if (digitizeRes.data?.quota) {
+        setMenuDigitizeQuota(digitizeRes.data.quota)
+      }
       setMenuChoice('upload')
     } catch (err) {
       setMenuSetupError(
@@ -402,13 +451,13 @@ function BusinessOnboarding(): JSX.Element {
           ? formatUserFacingError(
               err.response?.data,
               storefrontUseCase === 'ticketing'
-                ? 'Failed to upload image. Please try again.'
-                : 'Failed to upload menu image. Please try again.'
+                ? 'Failed to digitize ticket artwork. Please try again.'
+                : 'Failed to digitize menu. Please try again.'
             )
           : (err as Error).message ||
               (storefrontUseCase === 'ticketing'
-                ? 'Failed to upload image. Please try again.'
-                : 'Failed to upload menu image. Please try again.')
+                ? 'Failed to digitize ticket artwork. Please try again.'
+                : 'Failed to digitize menu. Please try again.')
       )
     } finally {
       setMenuSetupLoading(false)
@@ -416,7 +465,7 @@ function BusinessOnboarding(): JSX.Element {
   }
 
   useEffect(() => {
-    const token = localStorage.getItem('zuri_business_token')
+    const token = getBusinessToken()
     if (!token || !businessId) {
       navigate('/business/login', { replace: true })
       return
@@ -444,6 +493,18 @@ function BusinessOnboarding(): JSX.Element {
   useEffect(() => {
     if (step === 3) setHighlightIndex(0)
   }, [step, storefrontUseCase])
+
+  useEffect(() => {
+    if (step !== 4 || !businessId) return
+    axios
+      .get<{ quota: typeof menuDigitizeQuota }>(`/api/menu/digitize-quota?businessId=${businessId}`, {
+        headers: getAuthHeaders()
+      })
+      .then((res) => {
+        if (res.data?.quota) setMenuDigitizeQuota(res.data.quota)
+      })
+      .catch(() => {})
+  }, [step, businessId])
 
   useEffect(() => {
     if (step !== 3) return
@@ -908,29 +969,54 @@ function BusinessOnboarding(): JSX.Element {
                   </p>
                   <p className="text-sm text-gray-600 mb-3">
                     {storefrontUseCase === 'ticketing'
-                      ? 'We turn your image into a starter listing you can edit into ticket types.'
-                      : 'Our AI makes it editable in minutes.'}
+                      ? 'Free AI reads your poster or price list and creates editable ticket tiers with prices.'
+                      : 'Free AI reads your menu photo or PDF and creates editable categories, items, and prices.'}
                   </p>
+                  {menuDigitizeQuota ? (
+                    <p className="text-xs text-gray-500 mb-2">
+                      {menuDigitizeQuota.unlimited
+                        ? 'Unlimited AI menu uploads on your plan.'
+                        : `${menuDigitizeQuota.remaining ?? 0} of ${menuDigitizeQuota.limit} AI uploads remaining`}
+                    </p>
+                  ) : null}
                   <input
                     type="file"
                     accept="image/*,application/pdf"
-                    disabled={!canUploadMenuPictures || menuSetupLoading}
+                    capture="environment"
+                    disabled={
+                      menuSetupLoading ||
+                      (menuDigitizeQuota != null &&
+                        !menuDigitizeQuota.unlimited &&
+                        (menuDigitizeQuota.remaining ?? 0) <= 0)
+                    }
                     onChange={(e) => {
                       const f = e.target.files?.[0]
                       if (!f) return
                       void uploadMenuImage(f)
+                      e.target.value = ''
                     }}
                     className="w-full text-sm"
                   />
-                  {!canUploadMenuPictures ? (
-                    <p className="text-xs text-gray-500 mt-2">
-                      {storefrontUseCase === 'ticketing'
-                        ? 'Upgrade to Starter to upload images for your ticket storefront.'
-                        : 'Upgrade to Starter to upload menu photos.'}
+                  {menuSetupLoading ? (
+                    <p className="text-xs text-zuri-orange mt-2 font-semibold animate-pulse">
+                      AI is reading your {storefrontUseCase === 'ticketing' ? 'ticket list' : 'menu'}…
                     </p>
                   ) : null}
-                  {menuChoice === 'upload' ? (
-                    <p className="text-xs text-green-700 mt-2 font-semibold">Upload saved.</p>
+                  {!canUploadMenuPictures ? (
+                    <p className="text-xs text-gray-500 mt-2">
+                      Item photos on your menu still require Starter — AI text import is free.
+                    </p>
+                  ) : null}
+                  {menuChoice === 'upload' && menuDigitizeSummary ? (
+                    <p className="text-xs text-green-700 mt-2 font-semibold">
+                      AI imported {menuDigitizeSummary.categoryCount}{' '}
+                      {menuDigitizeSummary.categoryCount === 1 ? 'category' : 'categories'} and{' '}
+                      {menuDigitizeSummary.itemCount}{' '}
+                      {menuDigitizeSummary.itemCount === 1 ? 'item' : 'items'}. Review prices in your dashboard.
+                      {menuDigitizeSummary.notes ? (
+                        <span className="block text-gray-600 font-normal mt-1">{menuDigitizeSummary.notes}</span>
+                      ) : null}
+                    </p>
                   ) : null}
                 </div>
 

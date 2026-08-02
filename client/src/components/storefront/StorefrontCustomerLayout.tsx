@@ -4,7 +4,7 @@ import {
   getStorefrontTheme,
   getHeroBackground,
   getHeroBannerScrim,
-  storefrontFontFamily
+  storefrontFontStyles
 } from '../../lib/storefrontTheme'
 
 type Props = {
@@ -44,8 +44,11 @@ export function StorefrontCustomerLayout({
   children
 }: Props): JSX.Element {
   const theme = getStorefrontTheme(config)
-  const font = storefrontFontFamily(config)
+  const fonts = storefrontFontStyles(config)
   const title = details.name || businessNameFallback
+  const displayPhone = details.contactPhone?.trim() || phone?.trim() || ''
+  const ig = details.instagramHandle?.trim().replace(/^@/, '')
+  const wa = details.whatsappNumber?.trim()
   const tag = cuisineTagStyle(config)
   const bannerUrl = typeof config.heroBannerUrl === 'string' ? config.heroBannerUrl.trim() : ''
   const hasBanner = bannerUrl.length > 0
@@ -53,7 +56,7 @@ export function StorefrontCustomerLayout({
   return (
     <div
       className={embedded ? 'min-h-0 h-full flex flex-col' : 'min-h-screen flex flex-col'}
-      style={{ background: theme.page, color: theme.text, fontFamily: font }}
+      style={{ background: theme.page, color: theme.text, fontFamily: fonts.body }}
     >
       <div
         className="relative w-full box-border flex flex-col justify-end flex-shrink-0 overflow-hidden max-md:max-h-[min(52svh,420px)]"
@@ -74,7 +77,10 @@ export function StorefrontCustomerLayout({
           <p className="absolute top-5 left-6 z-20 text-xs uppercase tracking-wider text-white/80">Live preview</p>
         ) : null}
         <div className="relative z-10 px-4 pt-6 pb-8 sm:px-6 sm:pt-7 sm:pb-9">
-          <h1 className="font-extrabold leading-tight max-w-full break-words" style={{ fontSize: config.titleSize }}>
+          <h1
+            className="font-semibold leading-tight max-w-full break-words"
+            style={{ fontSize: config.titleSize, fontFamily: fonts.heading }}
+          >
             {title}
           </h1>
           {details.tagline ? <p className="text-sm text-white/85 mt-2 max-w-xl">{details.tagline}</p> : null}
@@ -104,8 +110,12 @@ export function StorefrontCustomerLayout({
               ) : null}
               <div className="min-w-0">
                 <h2
-                  className="font-bold truncate"
-                  style={{ fontSize: Math.min(Math.round(config.titleSize * 0.55), 22), color: theme.text }}
+                  className="font-medium truncate"
+                  style={{
+                    fontSize: Math.min(Math.round(config.titleSize * 0.55), 22),
+                    color: theme.text,
+                    fontFamily: fonts.heading
+                  }}
                 >
                   {title}
                 </h2>
@@ -114,9 +124,15 @@ export function StorefrontCustomerLayout({
                     {details.tagline}
                   </p>
                 ) : null}
-                {phone ? (
+                {displayPhone ? (
                   <p className="text-xs truncate" style={{ color: theme.sub }}>
-                    {phone}
+                    {displayPhone}
+                  </p>
+                ) : null}
+                {(ig || wa) ? (
+                  <p className="text-[10px] truncate mt-0.5 flex gap-2" style={{ color: theme.sub }}>
+                    {ig ? <span>@{ig}</span> : null}
+                    {wa ? <span>WhatsApp</span> : null}
                   </p>
                 ) : null}
               </div>

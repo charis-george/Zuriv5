@@ -1,29 +1,34 @@
 const express = require('express');
+const { sendResendEmail, isResendConfigured } = require('../lib/resendMail');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const crypto = require('crypto');
 const { getDb } = require('../database');
 const { getOrCreateNetworkCustomer } = require('../lib/zuri-network');
+const { getJwtSecret } = require('../lib/jwtSecret');
+const {
+  createPasswordResetToken,
+  consumePasswordResetToken,
+  purgeExpiredPasswordResetTokens,
+  validateNewPassword
+} = require('../lib/passwordResetTokens');
+const { checkLoginLock, recordLoginFailure, clearLoginFailures } = require('../lib/tapAuthLock');
 
 const supabase = getDb();
-const JWT_SECRET = process.env.JWT_SECRET || 'zuri-tap-secret-change-in-production';
-
-// In-memory store for password reset tokens (use DB + email in production)
-const tapResetTokens = new Map();
-const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
-
-function purgeExpiredTapTokens() {
-  const now = Date.now();
-  for (const [t, data] of tapResetTokens.entries()) {
-    if (data.expiresAt < now) tapResetTokens.delete(t);
-  }
-}
+const TAP_JWT_TTL_SEC = Number(process.env.TAP_JWT_TTL_SEC) || 60 * 60 * 24 * 30;
 
 function signToken(payload) {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
-  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  const sig = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
+  const body = Buffer.from(
+    JSON.stringify({
+      ...payload,
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + TAP_JWT_TTL_SEC
+    })
+  ).toString('base64url');
+  const secret = getJwtSecret();
+  const sig = crypto.createHmac('sha256', secret).update(`${header}.${body}`).digest('base64url');
   return `${header}.${body}.${sig}`;
 }
 
@@ -31,9 +36,12 @@ function verifyToken(token) {
   try {
     const parts = token.split('.');
     if (parts.length !== 3) return null;
-    const expected = crypto.createHmac('sha256', JWT_SECRET).update(`${parts[0]}.${parts[1]}`).digest('base64url');
+    const secret = getJwtSecret();
+    const expected = crypto.createHmac('sha256', secret).update(`${parts[0]}.${parts[1]}`).digest('base64url');
     if (parts[2] !== expected) return null;
-    return JSON.parse(Buffer.from(parts[1], 'base64url').toString());
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
+    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return payload;
   } catch {
     return null;
   }
@@ -44,6 +52,11 @@ router.post('/register', async (req, res) => {
     const { email, password, name, phone } = req.body;
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
+    }
+
+    const passwordError = validateNewPassword(password);
+    if (passwordError) {
+      return res.status(400).json({ error: passwordError });
     }
 
     const { data: existing } = await supabase
@@ -99,6 +112,9 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Email and password are required' });
     }
 
+    const lock = checkLoginLock(email);
+    if (!lock.ok) return res.status(429).json({ error: lock.error });
+
     const { data: user, error } = await supabase
       .from('zuri_tap_users')
       .select('id, email, password, name, phone')
@@ -106,12 +122,16 @@ router.post('/login', async (req, res) => {
       .single();
 
     if (error || !user) {
+      recordLoginFailure(email);
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
     if (!bcrypt.compareSync(password, user.password)) {
+      recordLoginFailure(email);
       return res.status(401).json({ error: 'Invalid credentials' });
     }
+
+    clearLoginFailures(email);
 
     const resolved = await getOrCreateNetworkCustomer(user.email);
     if (resolved.id) {
@@ -147,13 +167,39 @@ router.post('/forgot-password', async (req, res) => {
       return res.json({ success: true, message: 'If an account exists with this email, you will receive reset instructions.' });
     }
 
-    purgeExpiredTapTokens();
-    const token = crypto.randomBytes(32).toString('hex');
-    tapResetTokens.set(token, { userId: user.id, expiresAt: Date.now() + RESET_TOKEN_TTL_MS });
+    await purgeExpiredPasswordResetTokens();
+    let token;
+    try {
+      token = await createPasswordResetToken('tap', user.id);
+    } catch {
+      return res.status(503).json({ error: 'Password reset is temporarily unavailable. Please try again later.' });
+    }
 
-    const baseUrl = req.get('origin') || process.env.BASE_URL || 'http://localhost:5173';
+    const baseUrl = req.get('origin') || process.env.BASE_URL || process.env.FRONTEND_URL || 'http://localhost:5173';
     const resetLink = `${baseUrl}/tap/reset-password?token=${token}`;
-    res.json({ success: true, message: 'If an account exists with this email, you will receive reset instructions.', resetLink });
+    const toEmail = email.trim().toLowerCase();
+    const subject = 'Reset your ZURI Tap password';
+    const text = `You requested a password reset for your ZURI Tap account. Click the link below to set a new password (valid for 1 hour):\n\n${resetLink}\n\nIf you didn't request this, you can ignore this email.`;
+    const html = `<p>You requested a password reset for your ZURI Tap account.</p><p><a href="${resetLink}">Set a new password</a> (link valid for 1 hour).</p><p>If you didn't request this, you can ignore this email.</p>`;
+
+    setImmediate(() => {
+      if (!isResendConfigured()) {
+        console.warn('[ZURI] Tap password reset email skipped: set RESEND_API_KEY and RESEND_FROM.');
+        return;
+      }
+      sendResendEmail({ to: toEmail, subject, text, html }, { timeoutMs: 8000 }).catch((err) =>
+        console.error('Tap password reset email error:', err?.message || err)
+      );
+    });
+
+    const response = {
+      success: true,
+      message: 'If an account exists with this email, you will receive reset instructions.'
+    };
+    if (process.env.NODE_ENV !== 'production' && !isResendConfigured()) {
+      response.resetLink = resetLink;
+    }
+    res.json(response);
   } catch (err) {
     console.error('Tap forgot password error:', err);
     res.status(500).json({ error: 'Something went wrong' });
@@ -166,15 +212,14 @@ router.post('/reset-password', async (req, res) => {
     if (!token || typeof token !== 'string' || !token.trim()) {
       return res.status(400).json({ error: 'Reset token is required' });
     }
-    if (!newPassword || typeof newPassword !== 'string' || !newPassword.trim()) {
-      return res.status(400).json({ error: 'New password is required' });
-    }
-    if (newPassword.trim().length < 6) {
-      return res.status(400).json({ error: 'New password must be at least 6 characters' });
+
+    const passwordError = validateNewPassword(newPassword);
+    if (passwordError) {
+      return res.status(400).json({ error: passwordError });
     }
 
-    const data = tapResetTokens.get(token.trim());
-    if (!data || data.expiresAt < Date.now()) {
+    const userId = await consumePasswordResetToken('tap', token.trim());
+    if (!userId) {
       return res.status(400).json({ error: 'Invalid or expired reset link. Please request a new one.' });
     }
 
@@ -182,10 +227,9 @@ router.post('/reset-password', async (req, res) => {
     const { error: updateError } = await supabase
       .from('zuri_tap_users')
       .update({ password: hashedPassword })
-      .eq('id', data.userId);
+      .eq('id', userId);
     if (updateError) return res.status(500).json({ error: 'Failed to update password' });
 
-    tapResetTokens.delete(token.trim());
     res.json({ success: true, message: 'Password updated. You can now sign in.' });
   } catch (err) {
     console.error('Tap reset password error:', err);

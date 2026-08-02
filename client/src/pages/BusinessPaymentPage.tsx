@@ -1,20 +1,25 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import axios from 'axios'
-import { Business, PLAN_PRICES, PLAN_PRICES_YEARLY, PLAN_LABELS, YEARLY_DISCOUNT_PCT, type BillingInterval } from '../types'
+import { Business, PLAN_PRICES, PLAN_PRICES_YEARLY, PLAN_LABELS, YEARLY_DISCOUNT_PCT, type BillingInterval, type PaymentProvider } from '../types'
 import { PaperPlaneLoader } from '../components/PaperPlaneLoader'
 import { CustomDropdown } from '../components/CustomDropdown'
+import { useDialog } from '../components/DialogProvider'
 import { apiUrl } from '../lib/apiBase'
+import { clearBusinessAuth, getBusinessToken } from '../lib/businessAuthStorage'
 import { formatUserFacingError } from '../lib/formatApiError'
-import { preloadPaystackInline, startZuriPayment } from '../lib/paystackZuri'
+import { normalizeUuidParam } from '../lib/normalizeUuid'
+import { preloadZuriPayment, startZuriPayment } from '../lib/zuriPayment'
 import { formatModeTransactionFee } from '../lib/transactionFees'
 
 function BusinessPaymentPage(): JSX.Element {
-  const { businessId } = useParams<{ businessId: string }>()
+  const dialog = useDialog()
+  const { businessId: rawBusinessId } = useParams<{ businessId: string }>()
+  const businessId = normalizeUuidParam(rawBusinessId)
   const navigate = useNavigate()
 
   const getAuthHeaders = () => {
-    const t = localStorage.getItem('zuri_business_token')
+    const t = getBusinessToken()
     return t ? { Authorization: `Bearer ${t}` } : {}
   }
 
@@ -31,14 +36,18 @@ function BusinessPaymentPage(): JSX.Element {
   const [upgradeLoading, setUpgradeLoading] = useState<string | null>(null)
   const [upgradeBillingInterval, setUpgradeBillingInterval] = useState<BillingInterval>('monthly')
   const [cancelLoading, setCancelLoading] = useState(false)
+  const [manageLinkLoading, setManageLinkLoading] = useState(false)
+  const [paymentProvider, setPaymentProvider] = useState<PaymentProvider>('paystack')
+  const [providerSaving, setProviderSaving] = useState(false)
+  const [providerError, setProviderError] = useState<string | null>(null)
 
   useEffect(() => {
-    preloadPaystackInline()
+    preloadZuriPayment()
   }, [])
 
   useEffect(() => {
     if (!businessId) return
-    const token = localStorage.getItem('zuri_business_token')
+    const token = getBusinessToken()
     if (!token) {
       navigate('/business/login', { replace: true })
       return
@@ -46,21 +55,26 @@ function BusinessPaymentPage(): JSX.Element {
     axios.get<Business>(apiUrl(`/api/business/${businessId}`), { headers: getAuthHeaders() })
       .then(res => {
         setBusiness(res.data)
+        setPaymentProvider(res.data.paymentProvider === 'monnify' ? 'monnify' : 'paystack')
         setLoading(false)
       })
       .catch(err => {
         if (err.response?.status === 401) {
-          localStorage.removeItem('zuri_business_token')
+          clearBusinessAuth()
           navigate('/business/login', { replace: true })
         } else {
           console.error(err)
           setLoading(false)
         }
       })
-    axios.get<{ code: string; name: string }[]>(apiUrl('/api/banks'))
-      .then(res => setBanks(Array.isArray(res.data) ? res.data : []))
-      .catch(() => {})
   }, [businessId, navigate])
+
+  useEffect(() => {
+    axios
+      .get<{ code: string; name: string }[]>(apiUrl('/api/banks'), { params: { provider: paymentProvider } })
+      .then(res => setBanks(Array.isArray(res.data) ? res.data : []))
+      .catch(() => setBanks([]))
+  }, [paymentProvider])
 
   useEffect(() => {
     if (business?.bankAccount?.accountName) setShowBankForm(false)
@@ -113,8 +127,62 @@ function BusinessPaymentPage(): JSX.Element {
       <div className="max-w-2xl mx-auto px-4 py-8">
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
           <h2 className="text-lg font-bold text-zuri-black mb-6">Get paid</h2>
+
+          <h3 className="text-sm font-bold text-zuri-black mb-2">Payment terminal</h3>
           <p className="text-gray-600 text-sm mb-3 leading-relaxed">
-            Add a Nigerian payout account so customer payments can settle to you. We match your bank record through Paystack, then you confirm with your Zuri business password—only you can change where money goes.
+            Choose whether customer checkout and plan upgrades run through Paystack or Monnify. Payouts to your bank use the same provider.
+          </p>
+          <div className="flex flex-wrap gap-2 mb-3">
+            {(['paystack', 'monnify'] as const).map((provider) => (
+              <button
+                key={provider}
+                type="button"
+                disabled={providerSaving}
+                onClick={async () => {
+                  if (!businessId || paymentProvider === provider) return
+                  setProviderError(null)
+                  setProviderSaving(true)
+                  try {
+                    await axios.patch(`/api/business/${businessId}`, { paymentProvider: provider }, { headers: getAuthHeaders() })
+                    setPaymentProvider(provider)
+                    preloadZuriPayment(provider)
+                    setBankForm({ bankCode: '', bankName: '', accountNumber: '', accountName: '' })
+                    setBankResolveError(null)
+                    const { data } = await axios.get<Business>(`/api/business/${businessId}`, { headers: getAuthHeaders() })
+                    setBusiness(data)
+                  } catch (err) {
+                    setProviderError(
+                      axios.isAxiosError(err)
+                        ? formatUserFacingError(err.response?.data, 'Could not update payment terminal.')
+                        : 'Could not update payment terminal.'
+                    )
+                  } finally {
+                    setProviderSaving(false)
+                  }
+                }}
+                className={`px-4 py-2 rounded-xl text-sm font-semibold transition disabled:opacity-50 ${
+                  paymentProvider === provider
+                    ? 'bg-zuri-orange text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                {provider === 'paystack' ? 'Paystack' : 'Monnify'}
+              </button>
+            ))}
+          </div>
+          {providerError ? (
+            <p className="text-sm text-red-700 mb-4">{providerError}</p>
+          ) : (
+            <p className="text-xs text-gray-500 mb-6">
+              Active terminal: <span className="font-semibold text-zuri-black">{paymentProvider === 'monnify' ? 'Monnify' : 'Paystack'}</span>
+              {providerSaving ? ' — saving…' : ''}
+            </p>
+          )}
+
+          <p className="text-gray-600 text-sm mb-3 leading-relaxed">
+            Add a Nigerian payout account so customer payments can settle to you. Account names are verified through{' '}
+            <span className="font-semibold text-zuri-black">{paymentProvider === 'monnify' ? 'Monnify' : 'Paystack'}</span>
+            , then you confirm with your Zuri business password—only you can change where money goes.
           </p>
           <div className="rounded-xl border border-zuri-orange/25 bg-zuri-orange/5 p-4 mb-6">
             <p className="text-sm font-semibold text-zuri-black mb-1">Before you can save a bank account</p>
@@ -128,7 +196,7 @@ function BusinessPaymentPage(): JSX.Element {
             <div className="mb-6 p-4 rounded-xl border border-amber-200 bg-amber-50">
               <p className="text-sm font-semibold text-amber-900 mb-1">Bank list unavailable</p>
               <p className="text-xs text-amber-800 leading-relaxed">
-                We couldn&apos;t load Nigerian banks from Paystack. Refresh the page in a moment. If this keeps happening, check your connection or contact Zuri support—without the list you can&apos;t pick a bank yet.
+                We couldn&apos;t load Nigerian banks right now. Refresh the page in a moment. If this keeps happening, check your connection or contact Zuri support—without the list you can&apos;t pick a bank yet.
               </p>
             </div>
           ) : null}
@@ -245,15 +313,27 @@ function BusinessPaymentPage(): JSX.Element {
                     setBankResolving(true)
                     try {
                       const { data } = await axios.get<{ account_name: string }>(apiUrl('/api/banks/resolve'), {
-                        params: { bank_code: bankForm.bankCode, account_number: bankForm.accountNumber.trim() }
+                        params: {
+                          bank_code: bankForm.bankCode,
+                          account_number: bankForm.accountNumber.trim(),
+                          provider: paymentProvider,
+                        },
                       })
                       setBankForm(f => ({ ...f, accountName: data.account_name || '' }))
                     } catch (err: unknown) {
-                      const ax = err as { response?: { data?: { error?: string } } }
-                      const msg = formatUserFacingError(ax.response?.data, '')
+                      const ax = err as {
+                        response?: { data?: { error?: string; sandboxHint?: string; retryable?: boolean } }
+                      }
+                      const data = ax.response?.data
+                      const msg = formatUserFacingError(data, '')
+                      const hint =
+                        typeof data?.sandboxHint === 'string' && data.sandboxHint.trim()
+                          ? ` ${data.sandboxHint.trim()}`
+                          : ''
                       setBankResolveError(
-                        msg ||
-                          'Paystack could not match this account. Double-check the bank and your NUBAN (usually 10 digits), then try Verify again. If your details are correct, try again later or ask your bank.'
+                        (msg ||
+                          `We could not match this account via ${paymentProvider === 'monnify' ? 'Monnify' : 'Paystack'}. Double-check the bank and your NUBAN (usually 10 digits), then try Verify again. If your details are correct, try again later or ask your bank.`) +
+                          hint
                       )
                     } finally {
                       setBankResolving(false)
@@ -308,8 +388,77 @@ function BusinessPaymentPage(): JSX.Element {
           <hr className="border-gray-100 my-8" />
 
           <h3 className="text-lg font-bold text-zuri-black mb-4">Upgrade plan</h3>
+          {business.plan && business.plan !== 'free' ? (
+            <div className="mb-4 rounded-xl border border-gray-100 bg-gray-50 px-4 py-3 text-sm text-gray-700">
+              <p>
+                <span className="font-semibold text-zuri-black">Current plan:</span>{' '}
+                {PLAN_LABELS[business.plan as keyof typeof PLAN_LABELS] || business.plan}
+                {business.subscriptionInterval ? ` · ${business.subscriptionInterval}` : ''}
+              </p>
+              {business.renewsAutomatically ? (
+                <p className="mt-1 text-xs text-gray-600">
+                  Recurring billing via Paystack
+                  {business.subscriptionCurrentPeriodEnd
+                    ? ` · next charge ${new Date(business.subscriptionCurrentPeriodEnd).toLocaleDateString(undefined, { dateStyle: 'medium' })}`
+                    : ''}
+                </p>
+              ) : business.subscriptionCurrentPeriodEnd ? (
+                <p className="mt-1 text-xs text-gray-600">
+                  Active until {new Date(business.subscriptionCurrentPeriodEnd).toLocaleDateString(undefined, { dateStyle: 'medium' })}
+                  {paymentProvider === 'monnify' ? ' — renew manually before this date' : ''}
+                </p>
+              ) : null}
+              {business.subscriptionStatus === 'past_due' ? (
+                <p className="mt-2 text-xs font-semibold text-red-700">
+                  Payment failed on your last renewal. Update your card in Paystack or re-subscribe to avoid losing access.
+                </p>
+              ) : null}
+              {business.subscriptionStatus === 'cancelled' && business.subscriptionCurrentPeriodEnd ? (
+                <p className="mt-2 text-xs text-amber-800">
+                  Cancelled — access continues until {new Date(business.subscriptionCurrentPeriodEnd).toLocaleDateString(undefined, { dateStyle: 'medium' })}.
+                </p>
+              ) : null}
+              {business.renewsAutomatically ? (
+                <button
+                  type="button"
+                  disabled={manageLinkLoading}
+                  onClick={async () => {
+                    if (business.managePaymentUrl) {
+                      window.open(business.managePaymentUrl, '_blank', 'noopener,noreferrer')
+                      return
+                    }
+                    setManageLinkLoading(true)
+                    try {
+                      const { data } = await axios.get<{ link: string }>(
+                        apiUrl('/api/subscription/manage-payment-link'),
+                        { headers: getAuthHeaders() }
+                      )
+                      if (data?.link) {
+                        window.open(data.link, '_blank', 'noopener,noreferrer')
+                      } else {
+                        dialog.alert('Could not open the payment update page. Try again shortly.')
+                      }
+                    } catch (err) {
+                      dialog.alert(
+                        axios.isAxiosError(err)
+                          ? formatUserFacingError(err.response?.data, 'Could not open payment update page.')
+                          : 'Could not open payment update page.'
+                      )
+                    } finally {
+                      setManageLinkLoading(false)
+                    }
+                  }}
+                  className="mt-3 text-xs font-semibold text-zuri-orange hover:underline disabled:opacity-60"
+                >
+                  {manageLinkLoading ? 'Opening…' : 'Update payment method'}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           <p className="text-gray-600 text-sm mb-4 leading-relaxed">
-            Checkout opens in ZURI Pay with ZURI-branded Paystack checkout for a consistent billing experience.
+            {paymentProvider === 'paystack'
+              ? 'Plans renew automatically each billing period via Paystack. Your card is charged on the renewal date until you cancel.'
+              : 'Checkout opens in Monnify for a one-time plan period. Renew manually before your period ends.'}
           </p>
           <div className="flex items-center gap-2 mb-4">
             <span className="text-sm font-semibold text-zuri-black">Billing:</span>
@@ -334,24 +483,46 @@ function BusinessPaymentPage(): JSX.Element {
                 key={plan}
                 disabled={business.plan === plan || upgradeLoading !== null}
                 onClick={async () => {
-                  if (!businessId || !business?.email) return
+                  if (!businessId) return
                   setUpgradeLoading(plan)
                   try {
-                    const { data } = await axios.post<{ authorizationUrl: string; accessCode?: string; reference: string }>(apiUrl('/api/subscription/initialize'), {
+                    const { data } = await axios.post<{
+                      provider?: 'paystack' | 'monnify'
+                      authorizationUrl?: string
+                      accessCode?: string
+                      reference: string
+                      checkoutUrl?: string
+                      apiKey?: string
+                      contractCode?: string
+                      amount?: number
+                      customerEmail?: string
+                      customerName?: string
+                      isTestMode?: boolean
+                    }>(apiUrl('/api/subscription/initialize'), {
                       businessId,
                       plan,
-                      email: business.email,
+                      ...(business?.email ? { email: business.email } : {}),
                       callbackUrl: `${window.location.origin}/upgrade-done`,
                       interval: upgradeBillingInterval
                     }, { headers: getAuthHeaders() })
+                    const upgradeDoneUrl = `${window.location.origin}/upgrade-done?reference=${encodeURIComponent(data.reference)}`
                     await startZuriPayment(
                       {
+                        provider: data.provider,
                         authorizationUrl: data.authorizationUrl,
                         accessCode: data.accessCode,
                         reference: data.reference,
+                        orderId: data.reference,
+                        checkoutUrl: data.checkoutUrl,
+                        apiKey: data.apiKey,
+                        contractCode: data.contractCode,
+                        amount: data.amount,
+                        customerEmail: data.customerEmail || business?.email,
+                        customerName: data.customerName || business?.name,
+                        isTestMode: data.isTestMode,
                       },
                       {
-                        successPath: `${window.location.origin}/upgrade-done`,
+                        successPath: upgradeDoneUrl,
                         onError: (msg) => alert(msg || 'Failed to start payment'),
                       },
                     )
@@ -371,27 +542,39 @@ function BusinessPaymentPage(): JSX.Element {
             <div className="mt-5 rounded-xl border border-red-100 bg-red-50 p-4">
               <p className="text-sm font-semibold text-red-700 mb-1">Cancel subscription</p>
               <p className="text-xs text-red-700/90 mb-3">
-                This will move your account to the Free plan immediately.
+                {business.renewsAutomatically
+                  ? 'Auto-renewal stops immediately. You keep access until the end of your current billing period.'
+                  : 'Your plan stays active until the current period ends, then moves to Free.'}
               </p>
               <button
                 type="button"
                 disabled={cancelLoading}
                 onClick={async () => {
                   if (!businessId) return
-                  const ok = window.confirm('Cancel subscription and switch to Free plan now?')
+                  const ok = await dialog.confirm({
+                    title: 'Cancel subscription?',
+                    message: business.renewsAutomatically
+                      ? 'Auto-renewal will stop. You keep access until your current billing period ends.'
+                      : 'Your plan will end after the current billing period.',
+                    confirmLabel: 'Cancel subscription',
+                    danger: true
+                  })
                   if (!ok) return
                   setCancelLoading(true)
                   try {
-                    await axios.post(
+                    const cancelRes = await axios.post<{ message?: string }>(
                       apiUrl('/api/subscription/cancel'),
                       { businessId },
                       { headers: getAuthHeaders() }
                     )
                     const { data } = await axios.get<Business>(apiUrl(`/api/business/${businessId}`), { headers: getAuthHeaders() })
                     setBusiness(data)
-                    alert('Subscription cancelled. Your account is now on Free plan.')
+                    dialog.alert(cancelRes.data?.message || 'Subscription cancelled.', {
+                      variant: 'success',
+                      title: 'Done'
+                    })
                   } catch (err) {
-                    alert(
+                    dialog.alert(
                       axios.isAxiosError(err)
                         ? formatUserFacingError(err.response?.data, 'Could not cancel subscription right now.')
                         : 'Could not cancel subscription right now.'

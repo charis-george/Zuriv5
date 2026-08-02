@@ -22,6 +22,22 @@ function absoluteUrl(path = '/'): string {
   return `${SITE_URL}${path.startsWith('/') ? path : `/${path}`}`
 }
 
+/** Absolute HTTPS-friendly URL for Open Graph / Twitter card images. */
+export function resolveOgImageUrl(image?: string | null): string {
+  const value = String(image || '').trim()
+  if (!value) return DEFAULT_OG_IMAGE
+  if (/^https?:\/\//i.test(value)) return value
+  if (value.startsWith('//')) return `https:${value}`
+  if (typeof window !== 'undefined') {
+    try {
+      return new URL(value, window.location.origin).href
+    } catch {
+      return absoluteUrl(value)
+    }
+  }
+  return absoluteUrl(value)
+}
+
 function upsertMeta(selector: string, attr: 'name' | 'property', key: string, content: string): void {
   let tag = document.head.querySelector<HTMLMetaElement>(selector)
   if (!tag) {
@@ -45,7 +61,7 @@ function upsertLink(rel: string, href: string): void {
 export function usePageSeo(options: SeoOptions): void {
   useEffect(() => {
     const canonical = absoluteUrl(options.path || window.location.pathname)
-    const image = options.image || DEFAULT_OG_IMAGE
+    const image = resolveOgImageUrl(options.image)
 
     document.title = options.title
     upsertMeta('meta[name="description"]', 'name', 'description', options.description)
@@ -58,11 +74,13 @@ export function usePageSeo(options: SeoOptions): void {
     upsertMeta('meta[property="og:type"]', 'property', 'og:type', options.type || 'website')
     upsertMeta('meta[property="og:url"]', 'property', 'og:url', canonical)
     upsertMeta('meta[property="og:image"]', 'property', 'og:image', image)
+    upsertMeta('meta[property="og:image:alt"]', 'property', 'og:image:alt', options.title)
 
     upsertMeta('meta[name="twitter:card"]', 'name', 'twitter:card', 'summary_large_image')
     upsertMeta('meta[name="twitter:title"]', 'name', 'twitter:title', options.title)
     upsertMeta('meta[name="twitter:description"]', 'name', 'twitter:description', options.description)
     upsertMeta('meta[name="twitter:image"]', 'name', 'twitter:image', image)
+    upsertMeta('meta[name="twitter:image:alt"]', 'name', 'twitter:image:alt', options.title)
 
     const existing = document.getElementById('zuri-page-jsonld')
     if (existing) existing.remove()

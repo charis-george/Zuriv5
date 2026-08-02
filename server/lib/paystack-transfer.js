@@ -47,7 +47,7 @@ async function paystackPost(path, body) {
 async function getOrCreateRecipient(supabase, businessId) {
   const { data: business, error: bizError } = await supabase
     .from('businesses')
-    .select('id, bank_code, bank_name, account_number, account_name, paystack_recipient_code')
+    .select('id, bank_code, bank_name, account_number, account_name, paystack_recipient_code, bank_verified_at')
     .eq('id', businessId)
     .single();
 
@@ -57,8 +57,8 @@ async function getOrCreateRecipient(supabase, businessId) {
   if (business.paystack_recipient_code) {
     return { recipientCode: business.paystack_recipient_code };
   }
-  if (!business.bank_code || !business.account_number || !business.account_name) {
-    return { error: 'Business has no verified bank account' };
+  if (!business.bank_verified_at || !business.bank_code || !business.account_number || !business.account_name) {
+    return { error: 'Business bank account is not verified' };
   }
 
   const { data: createRes, ok } = await paystackPost('/transferrecipient', {
@@ -249,6 +249,7 @@ async function updatePayoutStatusFromWebhook(reference, status, errorMessage = n
 module.exports = {
   getOrCreateRecipient,
   computeTransferAmountKobo,
+  feeConfigForMode,
   processOrderPayout,
   updatePayoutStatusFromWebhook
 };

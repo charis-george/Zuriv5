@@ -1,5 +1,25 @@
 /** Paystack Inline v2 — loaded from CDN (no npm dep; reliable on Vercel). */
+import { stashPendingPayment, type PendingPaymentKind } from './paymentReferenceStorage'
+import { apiUrl } from './apiBase'
+
 const PAYSTACK_INLINE_SRC = 'https://js.paystack.co/v2/inline.js'
+
+function paymentKindFromSuccessPath(successPath: string): PendingPaymentKind {
+  return successPath.includes('upgrade-done') ? 'subscription' : 'order'
+}
+
+function extractPaystackReference(
+  response: { reference?: string; trxref?: string; trans?: string } | undefined,
+  fallback: string,
+): string {
+  const raw =
+    response?.reference ??
+    (response as { trxref?: string })?.trxref ??
+    (response as { trans?: string })?.trans ??
+    fallback
+  const trimmed = String(raw || '').trim()
+  return trimmed || fallback
+}
 
 /** ZURI brand tokens — also set in Paystack Dashboard → Settings → Branding */
 export const ZURI_PAYSTACK_BRAND = {
@@ -206,7 +226,7 @@ export async function openZuriPaystackCheckout(options: OpenZuriPaystackOptions)
       onSuccess(response) {
         window.clearTimeout(fallbackTimer)
         finish()
-        onSuccess(response.reference || reference)
+        onSuccess(extractPaystackReference(response, reference))
       },
       onCancel() {
         window.clearTimeout(fallbackTimer)
@@ -234,6 +254,29 @@ export async function openZuriPaystackCheckout(options: OpenZuriPaystackOptions)
   }
 }
 
+function resolvePaidReference(initReference: string, paidReference: string, kind: PendingPaymentKind): string {
+  const init = String(initReference || '').trim()
+  const paid = String(paidReference || '').trim()
+  if (kind === 'subscription' && init.startsWith('sub_')) return init
+  if (paid.startsWith('sub_')) return paid
+  return paid || init
+}
+
+function buildSuccessRedirectUrl(successPath: string, paidReference: string): string {
+  const ref = String(paidReference || '').trim()
+  if (!ref) return successPath
+  try {
+    const url = new URL(successPath, window.location.origin)
+    if (!url.searchParams.get('reference') && !url.searchParams.get('trxref')) {
+      url.searchParams.set('reference', ref)
+    }
+    return url.toString()
+  } catch {
+    const sep = successPath.includes('?') ? '&' : '?'
+    return `${successPath}${sep}reference=${encodeURIComponent(ref)}`
+  }
+}
+
 export async function startZuriPayment(
   data: PaystackInitializePayload,
   opts?: {
@@ -242,10 +285,18 @@ export async function startZuriPayment(
     onError?: (message: string) => void
   },
 ): Promise<void> {
-  const ref = data.reference
+  const ref = String(data.reference || '').trim()
+  if (!ref) {
+    opts?.onError?.('Could not start payment (missing reference)')
+    return
+  }
+
   const successPath =
     opts?.successPath ??
     `${window.location.origin}/payment-done?reference=${encodeURIComponent(ref)}`
+
+  const paymentKind = paymentKindFromSuccessPath(successPath)
+  stashPendingPayment(ref, paymentKind)
 
   if (!data.accessCode) {
     if (data.authorizationUrl) {
@@ -260,8 +311,11 @@ export async function startZuriPayment(
     accessCode: data.accessCode,
     authorizationUrl: data.authorizationUrl,
     reference: ref,
-    onSuccess: () => {
-      window.location.href = successPath
+    onSuccess: (paidReference) => {
+      const finalRef = resolvePaidReference(ref, paidReference, paymentKind)
+      // Confirm payment + queue receipt immediately (don't rely on redirect alone).
+      void fetch(apiUrl(`/api/payment/verify/${encodeURIComponent(finalRef)}`)).catch(() => {})
+      window.location.href = buildSuccessRedirectUrl(successPath, finalRef)
     },
     onCancel: opts?.onCancel,
     onError: opts?.onError,
