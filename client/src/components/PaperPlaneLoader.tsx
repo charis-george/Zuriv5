@@ -1,98 +1,139 @@
-import { useEffect, useRef, useState, type JSX } from 'react'
+import { useEffect, useRef, type JSX } from 'react'
 
-/** Public asset; filename contains a space — keep encoded for reliable loading. */
-const ZURI_LOADER_VIDEO = encodeURI('/ZURI Animation.mp4')
+/** Compact H.264 loop (~11KB) — much lighter than the original 1440² MP4. */
+const ZURI_LOADER_MP4 = '/zuri-loader.mp4'
 
 type Size = 'sm' | 'md' | 'lg'
 
 const sizePx: Record<Size, number> = {
   sm: 48,
   md: 72,
-  lg: 120
+  lg: 120,
 }
 
 interface PaperPlaneLoaderProps {
   size?: Size
   label?: string
   className?: string
-  /** Use inside cards/toolbars; default is full-hero size */
   compact?: boolean
 }
 
-function isIosSafari(): boolean {
-  if (typeof navigator === 'undefined') return false
-  const ua = navigator.userAgent
-  const ios =
-    /iPad|iPhone|iPod/.test(ua) ||
-    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
-  return ios
-}
-
-/** CSS-only loader — no native video controls on iOS Safari. */
-function LogoPulseLoader({ px, className }: { px: number; className?: string }): JSX.Element {
-  return (
-    <div
-      className={`zuri-loader-logo ${className ?? ''}`}
-      style={{ width: px, height: px }}
-      aria-hidden
-    >
-      <img src="/ZURI.png" alt="" width={px} height={px} className="zuri-loader-logo__img" draggable={false} />
-    </div>
-  )
-}
-
-export function PaperPlaneLoader({ size = 'md', label, className = '', compact = false }: PaperPlaneLoaderProps): JSX.Element {
+/**
+ * Centered ZURI loading animation only.
+ * Decodes a tiny MP4 and paints frames to canvas so Safari never shows a play button.
+ * No alternate / pulse logo fallback.
+ */
+export function PaperPlaneLoader({
+  size = 'md',
+  label,
+  className = '',
+  compact = false,
+}: PaperPlaneLoaderProps): JSX.Element {
   const videoRef = useRef<HTMLVideoElement>(null)
-  const [useLogoLoader, setUseLogoLoader] = useState(() => isIosSafari())
+  const canvasRef = useRef<HTMLCanvasElement>(null)
   const px = compact ? 56 : sizePx[size]
 
   useEffect(() => {
-    if (useLogoLoader) return
     const video = videoRef.current
-    if (!video) return
+    const canvas = canvasRef.current
+    if (!video || !canvas) return
+
+    const ctx = canvas.getContext('2d', { alpha: true })
+    if (!ctx) return
+
+    let raf = 0
+    let alive = true
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
 
     video.muted = true
     video.defaultMuted = true
     video.playsInline = true
+    video.loop = true
+    video.controls = false
+    video.disablePictureInPicture = true
     video.setAttribute('playsinline', '')
     video.setAttribute('webkit-playsinline', '')
-    video.setAttribute('x-webkit-airplay', 'deny')
-    video.controls = false
+    video.setAttribute('muted', '')
     video.removeAttribute('controls')
 
+    const paint = (): void => {
+      if (!alive) return
+      if (video.readyState >= 2 && video.videoWidth > 0) {
+        if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+          canvas.width = video.videoWidth
+          canvas.height = video.videoHeight
+        }
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+      }
+      raf = requestAnimationFrame(paint)
+    }
+
     const tryPlay = (): void => {
-      const p = video.play()
-      if (p && typeof p.catch === 'function') {
-        p.catch(() => setUseLogoLoader(true))
+      if (!alive) return
+      const playResult = video.play()
+      if (playResult && typeof playResult.then === 'function') {
+        playResult
+          .then(() => {
+            if (alive) paint()
+          })
+          .catch(() => {
+            if (!alive) return
+            retryTimer = setTimeout(tryPlay, 350)
+          })
+      } else {
+        paint()
       }
     }
 
     tryPlay()
     video.addEventListener('loadeddata', tryPlay)
-    return () => video.removeEventListener('loadeddata', tryPlay)
-  }, [useLogoLoader])
+    video.addEventListener('canplay', tryPlay)
+
+    return () => {
+      alive = false
+      cancelAnimationFrame(raf)
+      if (retryTimer) clearTimeout(retryTimer)
+      video.removeEventListener('loadeddata', tryPlay)
+      video.removeEventListener('canplay', tryPlay)
+      try {
+        video.pause()
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [])
 
   return (
-    <div className={`flex flex-col items-center justify-center ${className}`}>
-      {useLogoLoader ? (
-        <LogoPulseLoader px={px} />
-      ) : (
-        <video
-          ref={videoRef}
-          className="zuri-loader-video"
-          style={{ width: px, height: px, maxWidth: 'min(70vw, 240px)' }}
-          autoPlay
-          loop
-          muted
-          playsInline
-          preload="auto"
-          disablePictureInPicture
-          controls={false}
-          aria-hidden
-        >
-          <source src={ZURI_LOADER_VIDEO} type="video/mp4" />
-        </video>
-      )}
+    <div
+      className={`relative flex flex-col items-center justify-center ${className}`}
+      role="status"
+      aria-live="polite"
+      aria-label={label || 'Loading'}
+    >
+      <video
+        ref={videoRef}
+        className="zuri-loader-video-source"
+        autoPlay
+        loop
+        muted
+        playsInline
+        preload="auto"
+        disablePictureInPicture
+        controls={false}
+        tabIndex={-1}
+        aria-hidden
+      >
+        <source src={ZURI_LOADER_MP4} type="video/mp4" />
+      </video>
+
+      <canvas
+        ref={canvasRef}
+        className="zuri-loader-canvas"
+        style={{ width: px, height: px, maxWidth: 'min(70vw, 240px)' }}
+        aria-hidden
+      />
+
       {label ? (
         <p className="mt-4 text-white/90 text-sm text-center max-w-xs">{label}</p>
       ) : null}
