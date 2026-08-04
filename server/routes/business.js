@@ -288,7 +288,7 @@ router.get('/:id', async (req, res) => {
 
     const { data: business, error } = await supabase
       .from('businesses')
-      .select('id, name, email, phone, address, contact_name, account_status, bank_verified_at, created_at, plan, subscription_status, subscription_interval, subscription_current_period_end, subscription_cancelled_at, paystack_subscription_code, paystack_public_key, payment_provider, bank_code, bank_name, account_number, account_name, logo_url, storefront_config, storefront_details, storefront_profiles, business_mode, storefront_ai_generations, menu_digitize_uses, menu_digitize_tokens_total, business_group_id, kyc_doc_requested_at, moderation_notes, payment_agent_enabled, agent_forwarding_number, match_window_minutes, agent_staff_msisdn, agent_allowed_msisdns')
+      .select('id, name, email, phone, address, contact_name, account_status, bank_verified_at, created_at, plan, subscription_status, subscription_interval, subscription_current_period_end, subscription_cancelled_at, paystack_subscription_code, paystack_public_key, payment_provider, bank_code, bank_name, account_number, account_name, logo_url, storefront_config, storefront_details, storefront_profiles, business_mode, storefront_ai_generations, menu_digitize_uses, menu_digitize_tokens_total, business_group_id, kyc_doc_requested_at, moderation_notes, payment_agent_enabled, agent_forwarding_number, match_window_minutes, agent_staff_msisdn, agent_allowed_msisdns, paystack_terminal_id')
       .eq('id', id)
       .single();
 
@@ -360,6 +360,7 @@ router.get('/:id', async (req, res) => {
       payload.matchWindowMinutes = business.match_window_minutes ?? 20;
       payload.agentStaffMsisdn = business.agent_staff_msisdn || null;
       payload.agentAllowedMsisdns = business.agent_allowed_msisdns || [];
+      payload.paystackTerminalId = business.paystack_terminal_id || null;
       if (payload.renewsAutomatically) {
         try {
           const manage = await getManagePaymentUrlForBusiness(id);

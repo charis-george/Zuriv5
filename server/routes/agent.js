@@ -13,6 +13,11 @@ const {
   resolveBusinessForInbound
 } = require('../lib/paymentAgent/matchEngine');
 const { confirmMatch, emitAgentAlert } = require('../lib/paymentAgent/confirmMatch');
+const {
+  isTerminalConfigured,
+  listTerminals,
+  pushOrderPaymentToTerminal
+} = require('../lib/paystack-terminal');
 
 const MAX_SMS_TEXT_CHARS = 2000;
 
@@ -264,7 +269,7 @@ router.post('/alerts/:alertId/confirm', requireBusinessAuth, async (req, res) =>
 
 /**
  * Enable / update Zuri Assist payment agent for the authenticated business.
- * Body: { enabled?, allowedMsisdns?, staffMsisdn?, matchWindowMinutes? }
+ * Body: { enabled?, allowedMsisdns?, staffMsisdn?, matchWindowMinutes?, paystackTerminalId? }
  */
 router.post('/enable', requireBusinessAuth, async (req, res) => {
   try {
@@ -273,7 +278,8 @@ router.post('/enable', requireBusinessAuth, async (req, res) => {
       enabled,
       allowedMsisdns,
       staffMsisdn,
-      matchWindowMinutes
+      matchWindowMinutes,
+      paystackTerminalId
     } = req.body || {};
 
     const updates = {};
@@ -313,28 +319,42 @@ router.post('/enable', requireBusinessAuth, async (req, res) => {
       updates.match_window_minutes = Math.round(w);
     }
 
+    if (paystackTerminalId !== undefined) {
+      const tid = paystackTerminalId == null ? '' : String(paystackTerminalId).trim();
+      updates.paystack_terminal_id = tid || null;
+    }
+
     const defaultNumber = getAtAgentNumber();
     if (updates.payment_agent_enabled === true) {
       const { data: existing } = await db()
         .from('businesses')
-        .select('agent_forwarding_number, agent_allowed_msisdns')
+        .select('agent_forwarding_number, agent_allowed_msisdns, paystack_terminal_id')
         .eq('id', businessId)
         .maybeSingle();
 
       const nextAllow =
         updates.agent_allowed_msisdns ?? existing?.agent_allowed_msisdns ?? [];
-      if (!nextAllow.length) {
+      const nextTerminal =
+        updates.paystack_terminal_id !== undefined
+          ? updates.paystack_terminal_id
+          : existing?.paystack_terminal_id;
+
+      // Assist can run on SMS forwards and/or a linked Paystack Terminal.
+      if (!nextAllow.length && !nextTerminal) {
         return res.status(400).json({
-          error: 'Add at least one allowlisted phone that will forward SMS alerts'
+          error:
+            'Add at least one allowlisted phone for SMS matching, or link a Paystack Terminal ID'
         });
       }
 
-      if (!defaultNumber && !existing?.agent_forwarding_number) {
-        return res.status(400).json({
-          error: 'Forwarding number is not configured yet. Contact Zuri support.'
-        });
+      if (nextAllow.length) {
+        if (!defaultNumber && !existing?.agent_forwarding_number) {
+          return res.status(400).json({
+            error: 'Forwarding number is not configured yet. Contact Zuri support.'
+          });
+        }
+        updates.agent_forwarding_number = defaultNumber || existing.agent_forwarding_number;
       }
-      updates.agent_forwarding_number = defaultNumber || existing.agent_forwarding_number;
     }
 
     if (!Object.keys(updates).length) {
@@ -346,7 +366,7 @@ router.post('/enable', requireBusinessAuth, async (req, res) => {
       .update(updates)
       .eq('id', businessId)
       .select(
-        'id, payment_agent_enabled, agent_forwarding_number, match_window_minutes, agent_staff_msisdn, agent_allowed_msisdns'
+        'id, payment_agent_enabled, agent_forwarding_number, match_window_minutes, agent_staff_msisdn, agent_allowed_msisdns, paystack_terminal_id'
       )
       .single();
 
@@ -359,7 +379,8 @@ router.post('/enable', requireBusinessAuth, async (req, res) => {
       agentForwardingNumber: data.agent_forwarding_number,
       matchWindowMinutes: data.match_window_minutes,
       agentStaffMsisdn: data.agent_staff_msisdn,
-      agentAllowedMsisdns: data.agent_allowed_msisdns || []
+      agentAllowedMsisdns: data.agent_allowed_msisdns || [],
+      paystackTerminalId: data.paystack_terminal_id || null
     });
   } catch (err) {
     console.error('[ZURI] agent enable:', err?.message || err);
@@ -372,7 +393,7 @@ router.get('/settings', requireBusinessAuth, async (req, res) => {
     const { data, error } = await db()
       .from('businesses')
       .select(
-        'payment_agent_enabled, agent_forwarding_number, match_window_minutes, agent_staff_msisdn, agent_allowed_msisdns'
+        'payment_agent_enabled, agent_forwarding_number, match_window_minutes, agent_staff_msisdn, agent_allowed_msisdns, paystack_terminal_id'
       )
       .eq('id', req.businessId)
       .single();
@@ -386,10 +407,145 @@ router.get('/settings', requireBusinessAuth, async (req, res) => {
       agentForwardingNumber: data.agent_forwarding_number || getAtAgentNumber(),
       matchWindowMinutes: data.match_window_minutes ?? 20,
       agentStaffMsisdn: data.agent_staff_msisdn,
-      agentAllowedMsisdns: data.agent_allowed_msisdns || []
+      agentAllowedMsisdns: data.agent_allowed_msisdns || [],
+      paystackTerminalId: data.paystack_terminal_id || null,
+      terminalApiReady: isTerminalConfigured()
     });
   } catch (err) {
     res.status(500).json({ error: 'Failed to load agent settings' });
+  }
+});
+
+/** List Paystack Terminals on the platform integration (for linking). */
+router.get('/terminals', requireBusinessAuth, async (req, res) => {
+  try {
+    if (!isTerminalConfigured()) {
+      return res.status(503).json({ error: 'Paystack is not configured on this server' });
+    }
+    const result = await listTerminals();
+    if (!result.ok) {
+      return res.status(502).json({ error: result.error || 'Failed to list terminals' });
+    }
+    const { data: biz } = await db()
+      .from('businesses')
+      .select('paystack_terminal_id')
+      .eq('id', req.businessId)
+      .maybeSingle();
+    res.json({
+      terminals: result.terminals,
+      linkedTerminalId: biz?.paystack_terminal_id || null
+    });
+  } catch (err) {
+    console.error('[ZURI] agent terminals:', err?.message || err);
+    res.status(500).json({ error: 'Failed to list terminals' });
+  }
+});
+
+/**
+ * Push a pending order to the business's linked Paystack Terminal.
+ * Body: { orderId, terminalId? }
+ */
+router.post('/terminal/charge', requireBusinessAuth, async (req, res) => {
+  try {
+    const businessId = req.businessId;
+    const orderId =
+      normalizeUuid(req.body?.order_id || req.body?.orderId) ||
+      req.body?.order_id ||
+      req.body?.orderId;
+    if (!orderId) {
+      return res.status(400).json({ error: 'order_id is required' });
+    }
+
+    const { data: business, error: bizErr } = await db()
+      .from('businesses')
+      .select('id, name, paystack_terminal_id, payment_provider')
+      .eq('id', businessId)
+      .maybeSingle();
+    if (bizErr || !business) {
+      return res.status(404).json({ error: 'Business not found' });
+    }
+
+    const terminalId =
+      String(req.body?.terminalId || req.body?.terminal_id || business.paystack_terminal_id || '').trim();
+    if (!terminalId) {
+      return res.status(400).json({
+        error: 'Link a Paystack Terminal ID in Settings before charging on Terminal'
+      });
+    }
+
+    const { data: order, error: orderErr } = await db()
+      .from('orders')
+      .select(
+        'id, business_id, total_amount, payment_status, customer_name, customer_email, customer_phone, status'
+      )
+      .eq('id', orderId)
+      .eq('business_id', businessId)
+      .maybeSingle();
+    if (orderErr || !order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    if (order.payment_status === 'paid') {
+      return res.status(409).json({ error: 'Order is already paid' });
+    }
+
+    const { data: items } = await db()
+      .from('order_items')
+      .select('quantity, price, menu_item_id')
+      .eq('order_id', orderId)
+      .limit(20);
+    const menuIds = [...new Set((items || []).map((i) => i.menu_item_id).filter(Boolean))];
+    let nameMap = {};
+    if (menuIds.length) {
+      const { data: menu } = await db().from('menu_items').select('id, name').in('id', menuIds);
+      nameMap = (menu || []).reduce((acc, m) => {
+        acc[m.id] = m.name;
+        return acc;
+      }, {});
+    }
+    const lineItems = (items || []).map((it) => ({
+      name: nameMap[it.menu_item_id] || 'Item',
+      price: it.price,
+      quantity: it.quantity
+    }));
+
+    const pushed = await pushOrderPaymentToTerminal({
+      order,
+      business,
+      terminalId,
+      lineItems
+    });
+    if (!pushed.ok) {
+      return res.status(502).json({ error: pushed.error || 'Terminal push failed' });
+    }
+
+    await db()
+      .from('orders')
+      .update({
+        terminal_offline_reference: pushed.offlineReference,
+        paystack_payment_reference: pushed.offlineReference,
+        payment_method: 'pos'
+      })
+      .eq('id', orderId)
+      .eq('business_id', businessId);
+
+    emitAgentAlert(req, businessId, {
+      alertId: null,
+      matchStatus: 'terminal_pushed',
+      orderId,
+      offlineReference: pushed.offlineReference
+    });
+
+    res.json({
+      ok: true,
+      orderId,
+      terminalId,
+      offlineReference: pushed.offlineReference,
+      paymentRequestId: pushed.paymentRequestId,
+      eventId: pushed.eventId
+    });
+  } catch (err) {
+    console.error('[ZURI] terminal charge:', err?.message || err);
+    res.status(500).json({ error: 'Failed to charge on Terminal' });
   }
 });
 

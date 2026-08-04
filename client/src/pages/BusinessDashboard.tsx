@@ -295,6 +295,7 @@ function BusinessDashboard(): JSX.Element {
   const [agentPendingReview, setAgentPendingReview] = useState<PaymentAgentAlert[]>([])
   const [agentNeedsAttention, setAgentNeedsAttention] = useState<PaymentAgentAlert[]>([])
   const [agentConfirmingId, setAgentConfirmingId] = useState<string | null>(null)
+  const [terminalChargingId, setTerminalChargingId] = useState<string | null>(null)
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false)
   const [changePasswordCurrent, setChangePasswordCurrent] = useState('')
   const [changePasswordNew, setChangePasswordNew] = useState('')
@@ -815,6 +816,29 @@ function BusinessDashboard(): JSX.Element {
       alert(formatUserFacingError(axios.isAxiosError(err) ? err.response?.data : null, 'Could not confirm payment match'))
     } finally {
       setAgentConfirmingId(null)
+    }
+  }
+
+  const chargeOrderOnTerminal = async (orderId: string): Promise<void> => {
+    if (!businessId) return
+    setTerminalChargingId(orderId)
+    try {
+      await axios.post(
+        apiUrl('/api/agent/terminal/charge'),
+        { orderId },
+        { headers: getAuthHeaders() }
+      )
+      alert('Payment sent to your Paystack Terminal. Complete the charge on the device.')
+      fetchOrders()
+    } catch (err) {
+      alert(
+        formatUserFacingError(
+          axios.isAxiosError(err) ? err.response?.data : null,
+          'Could not push payment to Terminal'
+        )
+      )
+    } finally {
+      setTerminalChargingId(null)
     }
   }
 
@@ -1372,9 +1396,21 @@ function BusinessDashboard(): JSX.Element {
 
   const renderOrderStatusActions = (order: Order): JSX.Element | null => {
     const actions = getOrderStatusActions(order.status as OrderFulfillmentStatus, isTicketing)
-    if (!actions.length) return null
+    const canTerminalCharge =
+      Boolean(business?.paystackTerminalId) && orderPaymentStatus(order) !== 'paid'
+    if (!actions.length && !canTerminalCharge) return null
     return (
       <div className="flex flex-wrap gap-2">
+        {canTerminalCharge ? (
+          <button
+            type="button"
+            disabled={terminalChargingId === order.id}
+            onClick={() => void chargeOrderOnTerminal(order.id)}
+            className={`dashboard-btn min-h-[2.25rem] px-3 py-2 bg-white border border-zuri-orange text-zuri-orange rounded-xl text-xs font-semibold hover:bg-zuri-orange hover:text-white disabled:opacity-60 ${BTN_PRESS}`}
+          >
+            {terminalChargingId === order.id ? 'Sending…' : 'Charge on Terminal'}
+          </button>
+        ) : null}
         {actions.map((action) => {
           const className =
             action.variant === 'danger'
