@@ -98,6 +98,8 @@ export interface Business {
   matchWindowMinutes?: number
   agentStaffMsisdn?: string | null
   agentAllowedMsisdns?: string[]
+  /** Linked Paystack Terminal device ID for Assist in-person charges */
+  paystackTerminalId?: string | null
 }
 
 export type PaymentAgentMatchStatus =

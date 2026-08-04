@@ -80,6 +80,9 @@ async function orderUsesSplitCheckout(orderId, businessId, markExtra = {}) {
 
 async function markOrderPaid(orderId, paymentProvider, extra = {}) {
   const { paymentMethod, ...persistExtra } = extra;
+  const cleanedExtra = Object.fromEntries(
+    Object.entries(persistExtra).filter(([, v]) => v !== undefined)
+  );
 
   const { data: existing } = await supabase
     .from('orders')
@@ -92,12 +95,14 @@ async function markOrderPaid(orderId, paymentProvider, extra = {}) {
   const updates = {
     payment_status: 'paid',
     payment_provider: paymentProvider,
-    ...persistExtra
+    ...cleanedExtra
   };
   if (isSplit) {
     updates.payment_method = 'split';
     updates.payout_status = 'split_settled';
     updates.payout_error = null;
+  } else if (paymentMethod) {
+    updates.payment_method = paymentMethod;
   } else if (!existing?.payment_method) {
     updates.payment_method = 'transfer';
   }
@@ -284,7 +289,12 @@ router.post('/webhook', (req, res) => {
     }
 
     const businessId = metadata.businessId;
-    const orderId = metadata.orderId || null;
+    const orderId = metadata.orderId || metadata.zuri_order_id || null;
+    const offlineRef =
+      metadata.offline_reference ||
+      metadata.offlineReference ||
+      event.data.offline_reference ||
+      null;
     const resolveOrder = orderId
       ? supabase.from('orders').select('id, business_id, total_amount, payment_status, payment_method, receipt_sent_at').eq('id', orderId).single()
       : supabase
@@ -292,8 +302,27 @@ router.post('/webhook', (req, res) => {
           .select('id, business_id, total_amount, payment_status, payment_method, receipt_sent_at')
           .eq('paystack_payment_reference', reference)
           .maybeSingle()
-          .then(({ data, error }) => {
+          .then(async ({ data, error }) => {
             if (data) return { data };
+            if (offlineRef) {
+              const byOffline = await supabase
+                .from('orders')
+                .select('id, business_id, total_amount, payment_status, payment_method, receipt_sent_at')
+                .or(
+                  `terminal_offline_reference.eq.${offlineRef},paystack_payment_reference.eq.${offlineRef}`
+                )
+                .maybeSingle();
+              if (byOffline.data) return byOffline;
+            }
+            // Terminal POS charges often use a pos_* reference — match stored offline ref by equality on either column.
+            if (reference) {
+              const byTerminalRef = await supabase
+                .from('orders')
+                .select('id, business_id, total_amount, payment_status, payment_method, receipt_sent_at')
+                .eq('terminal_offline_reference', reference)
+                .maybeSingle();
+              if (byTerminalRef.data) return byTerminalRef;
+            }
             if (UUID_RE.test(String(reference || ''))) {
               return supabase.from('orders').select('id, business_id, total_amount, payment_status, payment_method, receipt_sent_at').eq('id', reference).single();
             }
@@ -336,8 +365,10 @@ router.post('/webhook', (req, res) => {
           return;
         }
 
+        const channel = String(event.data.channel || '').toLowerCase();
         const paymentMethod =
           parsePaymentMethodFromPaystackMetadata(metadata) ||
+          (channel === 'pos' ? 'pos' : undefined) ||
           (order.payment_method === 'split' ? 'split' : undefined);
         const paystackTxId = event.data.id || null;
         const bid = businessId || order.business_id;
@@ -350,7 +381,9 @@ router.post('/webhook', (req, res) => {
           paymentProvider: 'paystack',
           markExtra: {
             paymentMethod,
-            paystack_transaction_id: paystackTxId
+            paystack_transaction_id: paystackTxId,
+            confirmed_by: channel === 'pos' || metadata.zuri_terminal ? 'paystack_terminal' : undefined,
+            confirmed_at: channel === 'pos' || metadata.zuri_terminal ? new Date().toISOString() : undefined
           },
           paidAt: event.data.paid_at || null,
           reference: reference || resolvedOrderId,
@@ -380,6 +413,73 @@ router.post('/webhook', (req, res) => {
       })
       .catch((err) => {
         console.error('Paystack webhook error:', err);
+        res.status(500).json({ received: false });
+      });
+    return;
+  }
+  // Terminal invoice paid — reconcile via offline_reference when charge.success metadata is empty.
+  if (event.event === 'paymentrequest.success' && event.data) {
+    const offlineReference =
+      event.data.offline_reference || event.data.offlineReference || null;
+    const meta = event.data.metadata || {};
+    const orderIdFromMeta = meta.orderId || meta.zuri_order_id || null;
+    const findPromise = orderIdFromMeta
+      ? supabase
+          .from('orders')
+          .select('id, business_id, total_amount, payment_status, payment_method, receipt_sent_at')
+          .eq('id', orderIdFromMeta)
+          .maybeSingle()
+      : offlineReference
+        ? supabase
+            .from('orders')
+            .select('id, business_id, total_amount, payment_status, payment_method, receipt_sent_at')
+            .or(
+              `terminal_offline_reference.eq.${offlineReference},paystack_payment_reference.eq.${offlineReference}`
+            )
+            .maybeSingle()
+        : Promise.resolve({ data: null });
+
+    findPromise
+      .then(({ data: order }) => {
+        if (!order || order.payment_status === 'paid') {
+          res.status(200).json({ received: true });
+          return null;
+        }
+        const amountPaid =
+          event.data.amount != null ? Number(event.data.amount) / 100 : Number(order.total_amount);
+        if (!isAcceptableOrderPaymentAmount(order.total_amount, amountPaid)) {
+          console.error('paymentrequest.success amount mismatch', {
+            orderId: order.id,
+            orderTotal: order.total_amount,
+            paid: amountPaid
+          });
+          res.status(200).json({ received: true });
+          return null;
+        }
+        return finalizePaidOrder({
+          req,
+          orderId: order.id,
+          businessId: order.business_id,
+          paymentProvider: 'paystack',
+          markExtra: {
+            paymentMethod: 'pos',
+            confirmed_by: 'paystack_terminal',
+            confirmed_at: new Date().toISOString()
+          },
+          paidAt: event.data.paid_at || event.data.paidAt || null,
+          reference: offlineReference || order.id,
+          payoutAmount: amountPaid,
+          tap: false
+        }).then((marked) => {
+          if (!marked.ok) {
+            res.status(500).json({ received: false });
+            return;
+          }
+          res.status(200).json({ received: true });
+        });
+      })
+      .catch((err) => {
+        console.error('paymentrequest.success webhook error:', err);
         res.status(500).json({ received: false });
       });
     return;
