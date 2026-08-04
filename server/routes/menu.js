@@ -4,6 +4,7 @@ const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const { getDb } = require('../database');
+const { summarizeUpstreamError } = require('../lib/supabaseResilience');
 const { getBusinessPlan, canAddMenuPictures, canAccessGuestAiStorefront, canAccessAIFeatures } = require('../lib/plans');
 const { buildGuestPersonalization, resolveGuestCustomerId, setGuestPreferences } = require('../lib/guest-personalization');
 const { enrichDishMetadata } = require('../lib/dish-enrichment');
@@ -252,7 +253,7 @@ router.get('/business/:businessId', async (req, res) => {
       .order('display_order');
 
     if (categoriesError) {
-      console.error('Categories error:', categoriesError);
+      console.error('Categories error:', summarizeUpstreamError(categoriesError));
       return res.status(500).json({ error: 'Database error' });
     }
 
@@ -264,7 +265,7 @@ router.get('/business/:businessId', async (req, res) => {
       .order('display_order');
 
     if (itemsError) {
-      console.error('Items error:', itemsError);
+      console.error('Items error:', summarizeUpstreamError(itemsError));
       return res.status(500).json({ error: 'Database error' });
     }
 
@@ -503,7 +504,7 @@ router.get('/categories/:businessId', async (req, res) => {
       .order('display_order');
 
     if (error) {
-      console.error('Get categories error:', error);
+      console.error('Get categories error:', summarizeUpstreamError(error));
       return res.status(500).json({ error: 'Database error' });
     }
 
@@ -521,7 +522,7 @@ router.get('/categories/:businessId', async (req, res) => {
 
     res.json(formattedCategories);
   } catch (error) {
-    console.error('Get categories error:', error);
+    console.error('Get categories error:', summarizeUpstreamError(error));
     res.status(500).json({ error: 'Database error' });
   }
 });

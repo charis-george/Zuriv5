@@ -1,5 +1,10 @@
 const { getDb } = require('../database');
 const { enqueueOrderReceipt } = require('./orderReceiptQueue');
+const {
+  summarizeUpstreamError,
+  isSupabaseCircuitOpen,
+  isOriginOutageSignal
+} = require('./supabaseResilience');
 
 const SWEEP_LIMIT = Math.max(5, Math.min(150, Number(process.env.ORDER_RECEIPT_SWEEP_LIMIT) || 60));
 const LOOKBACK_HOURS = Math.max(1, Number(process.env.ORDER_RECEIPT_SWEEP_LOOKBACK_HOURS) || 72);
@@ -27,6 +32,13 @@ async function fetchPendingReceiptOrders(supabase) {
   let lastError = null;
 
   for (let attempt = 0; attempt < SWEEP_QUERY_RETRIES; attempt += 1) {
+    if (isSupabaseCircuitOpen()) {
+      return {
+        data: [],
+        error: Object.assign(new Error('supabase_circuit_open'), { code: 'SUPABASE_CIRCUIT_OPEN' })
+      };
+    }
+
     try {
       const { data, error } = await supabase
         .from('orders')
@@ -43,12 +55,22 @@ async function fetchPendingReceiptOrders(supabase) {
       lastError = err;
     }
 
+    const cause = summarizeUpstreamError(lastError);
+    // Origin outages: do not stampede with short retries — circuit breaker owns backoff.
+    if (isOriginOutageSignal(lastError) || lastError?.code === 'SUPABASE_CIRCUIT_OPEN') {
+      console.warn('[ZURI] Receipt sweep query aborted (origin outage)', {
+        attempt: attempt + 1,
+        cause
+      });
+      break;
+    }
+
     const delayMs = 400 * 2 ** attempt;
     console.warn('[ZURI] Receipt sweep query retry', {
       attempt: attempt + 1,
       maxAttempts: SWEEP_QUERY_RETRIES,
       delayMs,
-      cause: lastError?.message || String(lastError)
+      cause
     });
     await sleep(delayMs);
   }
@@ -68,13 +90,18 @@ function isFreshSendLock(order) {
  * Covers transient Resend failures, server restarts, and race windows.
  */
 async function sweepPendingOrderReceipts() {
+  if (isSupabaseCircuitOpen()) {
+    console.warn('[ZURI] Receipt sweep skipped — Supabase circuit open');
+    return { scanned: 0, enqueued: 0, skipped: 0, failed: true, deferred: true };
+  }
+
   const supabase = getDb();
   const { data: orders, error } = await fetchPendingReceiptOrders(supabase);
 
   if (error) {
     console.error('[ZURI] Receipt sweep query failed', {
       reason: 'sweep_query_error',
-      cause: error.message || String(error),
+      cause: summarizeUpstreamError(error),
       retries: SWEEP_QUERY_RETRIES,
       severity: 'critical'
     });

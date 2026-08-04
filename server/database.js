@@ -1,4 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
+const { resilientSupabaseFetch } = require('./lib/supabaseResilience');
 
 let supabase;
 
@@ -12,7 +13,18 @@ function getDb() {
         'Missing Supabase env: set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY) in server/.env'
       );
     }
-    supabase = createClient(url, key);
+    supabase = createClient(url, key, {
+      global: {
+        fetch: resilientSupabaseFetch
+      },
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false
+      },
+      db: {
+        // Prefer short-lived statements; resilience layer enforces fetch timeout.
+      }
+    });
   }
   return supabase;
 }
