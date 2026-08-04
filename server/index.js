@@ -528,6 +528,13 @@ function scheduleOrderReceiptSweep() {
 }
 scheduleOrderReceiptSweep();
 
+try {
+  const { scheduleKeepAlive } = require('./lib/keepAlive');
+  scheduleKeepAlive();
+} catch (err) {
+  console.warn('[ZURI] Keep-alive not started:', err?.message || err);
+}
+
 let shuttingDown = false;
 async function gracefulShutdown(signal) {
   if (shuttingDown) return;
