@@ -29,6 +29,7 @@ function BusinessSettingsPage(): JSX.Element {
   const [agentAllowedDraft, setAgentAllowedDraft] = useState('')
   const [agentStaffDraft, setAgentStaffDraft] = useState('')
   const [agentWindowDraft, setAgentWindowDraft] = useState('20')
+  const [terminalIdDraft, setTerminalIdDraft] = useState('')
   const [agentSaving, setAgentSaving] = useState(false)
   const [agentError, setAgentError] = useState<string | null>(null)
   const [agentMessage, setAgentMessage] = useState<string | null>(null)
@@ -49,6 +50,8 @@ function BusinessSettingsPage(): JSX.Element {
         matchWindowMinutes: number
         agentStaffMsisdn: string | null
         agentAllowedMsisdns: string[]
+        paystackTerminalId?: string | null
+        terminalApiReady?: boolean
       }>(apiUrl('/api/agent/settings'), { headers })
     ])
       .then(([bizRes, agentRes]) => {
@@ -59,6 +62,7 @@ function BusinessSettingsPage(): JSX.Element {
         setAgentAllowedDraft((agent.agentAllowedMsisdns || bizRes.data.agentAllowedMsisdns || []).join(', '))
         setAgentStaffDraft(agent.agentStaffMsisdn || bizRes.data.agentStaffMsisdn || '')
         setAgentWindowDraft(String(agent.matchWindowMinutes ?? bizRes.data.matchWindowMinutes ?? 20))
+        setTerminalIdDraft(agent.paystackTerminalId || bizRes.data.paystackTerminalId || '')
         setLoadError(null)
         setLoading(false)
       })
@@ -91,7 +95,8 @@ function BusinessSettingsPage(): JSX.Element {
           enabled,
           allowedMsisdns: agentAllowedDraft,
           staffMsisdn: agentStaffDraft || undefined,
-          matchWindowMinutes: Number(agentWindowDraft) || 20
+          matchWindowMinutes: Number(agentWindowDraft) || 20,
+          paystackTerminalId: terminalIdDraft.trim() || null
         },
         { headers: getAuthHeaders() }
       )
@@ -100,6 +105,7 @@ function BusinessSettingsPage(): JSX.Element {
       setAgentAllowedDraft((data.agentAllowedMsisdns || []).join(', '))
       setAgentStaffDraft(data.agentStaffMsisdn || '')
       setAgentWindowDraft(String(data.matchWindowMinutes ?? 20))
+      setTerminalIdDraft(data.paystackTerminalId || '')
       setBusiness((prev) =>
         prev
           ? {
@@ -108,7 +114,8 @@ function BusinessSettingsPage(): JSX.Element {
               agentForwardingNumber: data.agentForwardingNumber || null,
               agentAllowedMsisdns: data.agentAllowedMsisdns || [],
               agentStaffMsisdn: data.agentStaffMsisdn || null,
-              matchWindowMinutes: data.matchWindowMinutes ?? 20
+              matchWindowMinutes: data.matchWindowMinutes ?? 20,
+              paystackTerminalId: data.paystackTerminalId || null
             }
           : prev
       )
@@ -191,7 +198,7 @@ function BusinessSettingsPage(): JSX.Element {
         <div>
           <h2 className="text-sm font-semibold text-zuri-black">Payments</h2>
           <p className="text-xs text-gray-500 mt-0.5">
-            Automate bank and POS SMS matching with Zuri Assist.
+            Automate bank SMS matching and Paystack Terminal POS charges with Zuri Assist.
           </p>
         </div>
 
@@ -306,6 +313,30 @@ function BusinessSettingsPage(): JSX.Element {
                 <p className="text-[11px] text-gray-500 mt-1.5">
                   How far back to look for a matching pending order.
                 </p>
+              </div>
+
+              <div className="sm:col-span-2 rounded-xl border border-gray-100 bg-[#f7f7f5] px-4 py-4 space-y-3">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                    Paystack Terminal (POS)
+                  </p>
+                  <p className="text-xs text-gray-600 mt-1 leading-relaxed">
+                    Link your Paystack Terminal to push unpaid Zuri orders to the device. When the guest pays on the
+                    terminal, Paystack notifies Zuri and the order is marked paid — no SMS parsing needed.
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
+                    Terminal ID
+                  </label>
+                  <input
+                    type="text"
+                    value={terminalIdDraft}
+                    onChange={(e) => setTerminalIdDraft(e.target.value)}
+                    placeholder="From Paystack Dashboard → Terminals"
+                    className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-zuri-black placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-zuri-orange/30 focus:border-zuri-orange"
+                  />
+                </div>
               </div>
             </div>
 
