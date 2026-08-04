@@ -330,6 +330,13 @@ app.get('/api/health', (req, res) => {
     uptime: process.uptime(),
     supabaseEnv: SUPABASE_ENV_OK,
     supabaseCircuit: circuit,
+    publicReadCache: (() => {
+      try {
+        return require('./lib/publicReadCache').getPublicCacheStats();
+      } catch {
+        return undefined;
+      }
+    })(),
     jwtConfigured: jwtOk,
     redisConfigured: Boolean(process.env.REDIS_URL || process.env.UPSTASH_REDIS_URL),
     routeLoadErrors: Object.keys(routeLoadErrors).length ? routeLoadErrors : undefined
@@ -493,9 +500,10 @@ function scheduleSubscriptionRenewalReminders() {
 }
 scheduleSubscriptionRenewalReminders();
 
+// Survival: sweep is recovery-only; prefer longer interval on free-tier compute.
 const RECEIPT_SWEEP_INTERVAL_MS = Math.max(
-  30_000,
-  Number(process.env.ORDER_RECEIPT_SWEEP_INTERVAL_MS) || 90_000
+  60_000,
+  Number(process.env.ORDER_RECEIPT_SWEEP_INTERVAL_MS) || 300_000
 );
 function scheduleOrderReceiptSweep() {
   if (process.env.ORDER_RECEIPT_SWEEP_ENABLED === 'false') return;
@@ -514,8 +522,8 @@ function scheduleOrderReceiptSweep() {
       console.error('[ZURI] Receipt sweep module error:', err);
     }
   };
-  // Recover stranded tickets quickly after boot / deploy.
-  setTimeout(run, 15_000);
+  // Delay first sweep so boot traffic + payments get CPU first.
+  setTimeout(run, 60_000);
   setInterval(run, RECEIPT_SWEEP_INTERVAL_MS);
 }
 scheduleOrderReceiptSweep();

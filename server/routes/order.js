@@ -497,53 +497,62 @@ router.get('/business/:businessId', requireBusinessAuth, async (req, res) => {
     const customerIds = [...new Set((orders || []).map(o => o.zuri_customer_id).filter(Boolean))];
     const statsMap = await getStatsForCustomerIds(customerIds);
 
-    // Get order items for each order
-    const ordersWithItems = await Promise.all(
-      orders.map(async (order) => {
-        const { data: orderItems } = await supabase
-          .from('order_items')
-          .select('menu_item_id, quantity, price, special_notes')
-          .eq('order_id', order.id);
+    const orderIds = (orders || []).map((o) => o.id).filter(Boolean);
+    let allOrderItems = [];
+    if (orderIds.length) {
+      const { data: batchedItems, error: itemsErr } = await supabase
+        .from('order_items')
+        .select('order_id, menu_item_id, quantity, price, special_notes')
+        .in('order_id', orderIds);
+      if (itemsErr) {
+        console.error('Get order items batch error:', itemsErr?.message || itemsErr);
+        return res.status(500).json({ error: 'Database error' });
+      }
+      allOrderItems = batchedItems || [];
+    }
 
-        if (!orderItems || orderItems.length === 0) {
-          return { ...order, items: [] };
+    const itemsByOrder = new Map();
+    for (const row of allOrderItems) {
+      if (!itemsByOrder.has(row.order_id)) itemsByOrder.set(row.order_id, []);
+      itemsByOrder.get(row.order_id).push(row);
+    }
+
+    const menuItemIds = [...new Set(allOrderItems.map((row) => row.menu_item_id).filter(Boolean))];
+    const menuItemMap = {};
+    if (menuItemIds.length) {
+      const { data: menuItems } = await supabase
+        .from('menu_items')
+        .select('id, name')
+        .in('id', menuItemIds);
+      menuItems?.forEach((item) => {
+        menuItemMap[item.id] = item.name;
+      });
+    }
+
+    const ordersWithItems = (orders || []).map((order) => {
+      const orderItems = itemsByOrder.get(order.id) || [];
+      const items = orderItems.map((item) => ({
+        menuItemId: item.menu_item_id,
+        menuItemName: menuItemMap[item.menu_item_id] || 'Unknown Item',
+        quantity: item.quantity,
+        price: item.price,
+        specialNotes: item.special_notes
+      }));
+
+      const out = { ...order, items };
+      if (order.zuri_customer_id) {
+        const stats = statsMap.get(order.zuri_customer_id);
+        if (stats && stats.totalOrders >= 1) {
+          out.returningZuriCustomer = true;
+          out.zuriCustomerStats = {
+            avgOrderValue: stats.avgOrderValue,
+            totalOrders: stats.totalOrders,
+            businessCount: stats.businessCount
+          };
         }
-
-        // Get menu item names
-        const menuItemIds = orderItems.map(item => item.menu_item_id);
-        const { data: menuItems } = await supabase
-          .from('menu_items')
-          .select('id, name')
-          .in('id', menuItemIds);
-
-        const menuItemMap = {};
-        menuItems?.forEach(item => {
-          menuItemMap[item.id] = item.name;
-        });
-
-        const items = orderItems.map(item => ({
-          menuItemId: item.menu_item_id,
-          menuItemName: menuItemMap[item.menu_item_id] || 'Unknown Item',
-          quantity: item.quantity,
-          price: item.price,
-          specialNotes: item.special_notes
-        }));
-
-        const out = { ...order, items };
-        if (order.zuri_customer_id) {
-          const stats = statsMap.get(order.zuri_customer_id);
-          if (stats && stats.totalOrders >= 1) {
-            out.returningZuriCustomer = true;
-            out.zuriCustomerStats = {
-              avgOrderValue: stats.avgOrderValue,
-              totalOrders: stats.totalOrders,
-              businessCount: stats.businessCount
-            };
-          }
-        }
-        return out;
-      })
-    );
+      }
+      return out;
+    });
 
     res.json(ordersWithItems);
   } catch (error) {
