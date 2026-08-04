@@ -220,6 +220,30 @@ const agentInboundLimiter = rateLimit({
 app.use('/api/agent/sms/inbound', agentInboundLimiter);
 app.use('/api/agent', agentLimiter);
 
+// When Supabase origin is timing out (Cloudflare 522), fail fast so payment
+// traffic is not buried under hanging DB fetches and HTML error log floods.
+const {
+  isSupabaseCircuitOpen,
+  circuitErrorResponse,
+  getCircuitStatus,
+  summarizeUpstreamError
+} = require('./lib/supabaseResilience');
+
+app.use('/api', (req, res, next) => {
+  const path = (req.originalUrl || req.url || '').split('?')[0];
+  if (path === '/api/health' || path.endsWith('/health')) return next();
+  // Always accept provider webhooks — they must land; fetch layer still fail-fasts.
+  if (path.endsWith('/payment/webhook') || path.endsWith('/payment/monnify-webhook')) {
+    return next();
+  }
+  if (!isSupabaseCircuitOpen()) return next();
+
+  const body = circuitErrorResponse();
+  const retrySec = Math.max(1, Math.ceil((body.retry_after_ms || 120000) / 1000));
+  res.set('Retry-After', String(retrySec));
+  return res.status(503).json(body);
+});
+
 const routeLoadErrors = {};
 
 function safeRequireRoute(label, modulePath) {
@@ -296,10 +320,16 @@ app.use('/api/admin', adminRoutes);
 app.get('/api/health', (req, res) => {
   res.set('Cache-Control', 'no-store');
   const jwtOk = process.env.NODE_ENV !== 'production' || Boolean(JWT_SECRET);
+  const circuit = getCircuitStatus();
   res.json({
-    ok: Object.keys(routeLoadErrors).length === 0 && SUPABASE_ENV_OK && jwtOk,
+    ok:
+      Object.keys(routeLoadErrors).length === 0 &&
+      SUPABASE_ENV_OK &&
+      jwtOk &&
+      circuit.state !== 'open',
     uptime: process.uptime(),
     supabaseEnv: SUPABASE_ENV_OK,
+    supabaseCircuit: circuit,
     jwtConfigured: jwtOk,
     redisConfigured: Boolean(process.env.REDIS_URL || process.env.UPSTASH_REDIS_URL),
     routeLoadErrors: Object.keys(routeLoadErrors).length ? routeLoadErrors : undefined
@@ -445,9 +475,14 @@ function scheduleSubscriptionRenewalReminders() {
   if (process.env.SUBSCRIPTION_REMINDERS_ENABLED === 'false') return;
   const run = () => {
     try {
+      const { isSupabaseCircuitOpen } = require('./lib/supabaseResilience');
+      if (isSupabaseCircuitOpen()) {
+        console.warn('[ZURI] Subscription reminder scan skipped — Supabase circuit open');
+        return;
+      }
       const { processUpcomingRenewalReminders } = require('./lib/paystack-subscription');
       processUpcomingRenewalReminders().catch((err) =>
-        console.error('[ZURI] Subscription reminder scan error:', err)
+        console.error('[ZURI] Subscription reminder scan error:', summarizeUpstreamError(err))
       );
     } catch (err) {
       console.error('[ZURI] Subscription reminder module error:', err);
@@ -466,9 +501,14 @@ function scheduleOrderReceiptSweep() {
   if (process.env.ORDER_RECEIPT_SWEEP_ENABLED === 'false') return;
   const run = () => {
     try {
+      const { isSupabaseCircuitOpen, summarizeUpstreamError } = require('./lib/supabaseResilience');
+      if (isSupabaseCircuitOpen()) {
+        console.warn('[ZURI] Receipt sweep skipped — Supabase circuit open');
+        return;
+      }
       const { sweepPendingOrderReceipts } = require('./lib/orderReceiptSweep');
       sweepPendingOrderReceipts().catch((err) =>
-        console.error('[ZURI] Receipt sweep error:', err?.message || err)
+        console.error('[ZURI] Receipt sweep error:', summarizeUpstreamError(err))
       );
     } catch (err) {
       console.error('[ZURI] Receipt sweep module error:', err);

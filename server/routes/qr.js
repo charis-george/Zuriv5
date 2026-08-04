@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getDb } = require('../database');
+const { summarizeUpstreamError } = require('../lib/supabaseResilience');
 const { qrToBrandedDataUrl } = require('../lib/brandedQr');
 const { requireBusinessAuth, requireBusinessOrScannerAuth, signScannerToken } = require('../middleware/auth');
 const {
@@ -313,7 +314,7 @@ router.get('/business/:businessId', async (req, res) => {
     }
 
     if (error || !business) {
-      console.error('Get business public info:', error?.message || error);
+      console.error('Get business public info:', summarizeUpstreamError(error));
       return res.status(404).json({ error: 'Business not found' });
     }
 
