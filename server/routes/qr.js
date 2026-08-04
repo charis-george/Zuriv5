@@ -2,6 +2,11 @@ const express = require('express');
 const router = express.Router();
 const { getDb } = require('../database');
 const { summarizeUpstreamError } = require('../lib/supabaseResilience');
+const {
+  PUBLIC_TTL_MS,
+  getCachedPublicBusiness,
+  setCachedPublicBusiness
+} = require('../lib/publicReadCache');
 const { qrToBrandedDataUrl } = require('../lib/brandedQr');
 const { requireBusinessAuth, requireBusinessOrScannerAuth, signScannerToken } = require('../middleware/auth');
 const {
@@ -296,6 +301,16 @@ router.post('/scanner-codes/redeem', async (req, res) => {
 router.get('/business/:businessId', async (req, res) => {
   try {
     const businessId = normalizeUuid(req.params.businessId) || req.params.businessId;
+    const storefrontSlug = String(req.query.storefront || req.query.storefrontSlug || '').trim();
+    const eventSlug = String(req.query.event || req.query.eventSlug || '').trim();
+    const cacheParts = { storefront: storefrontSlug, event: eventSlug };
+
+    const cached = getCachedPublicBusiness(businessId, cacheParts);
+    if (cached) {
+      res.set('Cache-Control', `public, max-age=${Math.floor(PUBLIC_TTL_MS / 1000)}, stale-while-revalidate=60`);
+      res.set('X-Zuri-Cache', 'HIT');
+      return res.json(cached);
+    }
 
     let business;
     let error;
@@ -332,8 +347,6 @@ router.get('/business/:businessId', async (req, res) => {
       (plan === 'scale' || plan === 'enterprise' || plan === 'pro' || plan === 'zuri_plus');
 
     const profiles = normalizeStorefrontProfiles(business);
-    const storefrontSlug = String(req.query.storefront || req.query.storefrontSlug || '').trim();
-    const eventSlug = String(req.query.event || req.query.eventSlug || '').trim();
     let activeProfile =
       (eventSlug ? findProfileForEvent(profiles, eventSlug)?.profile : null) ||
       findProfileBySlugOrId(profiles, storefrontSlug) ||
@@ -367,7 +380,7 @@ router.get('/business/:businessId', async (req, res) => {
       delete storefrontConfig.heroBannerUrl;
     }
 
-    res.json({
+    const payload = {
       id: business.id,
       name: business.name,
       phone: business.phone,
@@ -382,7 +395,11 @@ router.get('/business/:businessId', async (req, res) => {
       paymentProvider: business.payment_provider === 'monnify' ? 'monnify' : 'paystack',
       accountStatus: normalizeAccountStatus(business.account_status),
       scaleGuestMenuTags
-    });
+    };
+    setCachedPublicBusiness(businessId, cacheParts, payload);
+    res.set('Cache-Control', `public, max-age=${Math.floor(PUBLIC_TTL_MS / 1000)}, stale-while-revalidate=60`);
+    res.set('X-Zuri-Cache', 'MISS');
+    res.json(payload);
   } catch (error) {
     console.error('Get business info error:', error);
     res.status(500).json({ error: 'Database error' });

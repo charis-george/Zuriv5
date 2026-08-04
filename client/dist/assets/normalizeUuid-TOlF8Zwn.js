@@ -1,0 +1,1 @@
+function t(n){return n==null?null:String(n).replace(/[\s\u200B-\u200D\uFEFF]/g,"").trim()||null}function r(n){if(!n)return;let e=n;try{e=decodeURIComponent(n)}catch{e=n}return t(e)??void 0}export{t as a,r as n};

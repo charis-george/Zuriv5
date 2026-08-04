@@ -2,7 +2,8 @@ const { sendOrderReceiptOnce } = require('./orderReceiptEmail');
 const { isPermanentResendError, isRetryableResendError } = require('./resendMail');
 
 const MAX_ATTEMPTS = Math.max(3, Number(process.env.ORDER_RECEIPT_MAX_ATTEMPTS) || 8);
-const CONCURRENCY = Math.max(1, Math.min(12, Number(process.env.ORDER_RECEIPT_EMAIL_CONCURRENCY) || 4));
+// Survival default: serialize receipt sends so free Supabase is not stampeded.
+const CONCURRENCY = Math.max(1, Math.min(12, Number(process.env.ORDER_RECEIPT_EMAIL_CONCURRENCY) || 1));
 const BASE_RETRY_MS = Math.max(500, Number(process.env.ORDER_RECEIPT_RETRY_BASE_MS) || 2000);
 const MAX_RETRY_MS = Math.max(BASE_RETRY_MS, Number(process.env.ORDER_RECEIPT_RETRY_MAX_MS) || 120_000);
 /** Extra patience while another worker / stale DB lock holds the send. */

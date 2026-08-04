@@ -472,9 +472,18 @@ function BusinessDashboard(): JSX.Element {
     socket.on('connect', emitJoin)
     emitJoin()
 
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleDashboardRefresh = () => {
+      if (refreshTimer) return
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null
+        fetchOrders()
+        fetchAnalytics()
+      }, 400)
+    }
+
     socket.on('new-order', (data?: Order) => {
-      fetchOrders()
-      fetchAnalytics()
+      scheduleDashboardRefresh()
       const ticketing = business?.businessMode === 'ticketing'
       // Ticketing: only surface paid sales (complimentary invites are already paid at create)
       if (ticketing) {
@@ -490,8 +499,7 @@ function BusinessDashboard(): JSX.Element {
     })
 
     socket.on('order-updated', () => {
-      fetchOrders()
-      fetchAnalytics()
+      scheduleDashboardRefresh()
     })
 
     socket.on('tap-payment-success', (data: { orderId: string }) => {
@@ -499,8 +507,7 @@ function BusinessDashboard(): JSX.Element {
         setTapWaitingOrderId(null)
         setTapRequestExpiresAt(null)
       }
-      fetchOrders()
-      fetchAnalytics()
+      scheduleDashboardRefresh()
     })
     socket.on('tap-request-declined', (data: { orderId: string }) => {
       if (data.orderId === tapWaitingOrderIdRef.current) {
@@ -516,8 +523,7 @@ function BusinessDashboard(): JSX.Element {
     })
 
     socket.on('order-payment-success', (data?: { orderId?: string }) => {
-      fetchOrders()
-      fetchAnalytics()
+      scheduleDashboardRefresh()
       fetchAgentAlerts()
       if (business?.businessMode === 'ticketing') {
         const orderId = data?.orderId ? String(data.orderId).slice(0, 8).toUpperCase() : ''
@@ -530,7 +536,7 @@ function BusinessDashboard(): JSX.Element {
 
     socket.on('payment-agent-alert', () => {
       fetchAgentAlerts()
-      fetchOrders()
+      scheduleDashboardRefresh()
     })
 
     socket.on('new-reservation', () => {
@@ -550,6 +556,7 @@ function BusinessDashboard(): JSX.Element {
     })
 
     return () => {
+      if (refreshTimer) clearTimeout(refreshTimer)
       socket.disconnect()
     }
   }, [businessId, business?.businessMode])
@@ -685,9 +692,11 @@ function BusinessDashboard(): JSX.Element {
   useEffect(() => {
     if (!businessId) return
     const interval = setInterval(() => {
+      // Prefer sockets for freshness; poll is a light safety net only.
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
       fetchOrders()
       if (business?.plan && business.plan !== 'free' && business.plan !== 'starter') fetchAnalytics()
-    }, 2 * 60 * 1000)
+    }, 5 * 60 * 1000)
     return () => clearInterval(interval)
   }, [businessId, business?.plan])
 
@@ -751,7 +760,10 @@ function BusinessDashboard(): JSX.Element {
     }
 
     load()
-    const interval = window.setInterval(load, 60_000)
+    const interval = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      void load()
+    }, 3 * 60 * 1000)
     return () => {
       cancelled = true
       window.clearInterval(interval)
