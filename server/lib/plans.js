@@ -52,6 +52,14 @@ function effectivePlanFromRow(row) {
 }
 
 async function getBusinessPlan(businessId) {
+  const {
+    getCachedBusinessPlan,
+    setCachedBusinessPlan
+  } = require('./publicReadCache');
+
+  const cached = getCachedBusinessPlan(businessId);
+  if (cached) return cached;
+
   try {
     const { syncExpiredSubscription } = require('./paystack-subscription');
     await syncExpiredSubscription(businessId);
@@ -64,7 +72,9 @@ async function getBusinessPlan(businessId) {
     .eq('id', businessId)
     .single();
   if (error || !data) return PLANS.FREE;
-  return effectivePlanFromRow(data);
+  const plan = effectivePlanFromRow(data);
+  setCachedBusinessPlan(businessId, plan);
+  return plan;
 }
 
 function canAccessAnalytics(plan) {

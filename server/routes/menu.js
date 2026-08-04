@@ -5,6 +5,14 @@ const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const { getDb } = require('../database');
 const { summarizeUpstreamError } = require('../lib/supabaseResilience');
+const {
+  PUBLIC_TTL_MS,
+  getCachedMenu,
+  setCachedMenu,
+  getCachedBusinessMode,
+  setCachedBusinessMode,
+  invalidateBusinessReads
+} = require('../lib/publicReadCache');
 const { getBusinessPlan, canAddMenuPictures, canAccessGuestAiStorefront, canAccessAIFeatures } = require('../lib/plans');
 const { buildGuestPersonalization, resolveGuestCustomerId, setGuestPreferences } = require('../lib/guest-personalization');
 const { enrichDishMetadata } = require('../lib/dish-enrichment');
@@ -44,6 +52,9 @@ function normalizeCategoryId(categoryId) {
 
 async function getBusinessMode(businessId) {
   const id = normalizeUuid(businessId) || businessId;
+  const cached = getCachedBusinessMode(id);
+  if (cached) return cached;
+
   const { data, error } = await supabase
     .from('businesses')
     .select('business_mode')
@@ -53,7 +64,13 @@ async function getBusinessMode(businessId) {
     console.warn('[menu] getBusinessMode fallback:', error.message || error);
     return 'menu';
   }
-  return normalizeCatalogMode(data?.business_mode);
+  const mode = normalizeCatalogMode(data?.business_mode);
+  setCachedBusinessMode(id, mode);
+  return mode;
+}
+
+function bustPublicReads(businessId) {
+  invalidateBusinessReads(normalizeUuid(businessId) || businessId);
 }
 
 function parseDishFields(body) {
@@ -223,14 +240,12 @@ router.post('/digitize', requireBusinessAuth, handleDigitizeUpload, async (req, 
 router.get('/business/:businessId', async (req, res) => {
   try {
     const { businessId } = req.params;
-    const activeMode = await getBusinessMode(businessId);
-    let catalogPresetId = await resolveActivePresetId(businessId, activeMode);
-
     const storefrontQ = String(req.query.storefront || req.query.storefrontSlug || '').trim();
     const eventQ = String(req.query.event || req.query.eventSlug || '').trim();
-
     const requestedPreset = req.query.presetId;
+
     let authPresetOverride = false;
+    let catalogPresetId = null;
     if (typeof requestedPreset === 'string' && requestedPreset.trim()) {
       const auth = req.headers.authorization;
       const token = auth && auth.startsWith('Bearer ') ? auth.slice(7) : null;
@@ -240,7 +255,26 @@ router.get('/business/:businessId', async (req, res) => {
         authPresetOverride = true;
       }
     }
+
+    const cacheParts = {
+      storefront: storefrontQ,
+      event: eventQ,
+      presetId: authPresetOverride ? catalogPresetId : ''
+    };
+
+    // Authenticated preset preview bypasses shared cache; public storefront hits share TTL.
     if (!authPresetOverride) {
+      const hit = getCachedMenu(businessId, cacheParts);
+      if (hit) {
+        res.set('Cache-Control', `public, max-age=${Math.floor(PUBLIC_TTL_MS / 1000)}, stale-while-revalidate=60`);
+        res.set('X-Zuri-Cache', 'HIT');
+        return res.json(hit);
+      }
+    }
+
+    const activeMode = await getBusinessMode(businessId);
+    if (!authPresetOverride) {
+      catalogPresetId = await resolveActivePresetId(businessId, activeMode);
       const fromStorefront = await resolvePresetIdFromStorefront(businessId, storefrontQ, eventQ);
       if (fromStorefront) catalogPresetId = fromStorefront;
     }
@@ -338,7 +372,13 @@ router.get('/business/:businessId', async (req, res) => {
       });
     });
 
-    res.json(Object.values(menu));
+    const payload = Object.values(menu);
+    if (!authPresetOverride) {
+      setCachedMenu(businessId, cacheParts, payload);
+    }
+    res.set('Cache-Control', `public, max-age=${Math.floor(PUBLIC_TTL_MS / 1000)}, stale-while-revalidate=60`);
+    res.set('X-Zuri-Cache', 'MISS');
+    res.json(payload);
   } catch (error) {
     console.error('Get menu error:', error);
     res.status(500).json({ error: 'Database error' });
@@ -417,6 +457,7 @@ router.post('/presets', requireBusinessAuth, async (req, res) => {
     const activeMode = await getBusinessMode(businessId);
     const result = await createPreset(businessId, name, activeMode);
     if (result.error) return res.status(result.status || 400).json({ error: result.error });
+    bustPublicReads(businessId);
     return res.status(201).json(result);
   } catch (e) {
     console.error('create preset', e);
@@ -433,6 +474,7 @@ router.patch('/presets/:presetId', requireBusinessAuth, async (req, res) => {
     }
     const result = await renamePreset(businessId, presetId, name);
     if (result.error) return res.status(result.status || 400).json({ error: result.error });
+    bustPublicReads(businessId);
     return res.json(result);
   } catch (e) {
     console.error('rename preset', e);
@@ -449,6 +491,7 @@ router.post('/presets/:presetId/activate', requireBusinessAuth, async (req, res)
     }
     const result = await activatePreset(businessId, presetId);
     if (result.error) return res.status(result.status || 400).json({ error: result.error });
+    bustPublicReads(businessId);
     const io = req.app.get('io');
     if (io) io.to(`storefront-${businessId}`).emit('storefront-updated', { presetActivated: presetId });
     return res.json(result);
@@ -467,6 +510,7 @@ router.post('/presets/:presetId/duplicate', requireBusinessAuth, async (req, res
     }
     const result = await duplicatePreset(businessId, presetId);
     if (result.error) return res.status(result.status || 400).json({ error: result.error });
+    bustPublicReads(businessId);
     return res.status(201).json(result);
   } catch (e) {
     console.error('duplicate preset', e);
@@ -480,6 +524,7 @@ router.delete('/presets/:presetId', requireBusinessAuth, async (req, res) => {
     const businessId = req.businessId;
     const result = await deletePreset(businessId, presetId);
     if (result.error) return res.status(result.status || 400).json({ error: result.error });
+    bustPublicReads(businessId);
     return res.json(result);
   } catch (e) {
     console.error('delete preset', e);
@@ -561,6 +606,7 @@ router.post('/category', requireBusinessAuth, async (req, res) => {
       return res.status(500).json({ error: 'Failed to create category' });
     }
 
+    bustPublicReads(businessId);
     res.json({
       id: data.id,
       businessId: data.business_id,
@@ -612,6 +658,7 @@ router.patch('/category/:categoryId', requireBusinessAuth, async (req, res) => {
       return res.status(500).json({ error: 'Failed to update category' });
     }
     if (!data) return res.status(404).json({ error: 'Category not found' });
+    bustPublicReads(businessId);
     res.json({ id: data.id, name: data.name, displayOrder: data.display_order });
   } catch (error) {
     console.error('Update category error:', error);
@@ -645,6 +692,7 @@ router.delete('/category/:categoryId', requireBusinessAuth, async (req, res) => 
       console.error('Delete category error:', deleteError);
       return res.status(500).json({ error: 'Failed to delete category' });
     }
+    bustPublicReads(businessId);
     res.json({ success: true });
   } catch (error) {
     console.error('Delete category error:', error);
@@ -761,6 +809,7 @@ router.post('/item', requireBusinessAuth, async (req, res) => {
       return res.status(500).json({ error: 'Failed to create menu item' });
     }
 
+    bustPublicReads(businessId);
     res.json({
       id: data.id,
       businessId: data.business_id,
@@ -824,6 +873,7 @@ router.post('/item/:id/enrich-dish', requireBusinessAuth, async (req, res) => {
       console.error('enrich-dish', error);
       return res.status(500).json({ error: 'Failed to enrich dish' });
     }
+    bustPublicReads(existing.business_id);
     return res.json({
       canonicalDishId: enriched.canonicalDishId,
       ingredients: enriched.ingredients,
@@ -952,6 +1002,7 @@ router.put('/item/:id', requireBusinessAuth, async (req, res) => {
       return res.status(500).json({ error: 'Failed to update menu item' });
     }
 
+    bustPublicReads(req.businessId);
     res.json({ message: 'Menu item updated successfully' });
   } catch (error) {
     console.error('Update menu item error:', error);
@@ -983,6 +1034,7 @@ router.delete('/item/:id', requireBusinessAuth, async (req, res) => {
       return res.status(500).json({ error: 'Failed to delete menu item' });
     }
 
+    bustPublicReads(req.businessId);
     res.json({ message: 'Menu item deleted successfully' });
   } catch (error) {
     console.error('Delete menu item error:', error);

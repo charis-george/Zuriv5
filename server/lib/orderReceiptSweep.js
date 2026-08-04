@@ -6,9 +6,10 @@ const {
   isOriginOutageSignal
 } = require('./supabaseResilience');
 
-const SWEEP_LIMIT = Math.max(5, Math.min(150, Number(process.env.ORDER_RECEIPT_SWEEP_LIMIT) || 60));
-const LOOKBACK_HOURS = Math.max(1, Number(process.env.ORDER_RECEIPT_SWEEP_LOOKBACK_HOURS) || 72);
-const SWEEP_QUERY_RETRIES = Math.max(1, Number(process.env.ORDER_RECEIPT_SWEEP_QUERY_RETRIES) || 3);
+// Survival defaults: light recovery sweeps (webhooks remain primary receipt path).
+const SWEEP_LIMIT = Math.max(5, Math.min(150, Number(process.env.ORDER_RECEIPT_SWEEP_LIMIT) || 20));
+const LOOKBACK_HOURS = Math.max(1, Number(process.env.ORDER_RECEIPT_SWEEP_LOOKBACK_HOURS) || 48);
+const SWEEP_QUERY_RETRIES = Math.max(1, Number(process.env.ORDER_RECEIPT_SWEEP_QUERY_RETRIES) || 2);
 const SEND_LOCK_STALE_MS = Math.max(60_000, Number(process.env.ORDER_RECEIPT_LOCK_STALE_MS) || 2 * 60_000);
 const AGED_ALERT_MS = Math.max(60_000, Number(process.env.ORDER_RECEIPT_AGED_ALERT_MS) || 10 * 60_000);
 

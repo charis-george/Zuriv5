@@ -20,6 +20,7 @@ const { verifyBankAccount } = require('../lib/bankVerification');
 const { ensurePaystackSubaccount } = require('../lib/paystack-subaccount');
 const { getManagePaymentUrlForBusiness } = require('../lib/paystack-subscription');
 const { normalizeAccountStatus } = require('../lib/businessStatus');
+const { invalidateBusinessReads } = require('../lib/publicReadCache');
 
 const supabase = new Proxy(
   {},
@@ -493,6 +494,7 @@ router.patch('/:id', requireBusinessAuth, async (req, res) => {
     try {
       const io = req.app && req.app.get ? req.app.get('io') : null;
       if (io && updates.business_mode !== undefined) {
+        invalidateBusinessReads(id);
         io.to(`storefront-${id}`).emit('storefront-updated', {
           businessId: id,
           businessMode: data.business_mode || 'menu'
@@ -647,6 +649,7 @@ router.post(
       try {
         const io = req.app && req.app.get ? req.app.get('io') : null;
         if (io) {
+          invalidateBusinessReads(businessId);
           io.to(`storefront-${businessId}`).emit('storefront-updated', {
             businessId,
             config: updated.storefront_config || null
@@ -697,6 +700,7 @@ router.delete('/:id/storefront-banner', requireBusinessAuth, async (req, res) =>
     try {
       const io = req.app && req.app.get ? req.app.get('io') : null;
       if (io) {
+        invalidateBusinessReads(businessId);
         io.to(`storefront-${businessId}`).emit('storefront-updated', {
           businessId,
           config: updated.storefront_config || null
@@ -792,6 +796,7 @@ router.patch('/:id/storefront', requireBusinessAuth, async (req, res) => {
     try {
       const io = req.app && req.app.get ? req.app.get('io') : null;
       if (io) {
+        invalidateBusinessReads(id);
         io.to(`storefront-${id}`).emit('storefront-updated', {
           businessId: id,
           profileId: activeProfile?.id || null,
@@ -873,6 +878,7 @@ router.patch('/:id/ai-menu-settings', requireBusinessAuth, async (req, res) => {
     try {
       const io = req.app && req.app.get ? req.app.get('io') : null;
       if (io) {
+        invalidateBusinessReads(id);
         io.to(`storefront-${id}`).emit('storefront-updated', {
           businessId: id,
           config: data.storefront_config || null,
