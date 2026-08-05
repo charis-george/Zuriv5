@@ -5,6 +5,7 @@ const { getDb } = require('../database');
 const { requireBusinessAuth } = require('../middleware/auth');
 const { normalizeProvider } = require('../lib/paymentProvider');
 const { initializeSubscriptionPayment } = require('../lib/paymentInitialize');
+const { normalizePaystackSdkError } = require('../lib/paystackErrorUtil');
 const {
   isMonnifyConfigured,
   getTransactionByPaymentReference,
@@ -94,10 +95,11 @@ router.post('/initialize', requireBusinessAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('Subscription initialize error:', err);
-    const status = err.code === 'MONNIFY_AUTH_FAILED' ? 502 : (err.status || 500);
+    const normalized = normalizePaystackSdkError(err);
+    const status = normalized ? normalized.status : (err.code === 'MONNIFY_AUTH_FAILED' ? 502 : (err.status || 500));
     return res.status(status).json({
-      error: err.message || 'Failed to initialize subscription payment',
-      code: err.code || undefined
+      error: normalized?.message || err.message || 'Failed to initialize subscription payment',
+      code: normalized?.code || err.code || undefined
     });
   }
 });

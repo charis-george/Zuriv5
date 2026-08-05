@@ -1,13 +1,13 @@
 const { sendOrderReceiptOnce } = require('./orderReceiptEmail');
 const { isPermanentResendError, isRetryableResendError } = require('./resendMail');
 
-const MAX_ATTEMPTS = Math.max(3, Number(process.env.ORDER_RECEIPT_MAX_ATTEMPTS) || 8);
-// Survival default: serialize receipt sends so free Supabase is not stampeded.
-const CONCURRENCY = Math.max(1, Math.min(12, Number(process.env.ORDER_RECEIPT_EMAIL_CONCURRENCY) || 1));
-const BASE_RETRY_MS = Math.max(500, Number(process.env.ORDER_RECEIPT_RETRY_BASE_MS) || 2000);
-const MAX_RETRY_MS = Math.max(BASE_RETRY_MS, Number(process.env.ORDER_RECEIPT_RETRY_MAX_MS) || 120_000);
+const MAX_ATTEMPTS = Math.max(3, Number(process.env.ORDER_RECEIPT_MAX_ATTEMPTS) || 12);
+// Allow a couple of parallel sends so ticket bursts clear faster without stampeding free-tier DB.
+const CONCURRENCY = Math.max(1, Math.min(12, Number(process.env.ORDER_RECEIPT_EMAIL_CONCURRENCY) || 2));
+const BASE_RETRY_MS = Math.max(500, Number(process.env.ORDER_RECEIPT_RETRY_BASE_MS) || 1500);
+const MAX_RETRY_MS = Math.max(BASE_RETRY_MS, Number(process.env.ORDER_RECEIPT_RETRY_MAX_MS) || 90_000);
 /** Extra patience while another worker / stale DB lock holds the send. */
-const MAX_IN_FLIGHT_SOFT_RETRIES = Math.max(5, Number(process.env.ORDER_RECEIPT_IN_FLIGHT_SOFT_RETRIES) || 20);
+const MAX_IN_FLIGHT_SOFT_RETRIES = Math.max(5, Number(process.env.ORDER_RECEIPT_IN_FLIGHT_SOFT_RETRIES) || 30);
 
 /** @type {Array<{ args: object, attempt: number, runAt: number, softRetries?: number }>} */
 const queue = [];
@@ -40,11 +40,9 @@ function shouldRetryResult(result, attempt) {
   if (result.permanent) return false;
   if (result.reason === 'already_sent') return false;
   if (result.reason === 'no_recipients') return false;
-  if (result.reason === 'missing_resend_key') return false;
   if (result.reason === 'no_tickets') return false;
-  if (result.reason === 'business_not_found') return false;
-  if (result.reason === 'order_not_found') return false;
   if (result.reason === 'no_customer_email') return false;
+  // Keep retrying until key is configured / DB recovers — sweep also recovers these.
   if (attempt >= MAX_ATTEMPTS) return false;
   return Boolean(result.retryable);
 }

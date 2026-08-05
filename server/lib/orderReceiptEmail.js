@@ -17,13 +17,14 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Reasons that will never succeed by retrying — sweep must stop re-enqueueing. */
+/**
+ * Only true data defects — never give up on transient DB/API blips.
+ * business_not_found / order_not_found / missing_resend_key stay retryable
+ * so tickets keep flowing once the underlying issue clears.
+ */
 const PERMANENT_RECEIPT_REASONS = new Set([
   'no_tickets',
-  'business_not_found',
-  'order_not_found',
   'no_recipients',
-  'missing_resend_key',
   'no_customer_email'
 ]);
 
@@ -301,13 +302,13 @@ async function loadOrderReceiptData(orderId) {
     .select('id,name,email,business_mode')
     .eq('id', order.business_id)
     .single();
-  if (bizErr) {
-    console.warn('[ZURI] Receipt email business load warning', {
-      orderId,
-      businessId: order.business_id,
-      reason: 'business_load_error',
-      cause: bizErr.message || String(bizErr)
-    });
+  // Never soft-continue without business — ticketing mode would be unknown and we
+  // could mark a ticket order "sent" without QR attachments.
+  if (bizErr || !biz) {
+    return {
+      error: 'business_load_error',
+      cause: bizErr?.message || 'business row missing for receipt load'
+    };
   }
 
   const { data: lines, error: liErr } = await supabase
@@ -362,7 +363,17 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
       reason: 'missing_resend_key',
       cause
     });
-    return skipped('missing_resend_key', false, cause);
+    // Persist so sweep keeps surfacing this until the key is configured.
+    try {
+      await getSupabase()
+        .from('orders')
+        .update({ receipt_email_error: formatReceiptErrorMessage('missing_resend_key', cause) })
+        .eq('id', orderId)
+        .is('receipt_sent_at', null);
+    } catch {
+      /* ignore */
+    }
+    return skipped('missing_resend_key', true, cause);
   }
 
   const lock = await claimReceiptSendLock(orderId);
@@ -393,8 +404,8 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
       sent: false,
       errorMessage: loaded.cause || loaded.error
     });
-    const retryable = loaded.error === 'order_not_found' || loaded.error === 'order_items_error';
-    return skipped(loaded.error, retryable, loaded.cause || loaded.error);
+    // All load failures are retryable — transient Supabase blips must not strand tickets.
+    return skipped(loaded.error, true, loaded.cause || loaded.error);
   }
 
   const { order, biz, receiptItems } = loaded;
@@ -715,7 +726,11 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
         html,
         attachments: ticketQrAttachments.length ? ticketQrAttachments : undefined
       },
-      { timeoutMs: ticketQrAttachments.length ? 45_000 : 15_000 }
+      {
+        timeoutMs: ticketQrAttachments.length ? 45_000 : 15_000,
+        // One logical ticket email per order — safe across retries / deploy overlaps.
+        idempotencyKey: `zuri-receipt-${orderId}`
+      }
     );
 
     const marked = await releaseReceiptSendLock(orderId, { sent: true });
@@ -731,6 +746,16 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
         to,
         severity: 'critical'
       });
+      try {
+        await getSupabase()
+          .from('orders')
+          .update({
+            receipt_email_error: `mark_sent_failed|${String(cause).slice(0, 460)}`.slice(0, 500)
+          })
+          .eq('id', orderId);
+      } catch {
+        /* ignore */
+      }
       return skipped('mark_sent_failed', true, cause);
     }
 

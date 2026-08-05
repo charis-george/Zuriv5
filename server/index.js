@@ -505,8 +505,8 @@ scheduleSubscriptionRenewalReminders();
 
 // Survival: sweep is recovery-only; prefer longer interval on free-tier compute.
 const RECEIPT_SWEEP_INTERVAL_MS = Math.max(
-  60_000,
-  Number(process.env.ORDER_RECEIPT_SWEEP_INTERVAL_MS) || 300_000
+  30_000,
+  Number(process.env.ORDER_RECEIPT_SWEEP_INTERVAL_MS) || 90_000
 );
 function scheduleOrderReceiptSweep() {
   if (process.env.ORDER_RECEIPT_SWEEP_ENABLED === 'false') return;
@@ -525,8 +525,8 @@ function scheduleOrderReceiptSweep() {
       console.error('[ZURI] Receipt sweep module error:', err);
     }
   };
-  // Delay first sweep so boot traffic + payments get CPU first.
-  setTimeout(run, 60_000);
+  // First pass soon after boot so deploy restarts do not strand paid tickets.
+  setTimeout(run, 20_000);
   setInterval(run, RECEIPT_SWEEP_INTERVAL_MS);
 }
 scheduleOrderReceiptSweep();
