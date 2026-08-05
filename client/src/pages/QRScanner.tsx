@@ -83,8 +83,13 @@ async function startFirstWorkingCamera(
     fps: 10,
     qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
       const edge = Math.min(viewfinderWidth, viewfinderHeight)
-      const side = Math.max(80, Math.floor(Math.min(250, edge * 0.72)))
-      return { width: side, height: side }
+      // html5-qrcode only decodes inside its internal scan region (qrbox).
+      // Previously the qrbox was intentionally small, which made scanning feel
+      // "boundary-alignment strict". Make it much larger so that any QR that
+      // is still within the visible camera frame can be detected.
+      const side = Math.max(120, Math.floor(edge * 0.95))
+      const clamped = Math.min(side, 320)
+      return { width: clamped, height: clamped }
     }
   }
 

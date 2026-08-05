@@ -34,6 +34,7 @@ const {
 } = require('../lib/subscriptionActivate');
 const { canAcceptPayments, statusMessage } = require('../lib/businessStatus');
 const { refundOrderPayment } = require('../lib/paystack-refund');
+const { normalizePaystackSdkError } = require('../lib/paystackErrorUtil');
 const { requireBusinessAuth } = require('../middleware/auth');
 const {
   handleSubscriptionCreate,
@@ -156,6 +157,19 @@ async function finalizePaidOrder({
   const isSplit = marked.order?.payment_method === 'split' || marked.order?.payout_status === 'split_settled';
   if (!isSplit && payoutAmount != null) schedulePayout(orderId, payoutAmount, paymentProvider);
   queueOrderReceiptOnce({ orderId, paidAt: paidAt || null, reference: reference || orderId });
+  // Safety net: if the first enqueue raced a deploy/shutdown, re-queue shortly after.
+  // Deduped by in-memory queue + DB send lock + Resend Idempotency-Key.
+  const receiptArgs = { orderId, paidAt: paidAt || null, reference: reference || orderId };
+  setTimeout(() => {
+    try {
+      queueOrderReceiptOnce(receiptArgs);
+    } catch (err) {
+      console.warn('[ZURI] Receipt safety re-queue failed', {
+        orderId,
+        cause: err?.message || String(err)
+      });
+    }
+  }, 12_000);
 
   // Ticketing checkouts create unpaid orders first — alert the venue only once payment clears.
   if (bid) {
@@ -767,10 +781,13 @@ router.post('/initialize', async (req, res) => {
     res.json(payload);
   } catch (error) {
     console.error('Payment initialization error:', error);
-    const status = error.code === 'MONNIFY_AUTH_FAILED' ? 502 : (error.status || 500);
+    const normalized = normalizePaystackSdkError(error);
+    const status = normalized
+      ? normalized.status
+      : (error.code === 'MONNIFY_AUTH_FAILED' ? 502 : (error.status || 500));
     res.status(status).json({
-      error: error.message || 'Failed to initialize payment',
-      code: error.code || undefined
+      error: normalized?.message || error.message || 'Failed to initialize payment',
+      code: normalized?.code || error.code || undefined
     });
   }
 });
@@ -998,7 +1015,12 @@ router.get('/verify/:reference', async (req, res) => {
     });
   } catch (error) {
     console.error('Payment verification error:', error);
-    res.status(500).json({ success: false, message: 'Failed to verify payment' });
+    const normalized = normalizePaystackSdkError(error);
+    const status = normalized ? normalized.status : 500;
+    res.status(status).json({
+      success: false,
+      message: normalized?.message || 'Failed to verify payment'
+    });
   }
 });
 
@@ -1115,7 +1137,9 @@ router.post('/charge-saved', async (req, res) => {
     }
   } catch (error) {
     console.error('Charge saved card error:', error);
-    res.status(500).json({ error: 'Charge failed' });
+    const normalized = normalizePaystackSdkError(error);
+    const status = normalized ? normalized.status : 500;
+    res.status(status).json({ error: normalized?.message || 'Charge failed' });
   }
 });
 
