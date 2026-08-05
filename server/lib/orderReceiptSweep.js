@@ -14,6 +14,10 @@ const SWEEP_QUERY_RETRIES = Math.max(1, Number(process.env.ORDER_RECEIPT_SWEEP_Q
 const SEND_LOCK_STALE_MS = Math.max(60_000, Number(process.env.ORDER_RECEIPT_LOCK_STALE_MS) || 2 * 60_000);
 const AGED_ALERT_MS = Math.max(60_000, Number(process.env.ORDER_RECEIPT_AGED_ALERT_MS) || 5 * 60_000);
 
+/** Avoid spamming the same permanent orphan every sweep cycle. */
+const permanentLoggedAt = new Map();
+const PERMANENT_LOG_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+
 /**
  * Only true data defects — transient business/order load misses must keep retrying.
  */
@@ -160,7 +164,9 @@ async function sweepPendingOrderReceipts() {
     if (isPermanentReceiptError(order.receipt_email_error)) {
       skipped += 1;
       permanentSkipped += 1;
-      if (aged && permanentSkipped <= 5) {
+      const lastLog = permanentLoggedAt.get(order.id) || 0;
+      if (Date.now() - lastLog >= PERMANENT_LOG_COOLDOWN_MS) {
+        permanentLoggedAt.set(order.id, Date.now());
         console.error('[ZURI] Receipt sweep skipped permanent failure — needs ops fix', {
           orderId: order.id,
           reason: 'permanent_receipt_error',

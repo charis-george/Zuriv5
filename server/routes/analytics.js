@@ -50,6 +50,33 @@ function hourBucketUtc(iso) {
   return String(h);
 }
 
+/** Cap `.in()` URL size — PostgREST/undici reject ~16KB request URLs (UND_ERR_HEADERS_OVERFLOW). */
+const SUPABASE_IN_CHUNK = Math.max(20, Math.min(120, Number(process.env.ANALYTICS_IN_CHUNK) || 80));
+
+/**
+ * Run `.in(column, ids)` in chunks and merge rows.
+ * @param {string} table
+ * @param {string} columns
+ * @param {string} column
+ * @param {string[]} ids
+ * @param {(q: any) => any} [refine] optional extra filters (e.g. .eq('business_id', id))
+ */
+async function selectInChunks(table, columns, column, ids, refine) {
+  const unique = [...new Set((ids || []).filter(Boolean))];
+  if (unique.length === 0) return { data: [], error: null };
+
+  const all = [];
+  for (let i = 0; i < unique.length; i += SUPABASE_IN_CHUNK) {
+    const chunk = unique.slice(i, i + SUPABASE_IN_CHUNK);
+    let q = supabase.from(table).select(columns).in(column, chunk);
+    if (typeof refine === 'function') q = refine(q);
+    const { data, error } = await q;
+    if (error) return { data: null, error };
+    if (data?.length) all.push(...data);
+  }
+  return { data: all, error: null };
+}
+
 /** Only count orders that have actually been paid (excludes abandoned checkouts). */
 function paidOrdersQuery(businessId, startIso, columns) {
   return supabase
@@ -170,10 +197,12 @@ router.get('/popular-items/:businessId', requireBusinessAuth, async (req, res) =
     const orderIds = (orders || []).map((o) => o.id);
     if (orderIds.length === 0) return res.json([]);
 
-    const { data: lines, error: liErr } = await supabase
-      .from('order_items')
-      .select('menu_item_id, quantity, price')
-      .in('order_id', orderIds);
+    const { data: lines, error: liErr } = await selectInChunks(
+      'order_items',
+      'menu_item_id, quantity, price',
+      'order_id',
+      orderIds
+    );
 
     if (liErr) {
       console.error('analytics popular items error:', liErr);
@@ -183,11 +212,13 @@ router.get('/popular-items/:businessId', requireBusinessAuth, async (req, res) =
     const itemIds = [...new Set((lines || []).map((l) => l.menu_item_id).filter(Boolean))];
     if (itemIds.length === 0) return res.json([]);
 
-    const { data: menuItems, error: mErr } = await supabase
-      .from('menu_items')
-      .select('id, name, price')
-      .eq('business_id', businessId)
-      .in('id', itemIds);
+    const { data: menuItems, error: mErr } = await selectInChunks(
+      'menu_items',
+      'id, name, price',
+      'id',
+      itemIds,
+      (q) => q.eq('business_id', businessId)
+    );
 
     if (mErr) {
       console.error('analytics menu lookup error:', mErr);
@@ -289,10 +320,12 @@ router.get('/profit-margins/:businessId', requireBusinessAuth, async (req, res) 
     const orderIds = (orders || []).map((o) => o.id);
     if (orderIds.length === 0) return res.json([]);
 
-    const { data: lines, error: liErr } = await supabase
-      .from('order_items')
-      .select('menu_item_id, quantity, price')
-      .in('order_id', orderIds);
+    const { data: lines, error: liErr } = await selectInChunks(
+      'order_items',
+      'menu_item_id, quantity, price',
+      'order_id',
+      orderIds
+    );
 
     if (liErr) {
       console.error('analytics profit lines error:', liErr);
@@ -302,11 +335,13 @@ router.get('/profit-margins/:businessId', requireBusinessAuth, async (req, res) 
     const itemIds = [...new Set((lines || []).map((l) => l.menu_item_id).filter(Boolean))];
     if (itemIds.length === 0) return res.json([]);
 
-    const { data: menuItems, error: mErr } = await supabase
-      .from('menu_items')
-      .select('id, name, price, cost')
-      .eq('business_id', businessId)
-      .in('id', itemIds);
+    const { data: menuItems, error: mErr } = await selectInChunks(
+      'menu_items',
+      'id, name, price, cost',
+      'id',
+      itemIds,
+      (q) => q.eq('business_id', businessId)
+    );
 
     if (mErr) {
       console.error('analytics profit menu error:', mErr);
