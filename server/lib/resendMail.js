@@ -32,7 +32,7 @@ function normalizeRecipients(to) {
  *   reply_to?: string,
  *   attachments?: Array<{ filename: string, content: string, content_type?: string }>
  * }} mail
- * @param {{ timeoutMs?: number }} [opts]
+ * @param {{ timeoutMs?: number, idempotencyKey?: string }} [opts]
  */
 async function sendResendEmail(mail, opts = {}) {
   const apiKey = getResendApiKey();
@@ -72,14 +72,20 @@ async function sendResendEmail(mail, opts = {}) {
   const timeoutMs = opts.timeoutMs ?? 10_000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const headers = {
+    Authorization: `Bearer ${apiKey}`,
+    'Content-Type': 'application/json'
+  };
+  // Stable key so retries / timeouts after accept do not double-deliver the same ticket email.
+  const idempotencyKey = opts.idempotencyKey ? String(opts.idempotencyKey).slice(0, 256) : '';
+  if (idempotencyKey) {
+    headers['Idempotency-Key'] = idempotencyKey;
+  }
 
   try {
     const response = await fetch(RESEND_API, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
+      headers,
       body: JSON.stringify(payload),
       signal: controller.signal
     });

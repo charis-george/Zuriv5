@@ -6,29 +6,48 @@ const {
   isOriginOutageSignal
 } = require('./supabaseResilience');
 
-// Survival defaults: light recovery sweeps (webhooks remain primary receipt path).
-const SWEEP_LIMIT = Math.max(5, Math.min(150, Number(process.env.ORDER_RECEIPT_SWEEP_LIMIT) || 20));
-const LOOKBACK_HOURS = Math.max(1, Number(process.env.ORDER_RECEIPT_SWEEP_LOOKBACK_HOURS) || 48);
+// Aggressive recovery: catch every unpaid ticket receipt, not just a tiny recent window.
+const SWEEP_LIMIT = Math.max(5, Math.min(200, Number(process.env.ORDER_RECEIPT_SWEEP_LIMIT) || 80));
+const LOOKBACK_HOURS = Math.max(1, Number(process.env.ORDER_RECEIPT_SWEEP_LOOKBACK_HOURS) || 336); // 14 days
+const SWEEP_MAX_PAGES = Math.max(1, Math.min(20, Number(process.env.ORDER_RECEIPT_SWEEP_MAX_PAGES) || 5));
 const SWEEP_QUERY_RETRIES = Math.max(1, Number(process.env.ORDER_RECEIPT_SWEEP_QUERY_RETRIES) || 2);
 const SEND_LOCK_STALE_MS = Math.max(60_000, Number(process.env.ORDER_RECEIPT_LOCK_STALE_MS) || 2 * 60_000);
-const AGED_ALERT_MS = Math.max(60_000, Number(process.env.ORDER_RECEIPT_AGED_ALERT_MS) || 10 * 60_000);
+const AGED_ALERT_MS = Math.max(60_000, Number(process.env.ORDER_RECEIPT_AGED_ALERT_MS) || 5 * 60_000);
 
-/** Match permanent failures so the sweep does not re-enqueue forever. */
+/**
+ * Only true data defects — transient business/order load misses must keep retrying.
+ */
 function isPermanentReceiptError(errorMessage) {
   if (!errorMessage) return false;
   const s = String(errorMessage);
-  if (s.startsWith('permanent:')) return true;
+  if (s.startsWith('permanent:no_tickets')) return true;
+  if (s.startsWith('permanent:no_recipients')) return true;
+  if (s.startsWith('permanent:no_customer_email')) return true;
+  // Legacy permanent: prefixes that were over-broad — do NOT treat as terminal forever.
+  if (s.startsWith('permanent:business_not_found')) return false;
+  if (s.startsWith('permanent:order_not_found')) return false;
+  if (s.startsWith('permanent:missing_resend_key')) return false;
+  if (s.startsWith('permanent:')) {
+    return /permanent:(no_tickets|no_recipients|no_customer_email)\|/i.test(s);
+  }
   return (
-    /no_tickets|business_not_found|order_not_found|no_recipients|missing_resend_key|no_customer_email/i.test(s) ||
+    /\bno_tickets\b/i.test(s) ||
+    /\bno_recipients\b/i.test(s) ||
+    /\bno_customer_email\b/i.test(s) ||
     /no order_items quantity to mint ticket QRs/i.test(s)
   );
+}
+
+function needsMarkSentOnly(errorMessage) {
+  if (!errorMessage) return false;
+  return /mark_sent_failed|delivered via Resend but receipt_sent_at/i.test(String(errorMessage));
 }
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchPendingReceiptOrders(supabase) {
+async function fetchPendingReceiptPage(supabase, offset) {
   const since = new Date(Date.now() - LOOKBACK_HOURS * 60 * 60 * 1000).toISOString();
   let lastError = null;
 
@@ -48,7 +67,7 @@ async function fetchPendingReceiptOrders(supabase) {
         .is('receipt_sent_at', null)
         .gte('created_at', since)
         .order('created_at', { ascending: true })
-        .limit(SWEEP_LIMIT);
+        .range(offset, offset + SWEEP_LIMIT - 1);
 
       if (!error) return { data: data || [], error: null };
       lastError = error;
@@ -57,7 +76,6 @@ async function fetchPendingReceiptOrders(supabase) {
     }
 
     const cause = summarizeUpstreamError(lastError);
-    // Origin outages: do not stampede with short retries — circuit breaker owns backoff.
     if (isOriginOutageSignal(lastError) || lastError?.code === 'SUPABASE_CIRCUIT_OPEN') {
       console.warn('[ZURI] Receipt sweep query aborted (origin outage)', {
         attempt: attempt + 1,
@@ -79,6 +97,25 @@ async function fetchPendingReceiptOrders(supabase) {
   return { data: [], error: lastError };
 }
 
+async function fetchPendingReceiptOrders(supabase) {
+  const all = [];
+  let offset = 0;
+  let lastError = null;
+
+  for (let page = 0; page < SWEEP_MAX_PAGES; page += 1) {
+    const { data, error } = await fetchPendingReceiptPage(supabase, offset);
+    if (error) {
+      lastError = error;
+      break;
+    }
+    all.push(...(data || []));
+    if (!data || data.length < SWEEP_LIMIT) break;
+    offset += SWEEP_LIMIT;
+  }
+
+  return { data: all, error: lastError && all.length === 0 ? lastError : null };
+}
+
 function isFreshSendLock(order) {
   if (!order?.receipt_sending_at) return false;
   const lockedAt = Date.parse(order.receipt_sending_at);
@@ -89,6 +126,7 @@ function isFreshSendLock(order) {
 /**
  * Find paid orders missing receipt emails and enqueue delivery.
  * Covers transient Resend failures, server restarts, and race windows.
+ * Goal: every paid ticket order is re-queued until receipt_sent_at is set.
  */
 async function sweepPendingOrderReceipts() {
   if (isSupabaseCircuitOpen()) {
@@ -113,28 +151,28 @@ async function sweepPendingOrderReceipts() {
   let skipped = 0;
   let agedPending = 0;
   let permanentSkipped = 0;
+  let markSentOnlyCount = 0;
 
   for (const order of orders || []) {
     const ageMs = Date.now() - Date.parse(order.created_at || '') || 0;
     const aged = ageMs >= AGED_ALERT_MS;
 
-    // Permanent data defects (e.g. no order_items) — never re-enqueue.
     if (isPermanentReceiptError(order.receipt_email_error)) {
       skipped += 1;
       permanentSkipped += 1;
-      if (aged && permanentSkipped <= 3) {
-        console.log('[ZURI] Receipt sweep skipped permanent failure', {
+      if (aged && permanentSkipped <= 5) {
+        console.error('[ZURI] Receipt sweep skipped permanent failure — needs ops fix', {
           orderId: order.id,
           reason: 'permanent_receipt_error',
           receipt_email_error: order.receipt_email_error,
           receipt_send_attempts: Number(order.receipt_send_attempts) || 0,
-          ageMs
+          ageMs,
+          severity: 'critical'
         });
       }
       continue;
     }
 
-    // Another worker is actively sending — do not stampede the queue.
     if (isFreshSendLock(order)) {
       skipped += 1;
       if (aged) {
@@ -150,16 +188,18 @@ async function sweepPendingOrderReceipts() {
       continue;
     }
 
-    // Back off hot failures so we do not hammer Resend under traction spikes.
     const priorAttempts = Number(order.receipt_send_attempts) || 0;
     const delayMs =
       priorAttempts > 0
-        ? Math.min(60_000, 1_000 * 2 ** Math.min(priorAttempts, 5))
+        ? Math.min(30_000, 500 * 2 ** Math.min(priorAttempts, 5))
         : 0;
+
+    const markSentOnly = needsMarkSentOnly(order.receipt_email_error);
+    if (markSentOnly) markSentOnlyCount += 1;
 
     const result = enqueueOrderReceipt(
       { orderId: order.id, paidAt: null, reference: order.id },
-      { attempt: 0, delayMs }
+      { attempt: 0, delayMs, markSentOnly }
     );
 
     if (result?.queued) {
@@ -167,7 +207,7 @@ async function sweepPendingOrderReceipts() {
       const logFn = aged ? console.warn : console.log;
       logFn('[ZURI] Receipt sweep candidate queued', {
         orderId: order.id,
-        reason: 'sweep_enqueued',
+        reason: markSentOnly ? 'sweep_enqueued_mark_sent_only' : 'sweep_enqueued',
         cause: order.receipt_email_error
           ? `prior receipt_email_error: ${order.receipt_email_error}`
           : 'paid order missing receipt_sent_at',
@@ -212,12 +252,30 @@ async function sweepPendingOrderReceipts() {
       enqueued,
       skipped,
       permanentSkipped,
+      markSentOnlyCount,
       agedPending,
+      lookbackHours: LOOKBACK_HOURS,
       reason: 'sweep_complete'
     });
   }
 
-  return { scanned: orders?.length || 0, enqueued, skipped, permanentSkipped, agedPending };
+  if (agedPending > 0) {
+    console.error('[ZURI] Receipt delivery backlog', {
+      agedPending,
+      scanned: orders?.length || 0,
+      severity: 'critical',
+      cause: 'paid orders still missing receipt_sent_at after aged threshold'
+    });
+  }
+
+  return {
+    scanned: orders?.length || 0,
+    enqueued,
+    skipped,
+    permanentSkipped,
+    markSentOnlyCount,
+    agedPending
+  };
 }
 
 module.exports = {

@@ -30,6 +30,7 @@ const {
   ensurePaystackPlan,
   disablePaystackSubscription
 } = require('./paystack-subscription');
+const { normalizePaystackSdkError } = require('./paystackErrorUtil');
 
 const appPaystack = process.env.PAYSTACK_SECRET_KEY ? new Paystack(process.env.PAYSTACK_SECRET_KEY) : null;
 
@@ -60,16 +61,28 @@ async function initializePaystackOrder({ email, orderTotal, orderId, businessId,
 
   const paymentReference = buildPaystackPaymentReference(orderId);
 
-  const response = await appPaystack.transaction.initialize({
-    email,
-    amount: amountInKobo,
-    reference: paymentReference,
-    callback_url: withReferenceOnCallback(callbackUrl, paymentReference),
-    currency: 'NGN',
-    metadata,
-    ...splitParams,
-    ...paystackCheckoutExtras()
-  });
+  let response;
+  try {
+    response = await appPaystack.transaction.initialize({
+      email,
+      amount: amountInKobo,
+      reference: paymentReference,
+      callback_url: withReferenceOnCallback(callbackUrl, paymentReference),
+      currency: 'NGN',
+      metadata,
+      ...splitParams,
+      ...paystackCheckoutExtras()
+    });
+  } catch (err) {
+    const normalized = normalizePaystackSdkError(err);
+    if (normalized) {
+      const e = new Error(normalized.message);
+      e.status = normalized.status;
+      e.code = normalized.code;
+      throw e;
+    }
+    throw err;
+  }
   if (!response.status || !response.data) {
     const msg = response?.message || 'Failed to initialize Paystack payment';
     console.error('Paystack initialize failed', { orderId, paymentReference, message: msg, response });
@@ -174,17 +187,29 @@ async function initializePaystackSubscription({ email, reference, amountNaira, b
     metadata.paystackPlanCode = planCode;
 
     const amountInKobo = Math.round(planAmount * 100);
-    const response = await appPaystack.transaction.initialize({
-      email,
-      amount: amountInKobo,
-      plan: planCode,
-      reference,
-      callback_url: withReferenceOnCallback(callbackUrl, reference),
-      currency: 'NGN',
-      metadata,
-      channels: ['card', 'bank', 'bank_transfer', 'ussd'],
-      ...paystackCheckoutExtras()
-    });
+    let response;
+    try {
+      response = await appPaystack.transaction.initialize({
+        email,
+        amount: amountInKobo,
+        plan: planCode,
+        reference,
+        callback_url: withReferenceOnCallback(callbackUrl, reference),
+        currency: 'NGN',
+        metadata,
+        channels: ['card', 'bank', 'bank_transfer', 'ussd'],
+        ...paystackCheckoutExtras()
+      });
+    } catch (err) {
+      const normalized = normalizePaystackSdkError(err);
+      if (normalized) {
+        const e = new Error(normalized.message);
+        e.status = normalized.status;
+        e.code = normalized.code;
+        throw e;
+      }
+      throw err;
+    }
     if (!response.status || !response.data) {
       throw new Error('Failed to initialize Paystack recurring subscription');
     }
@@ -200,15 +225,27 @@ async function initializePaystackSubscription({ email, reference, amountNaira, b
   }
 
   const amountInKobo = Math.round(amountNaira * 100);
-  const response = await appPaystack.transaction.initialize({
-    email,
-    amount: amountInKobo,
-    reference,
-    callback_url: withReferenceOnCallback(callbackUrl, reference),
-    currency: 'NGN',
-    metadata,
-    ...paystackCheckoutExtras()
-  });
+  let response;
+  try {
+    response = await appPaystack.transaction.initialize({
+      email,
+      amount: amountInKobo,
+      reference,
+      callback_url: withReferenceOnCallback(callbackUrl, reference),
+      currency: 'NGN',
+      metadata,
+      ...paystackCheckoutExtras()
+    });
+  } catch (err) {
+    const normalized = normalizePaystackSdkError(err);
+    if (normalized) {
+      const e = new Error(normalized.message);
+      e.status = normalized.status;
+      e.code = normalized.code;
+      throw e;
+    }
+    throw err;
+  }
   if (!response.status || !response.data) {
     throw new Error('Failed to initialize Paystack subscription payment');
   }
