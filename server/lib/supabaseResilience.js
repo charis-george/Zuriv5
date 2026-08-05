@@ -2,16 +2,27 @@
  * Protect the API when Supabase/Cloudflare origin is timing out (522).
  * Without this, hanging fetches + HTML error dumps exhaust Railway capacity
  * and block payment traffic.
+ *
+ * Tuned for post-upgrade / cold-start realities: prefer short shed windows and
+ * more patience on fetch timeouts over flapping the whole API into 503s.
  */
 
-const FAILURE_THRESHOLD = Math.max(1, Number(process.env.SUPABASE_CIRCUIT_FAILURES) || 2);
+const FAILURE_THRESHOLD = Math.max(1, Number(process.env.SUPABASE_CIRCUIT_FAILURES) || 5);
 const OPEN_MS = Math.max(
-  30_000,
-  Math.min(300_000, Number(process.env.SUPABASE_CIRCUIT_OPEN_MS) || 120_000)
+  15_000,
+  Math.min(300_000, Number(process.env.SUPABASE_CIRCUIT_OPEN_MS) || 45_000)
 );
 const FETCH_TIMEOUT_MS = Math.max(
-  3_000,
-  Math.min(60_000, Number(process.env.SUPABASE_FETCH_TIMEOUT_MS) || 12_000)
+  5_000,
+  Math.min(60_000, Number(process.env.SUPABASE_FETCH_TIMEOUT_MS) || 20_000)
+);
+const PROBE_TIMEOUT_MS = Math.max(
+  FETCH_TIMEOUT_MS,
+  Math.min(60_000, Number(process.env.SUPABASE_PROBE_TIMEOUT_MS) || Math.round(FETCH_TIMEOUT_MS * 1.5))
+);
+const HALF_OPEN_MAX_PROBES = Math.max(
+  1,
+  Math.min(8, Number(process.env.SUPABASE_HALF_OPEN_PROBES) || 3)
 );
 
 /** @type {'closed' | 'open' | 'half_open'} */
@@ -21,6 +32,7 @@ let openUntil = 0;
 let halfOpenInFlight = 0;
 let lastCause = null;
 let openedAt = 0;
+let openStreak = 0;
 
 function summarizeUpstreamError(raw) {
   const s = String(raw?.message || raw || '').trim();
@@ -41,7 +53,7 @@ function summarizeUpstreamError(raw) {
     const code = (s.match(/Error code (52[134])/i) || [])[1] || '52x';
     return ray ? `supabase_origin_error_${code} ray=${ray}` : `supabase_origin_error_${code}`;
   }
-  if (/supabase_circuit_open/i.test(s)) return s.slice(0, 120);
+  if (/supabase_circuit_open|supabase_circuit_half_open/i.test(s)) return s.slice(0, 120);
   if (/<!DOCTYPE html>/i.test(s)) {
     return ray ? `upstream_html_error ray=${ray}` : 'upstream_html_error';
   }
@@ -52,14 +64,18 @@ function summarizeUpstreamError(raw) {
 function isOriginOutageSignal(raw, status) {
   if (status === 521 || status === 522 || status === 523 || status === 524) return true;
   const s = String(raw?.message || raw || '');
+  // Do NOT treat our own circuit-shed errors as fresh outage signals — that creates a death spiral.
+  if (/supabase_circuit_open|supabase_circuit_half_open_busy/i.test(s)) return false;
   return (
-    /supabase_origin_timeout_522|supabase_fetch_timeout|supabase_circuit_open/i.test(s) ||
+    /supabase_origin_timeout_522|supabase_fetch_timeout/i.test(s) ||
     /Error code 52[1234]|connection timed out|connection_timeout/i.test(s) ||
     (/<!DOCTYPE html>/i.test(s) && /cloudflare|522|521|523|524/i.test(s)) ||
     raw?.name === 'AbortError' ||
     raw?.code === 'UND_ERR_CONNECT_TIMEOUT' ||
     raw?.code === 'ETIMEDOUT' ||
-    raw?.code === 'ECONNRESET'
+    raw?.code === 'ECONNRESET' ||
+    raw?.code === 'SUPABASE_FETCH_TIMEOUT' ||
+    raw?.code === 'SUPABASE_ORIGIN_TIMEOUT'
   );
 }
 
@@ -73,7 +89,9 @@ function getCircuitStatus() {
     consecutiveFailures,
     lastCause,
     openedAt: state === 'open' ? openedAt : 0,
-    fetchTimeoutMs: FETCH_TIMEOUT_MS
+    fetchTimeoutMs: FETCH_TIMEOUT_MS,
+    probeTimeoutMs: PROBE_TIMEOUT_MS,
+    openStreak
   };
 }
 
@@ -89,14 +107,22 @@ function refreshState() {
   }
 }
 
-function openCircuit(cause, retryMs = OPEN_MS) {
+function nextOpenMs() {
+  // Soften repeated flaps: 45s → 60s → 90s … capped.
+  const streak = Math.min(4, openStreak);
+  return Math.min(180_000, Math.round(OPEN_MS * (1 + streak * 0.35)));
+}
+
+function openCircuit(cause, retryMs = nextOpenMs()) {
   state = 'open';
   openedAt = Date.now();
   openUntil = Date.now() + retryMs;
   lastCause = summarizeUpstreamError(cause);
   consecutiveFailures = FAILURE_THRESHOLD;
+  openStreak += 1;
   console.error('[ZURI] Supabase circuit OPEN — shedding load', {
     openMs: retryMs,
+    openStreak,
     cause: lastCause,
     fetchTimeoutMs: FETCH_TIMEOUT_MS
   });
@@ -112,6 +138,7 @@ function recordSuccess() {
   openUntil = 0;
   lastCause = null;
   openedAt = 0;
+  openStreak = 0;
 }
 
 function recordFailure(cause, status) {
@@ -120,8 +147,9 @@ function recordFailure(cause, status) {
   lastCause = summarizeUpstreamError(cause);
   consecutiveFailures += 1;
 
+  // Half-open probe failure: reopen, but don't require a full failure streak first.
   if (state === 'half_open' || consecutiveFailures >= FAILURE_THRESHOLD) {
-    openCircuit(cause, OPEN_MS);
+    openCircuit(cause);
   }
 }
 
@@ -139,11 +167,11 @@ function assertCircuitAllowsRequest() {
     throw err;
   }
 
-  // half_open: allow a single probe; everyone else fails fast.
-  if (halfOpenInFlight >= 1) {
+  // half_open: allow a few concurrent probes so one slow request doesn't starve recovery.
+  if (halfOpenInFlight >= HALF_OPEN_MAX_PROBES) {
     const err = new Error('supabase_circuit_half_open_busy');
     err.code = 'SUPABASE_CIRCUIT_OPEN';
-    err.retry_after_ms = 5_000;
+    err.retry_after_ms = 3_000;
     throw err;
   }
 }
@@ -176,7 +204,8 @@ async function resilientSupabaseFetch(input, init = {}) {
     else parentSignal.addEventListener('abort', onParentAbort, { once: true });
   }
 
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const timeoutMs = isProbe ? PROBE_TIMEOUT_MS : FETCH_TIMEOUT_MS;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const res = await fetch(input, { ...init, signal: controller.signal });
@@ -204,6 +233,8 @@ async function resilientSupabaseFetch(input, init = {}) {
     if (err?.code === 'SUPABASE_CIRCUIT_OPEN') throw err;
 
     if (err?.name === 'AbortError') {
+      // Parent-driven abort is not an origin outage.
+      if (parentSignal?.aborted) throw err;
       const timeoutErr = Object.assign(new Error('supabase_fetch_timeout'), {
         code: 'SUPABASE_FETCH_TIMEOUT'
       });
@@ -236,5 +267,8 @@ module.exports = {
   recordFailure,
   recordSuccess,
   OPEN_MS,
-  FETCH_TIMEOUT_MS
+  FETCH_TIMEOUT_MS,
+  PROBE_TIMEOUT_MS,
+  FAILURE_THRESHOLD,
+  HALF_OPEN_MAX_PROBES
 };

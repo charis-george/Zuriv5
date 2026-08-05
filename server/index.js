@@ -317,16 +317,19 @@ app.use('/api/reviews', reviewRoutes);
 app.use('/api/admin', adminRoutes);
 
 // Uptime / CORS check (register before SPA fallback)
+// Liveness only — never fail health because Supabase circuit is open.
+// Railway/deploy health checks that kill on ok:false caused restart death spirals
+// during brief PostgREST cold-starts after project upgrades.
 app.get('/api/health', (req, res) => {
   res.set('Cache-Control', 'no-store');
   const jwtOk = process.env.NODE_ENV !== 'production' || Boolean(JWT_SECRET);
   const circuit = getCircuitStatus();
-  res.json({
-    ok:
-      Object.keys(routeLoadErrors).length === 0 &&
-      SUPABASE_ENV_OK &&
-      jwtOk &&
-      circuit.state !== 'open',
+  const routesOk = Object.keys(routeLoadErrors).length === 0;
+  const envOk = SUPABASE_ENV_OK && jwtOk;
+  const processHealthy = routesOk && envOk;
+  res.status(processHealthy ? 200 : 503).json({
+    ok: processHealthy,
+    degraded: circuit.state !== 'closed',
     uptime: process.uptime(),
     supabaseEnv: SUPABASE_ENV_OK,
     supabaseCircuit: circuit,
