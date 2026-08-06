@@ -14,6 +14,10 @@ const SWEEP_QUERY_RETRIES = Math.max(1, Number(process.env.ORDER_RECEIPT_SWEEP_Q
 const SEND_LOCK_STALE_MS = Math.max(60_000, Number(process.env.ORDER_RECEIPT_LOCK_STALE_MS) || 2 * 60_000);
 const AGED_ALERT_MS = Math.max(60_000, Number(process.env.ORDER_RECEIPT_AGED_ALERT_MS) || 5 * 60_000);
 
+/** Avoid spamming the same permanent orphan every sweep cycle. */
+const permanentLoggedAt = new Map();
+const PERMANENT_LOG_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+
 /**
  * Only true data defects — transient business/order load misses must keep retrying.
  */
@@ -43,6 +47,36 @@ function needsMarkSentOnly(errorMessage) {
   return /mark_sent_failed|delivered via Resend but receipt_sent_at/i.test(String(errorMessage));
 }
 
+/** Canonical permanent:reason|cause form for DB + query exclusion. */
+function normalizePermanentErrorMessage(errorMessage) {
+  const s = String(errorMessage || '');
+  if (s.startsWith('permanent:no_tickets') || s.startsWith('permanent:no_recipients') || s.startsWith('permanent:no_customer_email')) {
+    return s.slice(0, 500);
+  }
+  let reason = 'no_tickets';
+  if (/\bno_recipients\b/i.test(s) || /no_recipients/i.test(s)) reason = 'no_recipients';
+  else if (/\bno_customer_email\b/i.test(s)) reason = 'no_customer_email';
+  return `permanent:${reason}|${s.slice(0, 460)}`.slice(0, 500);
+}
+
+async function ensurePermanentErrorNormalized(supabase, order) {
+  const err = order?.receipt_email_error;
+  if (!err || !isPermanentReceiptError(err)) return err;
+  if (String(err).startsWith('permanent:')) return err;
+  const normalized = normalizePermanentErrorMessage(err);
+  try {
+    await supabase
+      .from('orders')
+      .update({ receipt_email_error: normalized, receipt_sending_at: null })
+      .eq('id', order.id)
+      .is('receipt_sent_at', null);
+    order.receipt_email_error = normalized;
+  } catch {
+    // best-effort — query filter still helps once prefix lands
+  }
+  return normalized;
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -60,12 +94,15 @@ async function fetchPendingReceiptPage(supabase, offset) {
     }
 
     try {
+      // Exclude normalized permanent:* failures so orphans are not re-scanned every 90s.
+      // Null / retryable errors still match. Legacy no-tickets rows are normalized once then excluded.
       const { data, error } = await supabase
         .from('orders')
         .select('id, created_at, receipt_email_error, receipt_send_attempts, receipt_sending_at')
         .eq('payment_status', 'paid')
         .is('receipt_sent_at', null)
         .gte('created_at', since)
+        .or('receipt_email_error.is.null,receipt_email_error.not.ilike.permanent:*')
         .order('created_at', { ascending: true })
         .range(offset, offset + SWEEP_LIMIT - 1);
 
@@ -160,11 +197,14 @@ async function sweepPendingOrderReceipts() {
     if (isPermanentReceiptError(order.receipt_email_error)) {
       skipped += 1;
       permanentSkipped += 1;
-      if (aged && permanentSkipped <= 5) {
+      const normalized = await ensurePermanentErrorNormalized(supabase, order);
+      const lastLog = permanentLoggedAt.get(order.id) || 0;
+      if (Date.now() - lastLog >= PERMANENT_LOG_COOLDOWN_MS) {
+        permanentLoggedAt.set(order.id, Date.now());
         console.error('[ZURI] Receipt sweep skipped permanent failure — needs ops fix', {
           orderId: order.id,
           reason: 'permanent_receipt_error',
-          receipt_email_error: order.receipt_email_error,
+          receipt_email_error: normalized || order.receipt_email_error,
           receipt_send_attempts: Number(order.receipt_send_attempts) || 0,
           ageMs,
           severity: 'critical'
