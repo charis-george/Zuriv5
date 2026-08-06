@@ -45,16 +45,6 @@ function summarizeInviteItems(items) {
 async function sendTicketInviteEmail({ order, business, items, deliveryMode, eventSlug }) {
   const orderId = order?.id;
 
-  if (!isResendConfigured()) {
-    const cause = 'RESEND_API_KEY is not set on this server';
-    console.error('[ZURI] Ticket invite email skipped', {
-      orderId,
-      reason: 'missing_resend_key',
-      cause
-    });
-    return { skipped: true, reason: 'missing_resend_key', cause };
-  }
-
   const customerEmail = String(order.customer_email || '').trim().toLowerCase();
   if (!customerEmail) {
     const cause = 'invite order has no customer_email';
@@ -72,6 +62,8 @@ async function sendTicketInviteEmail({ order, business, items, deliveryMode, eve
   const itemSummary = summarizeInviteItems(items);
   const isComplimentary = deliveryMode === 'complimentary' || total <= 0;
 
+  // Complimentary is already paid — always enqueue the ticket QR receipt, even if Resend
+  // is briefly misconfigured (queue/sweep retries). Do not return before enqueue.
   if (isComplimentary) {
     const queued = queueOrderReceiptOnce({
       orderId,
@@ -85,7 +77,30 @@ async function sendTicketInviteEmail({ order, business, items, deliveryMode, eve
       cause: 'complimentary/free invite queues the ticket QR receipt instead of a payment-link email',
       enqueue: queued
     });
-    return { skipped: false, via: 'receipt_queue', enqueue: queued };
+    const enqueueOk =
+      queued?.queued === true ||
+      queued?.reason === 'already_queued' ||
+      queued?.reason === 'already_in_flight' ||
+      queued?.reason === 'already_sent';
+    return {
+      skipped: !enqueueOk,
+      reason: enqueueOk ? undefined : queued?.reason || 'enqueue_failed',
+      cause: enqueueOk
+        ? undefined
+        : `receipt queue rejected complimentary invite (${queued?.reason || 'unknown'})`,
+      via: 'receipt_queue',
+      enqueue: queued
+    };
+  }
+
+  if (!isResendConfigured()) {
+    const cause = 'RESEND_API_KEY is not set on this server';
+    console.error('[ZURI] Ticket invite email skipped', {
+      orderId,
+      reason: 'missing_resend_key',
+      cause
+    });
+    return { skipped: true, reason: 'missing_resend_key', cause };
   }
 
   const checkoutUrl = buildInviteCheckoutUrl({

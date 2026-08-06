@@ -44,7 +44,7 @@ function shouldRetryResult(result, attempt) {
   if (result.reason === 'already_sent') return false;
   if (result.reason === 'no_recipients') return false;
   if (result.reason === 'no_customer_email') return false;
-  // no_tickets stays retryable until sendOrderReceiptOnce marks it permanent.
+  // no_tickets / qr_png_all_failed / resend_dev_from stay retryable until MAX_ATTEMPTS or fixed.
   if (attempt >= MAX_ATTEMPTS) return false;
   return Boolean(result.retryable);
 }
@@ -103,7 +103,12 @@ function enqueueOrderReceipt(args, opts = {}) {
   }
 
   if (sentOrderIds.has(orderId)) {
-    return { queued: false, reason: 'already_sent', orderId };
+    // Sweep / ops recovery: DB says unsent — allow re-queue even if this process marked sent earlier.
+    if (opts.force) {
+      sentOrderIds.delete(orderId);
+    } else {
+      return { queued: false, reason: 'already_sent', orderId };
+    }
   }
 
   if (inFlightOrderIds.has(orderId)) {

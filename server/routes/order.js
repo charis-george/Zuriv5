@@ -450,6 +450,15 @@ router.post('/ticket-invite', requireBusinessAuth, async (req, res) => {
         reason: emailResult.reason,
         cause: emailResult.cause || emailResult.reason
       });
+      if (isComplimentary && emailResult.reason !== 'no_customer_email') {
+        return res.status(503).json({
+          success: false,
+          error: 'Ticket was created but the QR email could not be queued. Retry in a moment.',
+          orderId,
+          deliveryMode: mode,
+          email: emailResult
+        });
+      }
     }
 
     res.json({

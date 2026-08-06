@@ -744,7 +744,7 @@ router.post('/initialize', async (req, res) => {
 
     const { data: order, error: orderError } = await supabase
       .from('orders')
-      .select('id, business_id, total_amount, payment_status')
+      .select('id, business_id, total_amount, payment_status, customer_email')
       .eq('id', orderId)
       .single();
 
@@ -756,6 +756,23 @@ router.post('/initialize', async (req, res) => {
     }
     if (order.payment_status === 'paid') {
       return res.status(400).json({ error: 'Order is already paid' });
+    }
+
+    // Keep receipt delivery address in sync with the email used at Paystack/Monnify.
+    const payEmail = String(email || '').trim().toLowerCase();
+    if (payEmail && payEmail !== String(order.customer_email || '').trim().toLowerCase()) {
+      const { error: emailSyncErr } = await supabase
+        .from('orders')
+        .update({ customer_email: payEmail })
+        .eq('id', orderId);
+      if (emailSyncErr) {
+        console.warn('[ZURI] Could not sync order.customer_email before payment init', {
+          orderId,
+          cause: emailSyncErr.message || String(emailSyncErr)
+        });
+      } else {
+        order.customer_email = payEmail;
+      }
     }
 
     const { data: biz } = await supabase
@@ -804,7 +821,7 @@ router.post('/initialize', async (req, res) => {
 });
 
 const ORDER_VERIFY_SELECT =
-  'id, business_id, total_amount, payment_status, payment_method, payment_provider, monnify_payment_reference, paystack_payment_reference, receipt_sent_at';
+  'id, business_id, total_amount, payment_status, payment_method, payment_provider, monnify_payment_reference, paystack_payment_reference, receipt_sent_at, customer_email';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -999,6 +1016,30 @@ router.get('/verify/:reference', async (req, res) => {
       (order.payment_method === 'split' ? 'split' : undefined);
     const businessId = response.data.metadata?.businessId || order.business_id;
     const isTap = response.data.metadata?.tap === 'true';
+
+    // If checkout left customer_email empty, recover from Paystack so the QR receipt has a destination.
+    const paystackCustomerEmail = String(response.data.customer?.email || '')
+      .trim()
+      .toLowerCase();
+    if (
+      paystackCustomerEmail &&
+      !String(order.customer_email || '')
+        .trim()
+        .toLowerCase()
+    ) {
+      const { error: emailFillErr } = await supabase
+        .from('orders')
+        .update({ customer_email: paystackCustomerEmail })
+        .eq('id', orderId);
+      if (emailFillErr) {
+        console.warn('[ZURI] Could not fill empty order.customer_email from Paystack verify', {
+          orderId,
+          cause: emailFillErr.message || String(emailFillErr)
+        });
+      } else {
+        order.customer_email = paystackCustomerEmail;
+      }
+    }
 
     const marked = await finalizePaidOrder({
       req,

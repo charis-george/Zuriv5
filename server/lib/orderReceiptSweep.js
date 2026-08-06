@@ -1,5 +1,6 @@
 const { getDb } = require('../database');
 const { enqueueOrderReceipt } = require('./orderReceiptQueue');
+const { SEND_LOCK_STALE_MS } = require('./orderReceiptEmail');
 const {
   summarizeUpstreamError,
   isSupabaseCircuitOpen,
@@ -11,7 +12,6 @@ const SWEEP_LIMIT = Math.max(5, Math.min(200, Number(process.env.ORDER_RECEIPT_S
 const LOOKBACK_HOURS = Math.max(1, Number(process.env.ORDER_RECEIPT_SWEEP_LOOKBACK_HOURS) || 336); // 14 days
 const SWEEP_MAX_PAGES = Math.max(1, Math.min(20, Number(process.env.ORDER_RECEIPT_SWEEP_MAX_PAGES) || 5));
 const SWEEP_QUERY_RETRIES = Math.max(1, Number(process.env.ORDER_RECEIPT_SWEEP_QUERY_RETRIES) || 2);
-const SEND_LOCK_STALE_MS = Math.max(60_000, Number(process.env.ORDER_RECEIPT_LOCK_STALE_MS) || 2 * 60_000);
 const AGED_ALERT_MS = Math.max(60_000, Number(process.env.ORDER_RECEIPT_AGED_ALERT_MS) || 5 * 60_000);
 
 /** Avoid spamming the same permanent orphan every sweep cycle. */
@@ -238,7 +238,7 @@ async function sweepPendingOrderReceipts() {
 
     const result = enqueueOrderReceipt(
       { orderId: order.id, paidAt: null, reference: order.id },
-      { attempt: 0, delayMs, markSentOnly }
+      { attempt: 0, delayMs, markSentOnly, force: true }
     );
 
     if (result?.queued) {

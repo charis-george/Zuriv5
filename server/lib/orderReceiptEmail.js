@@ -3,9 +3,16 @@ const {
   ensureTicketReceiptQrsForOrder,
   generateTicketReceiptQrImagePng
 } = require('./ticketReceiptQr');
-const { sendResendEmail, isResendConfigured, isInvalidIdempotentConflict } = require('./resendMail');
+const {
+  sendResendEmail,
+  isResendConfigured,
+  isInvalidIdempotentConflict,
+  isResendDevFromAddress,
+  getResendFrom
+} = require('./resendMail');
 
 // Long enough for multi-ticket PNG generation + Resend (45s timeout) without lock steal.
+// Shared with sweep — must stay in sync so sweep does not re-enqueue while a send is still valid.
 const SEND_LOCK_STALE_MS = Math.max(180_000, Number(process.env.ORDER_RECEIPT_LOCK_STALE_MS) || 10 * 60_000);
 const LOCK_RELEASE_RETRIES = Math.max(2, Number(process.env.ORDER_RECEIPT_LOCK_RELEASE_RETRIES) || 5);
 /** Empty order_items often race payment — only permanize after enough failed attempts. */
@@ -577,14 +584,27 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
     )
   ).filter(Boolean);
 
-  if (ticketCount > 0 && ticketQrAttachments.length === 0) {
-    console.warn('[ZURI] Receipt email sending without QR PNG attachments', {
+  const isTicketing = biz?.business_mode === 'ticketing';
+
+  // Ticketing: never mark sent without PNG attachments — CID/links-only mail is what guests
+  // report as "email didn't send" / "no QR". Retry until PNG generation works.
+  if (isTicketing && ticketCount > 0 && ticketQrAttachments.length === 0) {
+    const cause = `had ${ticketCount} ticket QR token(s) but 0 PNG attachments — refusing to send empty ticket email`;
+    console.error('[ZURI] Ticket receipt blocked — QR PNG generation failed', {
       orderId,
       reason: 'qr_png_all_failed',
-      cause: `had ${ticketCount} ticket QR token(s) but 0 PNG attachments; email will use image URLs / verification links`,
-      ticketCount
+      cause,
+      ticketCount,
+      severity: 'critical'
     });
-  } else if (ticketCount > 0 && ticketQrAttachments.length < ticketCount) {
+    await releaseReceiptSendLock(orderId, {
+      sent: false,
+      errorMessage: formatReceiptErrorMessage('qr_png_all_failed', cause, { attempts: sendAttempts }),
+      lockToken
+    });
+    return skipped('qr_png_all_failed', true, cause, { attempts: sendAttempts });
+  }
+  if (ticketCount > 0 && ticketQrAttachments.length < ticketCount) {
     console.warn('[ZURI] Receipt email partial QR PNG attachments', {
       orderId,
       reason: 'qr_png_partial_failed',
@@ -596,7 +616,6 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
 
   const customerEmail = (order.customer_email && String(order.customer_email).trim().toLowerCase()) || '';
   const businessEmail = (biz?.email && String(biz.email).trim().toLowerCase()) || '';
-  const isTicketing = biz?.business_mode === 'ticketing';
   // Ticketing: guest-only. A bad business inbox must never block the buyer's QR.
   // Venue still gets notifyTicketingSalePaid from finalizePaidOrder.
   const to = isTicketing
@@ -637,6 +656,25 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
       lockToken
     });
     return skipped('no_customer_email', false, cause);
+  }
+
+  // @resend.dev only delivers to the Resend account owner — never mark guests as sent.
+  if (isResendDevFromAddress(getResendFrom())) {
+    const cause =
+      'RESEND_FROM uses @resend.dev — guests cannot receive mail. Set RESEND_FROM to a verified domain.';
+    console.error('[ZURI] Receipt email blocked — unverified Resend from-address', {
+      orderId,
+      reason: 'resend_dev_from',
+      cause,
+      from: getResendFrom(),
+      severity: 'critical'
+    });
+    await releaseReceiptSendLock(orderId, {
+      sent: false,
+      errorMessage: formatReceiptErrorMessage('resend_dev_from', cause, { attempts: sendAttempts }),
+      lockToken
+    });
+    return skipped('resend_dev_from', true, cause, { attempts: sendAttempts });
   }
 
   const businessName = biz?.name || 'ZURI business';
@@ -914,5 +952,6 @@ module.exports = {
   sendOrderReceiptOnce,
   queueOrderReceiptOnce,
   queueOrderReceiptIfNeeded,
+  SEND_LOCK_STALE_MS,
   forceMarkReceiptSent
 };
