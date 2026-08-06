@@ -99,7 +99,8 @@ function orderIdFromMonnifyMeta(tx) {
 }
 
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-const ZURI_PAYMENT_REF_RE = /zuri_[a-z0-9_]+/i;
+/** Monnify refs are zuri_<hex>_<stamp> — never match Paystack zuri_ps_*. */
+const ZURI_MONNIFY_REF_RE = /zuri_(?!ps_)[a-z0-9_]+/i;
 
 /**
  * Parse Monnify redirect return values. Monnify sometimes sets
@@ -123,15 +124,17 @@ function parseMonnifyReturnRefs(raw) {
   } else {
     const uuid = s.match(UUID_RE);
     if (uuid) orderId = uuid[0];
-    const zuri = s.match(ZURI_PAYMENT_REF_RE);
+    const zuri = s.match(ZURI_MONNIFY_REF_RE);
     if (zuri) monnifyPaymentReference = zuri[0];
     if (!orderId && s.startsWith('sub_')) orderId = s;
   }
 
-  if (orderId && UUID_RE.test(orderId) === false && !orderId.startsWith('sub_')) {
-    const uuid = orderId.match(UUID_RE);
-    if (uuid) orderId = uuid[0];
+  if (orderId && !UUID_RE.test(orderId) && !String(orderId).startsWith('sub_')) {
+    const uuid = String(orderId).match(UUID_RE);
+    orderId = uuid ? uuid[0] : null;
   }
+  // Never treat Paystack refs as Monnify order ids.
+  if (orderId && String(orderId).startsWith('zuri_ps_')) orderId = null;
 
   return { orderId, monnifyPaymentReference, raw: s };
 }

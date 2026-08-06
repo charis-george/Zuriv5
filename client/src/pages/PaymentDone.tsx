@@ -13,6 +13,7 @@ import { apiUrl } from '../lib/apiBase'
 function PaymentDone(): JSX.Element {
   const [searchParams] = useSearchParams()
   const [reference, setReference] = useState<string | null>(null)
+  const [orderId, setOrderId] = useState<string | null>(null)
   const tap = searchParams.get('tap') === '1'
   const [status, setStatus] = useState<'loading' | 'success' | 'failed'>('loading')
   const [message, setMessage] = useState<string>('')
@@ -39,6 +40,15 @@ function PaymentDone(): JSX.Element {
         .then((res) => {
           if (res.data?.success) {
             clearPendingPaymentReference()
+            const resolvedOrderId =
+              (typeof res.data?.data?.orderId === 'string' && res.data.data.orderId) ||
+              (typeof res.data?.data?.reference === 'string' &&
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+                res.data.data.reference,
+              )
+                ? res.data.data.reference
+                : null)
+            if (resolvedOrderId) setOrderId(resolvedOrderId)
             setStatus('success')
           } else {
             setStatus('failed')
@@ -56,11 +66,11 @@ function PaymentDone(): JSX.Element {
   }, [searchParams])
 
   useEffect(() => {
-    if (status !== 'success' || !reference) return
+    if (status !== 'success' || !orderId) return
 
     setReviewEligibility({ loading: true, exists: false, businessName: null })
     axios
-      .get(`/api/reviews/for-order/${reference}`)
+      .get(apiUrl(`/api/reviews/for-order/${encodeURIComponent(orderId)}`))
       .then((res) => {
         setReviewEligibility({
           loading: false,
@@ -72,10 +82,10 @@ function PaymentDone(): JSX.Element {
         // If review eligibility fails to load, avoid blocking the happy path.
         setReviewEligibility({ loading: false, exists: false, businessName: null })
       })
-  }, [status, reference])
+  }, [status, orderId])
 
   const submitReview = async (): Promise<void> => {
-    if (!reference) return
+    if (!orderId) return
     if (!reviewRating || reviewRating < 1) {
       setReviewError('Please choose a rating.')
       return
@@ -83,8 +93,8 @@ function PaymentDone(): JSX.Element {
     setReviewSubmitting(true)
     setReviewError(null)
     try {
-      await axios.post('/api/reviews', {
-        orderId: reference,
+      await axios.post(apiUrl('/api/reviews'), {
+        orderId,
         rating: reviewRating,
         comment: reviewComment
       })

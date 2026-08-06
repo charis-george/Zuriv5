@@ -5,6 +5,31 @@ const { requireBusinessAuth } = require('../middleware/auth')
 
 const supabase = getDb()
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const ORDER_REVIEW_SELECT = 'id, business_id, payment_status, customer_name, customer_email'
+
+/**
+ * PaymentDone historically passed Paystack refs (zuri_ps_*) as orderId.
+ * Resolve UUID or paystack_payment_reference without querying uuid columns with non-UUIDs (22P02).
+ */
+async function resolveOrderForReview(rawId) {
+  const id = String(rawId || '').trim()
+  if (!id) return null
+  if (UUID_RE.test(id)) {
+    const { data } = await supabase.from('orders').select(ORDER_REVIEW_SELECT).eq('id', id).maybeSingle()
+    return data || null
+  }
+  if (id.startsWith('zuri_ps_') || id.startsWith('T') || id.length > 12) {
+    const { data } = await supabase
+      .from('orders')
+      .select(ORDER_REVIEW_SELECT)
+      .eq('paystack_payment_reference', id)
+      .maybeSingle()
+    return data || null
+  }
+  return null
+}
+
 router.get('/business/:businessId', requireBusinessAuth, async (req, res) => {
   try {
     const { businessId } = req.params
@@ -31,16 +56,12 @@ router.get('/business/:businessId', requireBusinessAuth, async (req, res) => {
 
 router.get('/for-order/:orderId', async (req, res) => {
   try {
-    const { orderId } = req.params
-    if (!orderId) return res.status(400).json({ error: 'orderId is required' })
+    const { orderId: rawOrderId } = req.params
+    if (!rawOrderId) return res.status(400).json({ error: 'orderId is required' })
 
-    const { data: order, error: orderErr } = await supabase
-      .from('orders')
-      .select('id, business_id, payment_status, customer_name, customer_email')
-      .eq('id', orderId)
-      .single()
-
-    if (orderErr || !order) return res.status(404).json({ error: 'Order not found' })
+    const order = await resolveOrderForReview(rawOrderId)
+    if (!order) return res.status(404).json({ error: 'Order not found' })
+    const orderId = order.id
 
     const { data: business } = await supabase
       .from('businesses')
@@ -57,12 +78,13 @@ router.get('/for-order/:orderId', async (req, res) => {
       .from('reviews')
       .select('*')
       .eq('order_id', orderId)
-      .single()
+      .maybeSingle()
 
     return res.json({
       exists: Boolean(review),
       review: review || null,
-      businessName: business?.name || null
+      businessName: business?.name || null,
+      orderId
     })
   } catch (err) {
     console.error('Reviews GET error:', err)
@@ -72,26 +94,22 @@ router.get('/for-order/:orderId', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const { orderId, rating, comment } = req.body || {}
+    const { orderId: rawOrderId, rating, comment } = req.body || {}
 
-    if (!orderId) return res.status(400).json({ error: 'orderId is required' })
+    if (!rawOrderId) return res.status(400).json({ error: 'orderId is required' })
     const r = Number(rating)
     if (!Number.isInteger(r) || r < 1 || r > 5) return res.status(400).json({ error: 'rating must be an integer from 1 to 5' })
 
-    const { data: order, error: orderErr } = await supabase
-      .from('orders')
-      .select('id, business_id, payment_status, customer_name, customer_email')
-      .eq('id', orderId)
-      .single()
-
-    if (orderErr || !order) return res.status(404).json({ error: 'Order not found' })
+    const order = await resolveOrderForReview(rawOrderId)
+    if (!order) return res.status(404).json({ error: 'Order not found' })
+    const orderId = order.id
     if (order.payment_status !== 'paid') return res.status(400).json({ error: 'Payment not successful for this order' })
 
     const { data: existing } = await supabase
       .from('reviews')
       .select('id')
       .eq('order_id', orderId)
-      .single()
+      .maybeSingle()
 
     if (existing?.id) {
       return res.status(409).json({ error: 'Review already submitted for this order' })
@@ -149,4 +167,3 @@ router.post('/', async (req, res) => {
 })
 
 module.exports = router
-

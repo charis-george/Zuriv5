@@ -49,6 +49,17 @@ function getResendFrom() {
   return process.env.RESEND_FROM || 'ZURI <onboarding@resend.dev>';
 }
 
+function isResendDevFromAddress(from = getResendFrom()) {
+  return /@resend\.dev\b/i.test(String(from || ''));
+}
+
+let warnedResendDevFrom = false;
+function warnIfResendDevFrom(from) {
+  if (warnedResendDevFrom || !isResendDevFromAddress(from)) return;
+  warnedResendDevFrom = true;
+  console.error('[ZURI] RESEND_FROM uses @resend.dev — Resend only delivers to your account email. Guests will not receive ticket receipts. Set RESEND_FROM to a verified domain.');
+}
+
 function normalizeRecipients(to) {
   const list = Array.isArray(to) ? to : [to];
   return list
@@ -63,7 +74,11 @@ function isConcurrentIdempotentConflict(err) {
   return body.includes('concurrent_idempotent') || body.includes('concurrent');
 }
 
-/** Same key used with a different payload — prior accept likely already happened. */
+/**
+ * Same Idempotency-Key reused with a different payload — Resend will not send again.
+ * Only match explicit invalid_idempotent*; do NOT treat every 409 as delivered
+ * (that falsely sets receipt_sent_at while the guest never got mail).
+ */
 function isInvalidIdempotentConflict(err) {
   if (!err) return false;
   if (Number(err.status) !== 409) return false;
@@ -71,8 +86,8 @@ function isInvalidIdempotentConflict(err) {
   const body = String(err.body || err.message || '').toLowerCase();
   return (
     body.includes('invalid_idempotent') ||
-    body.includes('idempotent') ||
-    body.includes('409')
+    body.includes('idempotency_key_already_used') ||
+    body.includes('idempotency key already used')
   );
 }
 
@@ -103,8 +118,10 @@ async function sendResendEmail(mail, opts = {}) {
     throw err;
   }
 
+  const from = mail.from || getResendFrom();
+  warnIfResendDevFrom(from);
   const payload = {
-    from: mail.from || getResendFrom(),
+    from,
     to,
     subject: mail.subject
   };
@@ -151,7 +168,9 @@ async function sendResendEmail(mail, opts = {}) {
       });
 
       if (response.ok) {
-        return { ok: true, to };
+        const body = await response.json().catch(() => ({}));
+        const messageId = body && typeof body.id === 'string' ? body.id : null;
+        return { ok: true, to, id: messageId, messageId };
       }
 
       const text = await response.text().catch(() => '');
@@ -305,6 +324,7 @@ module.exports = {
   isRetryableResendError,
   isConcurrentIdempotentConflict,
   isInvalidIdempotentConflict,
+  isResendDevFromAddress,
   normalizeRecipients,
   RESEND_MAX_RPS
 };

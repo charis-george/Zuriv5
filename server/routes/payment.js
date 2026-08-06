@@ -816,14 +816,27 @@ function paystackVerifyReference(order, rawReference) {
 
 async function findOrderForPaymentVerify(rawReference) {
   const parsed = parseMonnifyReturnRefs(rawReference);
-  const ids = [...new Set([parsed.orderId, parsed.raw].filter(Boolean))];
+  const raw = String(rawReference || '').trim();
 
-  for (const id of ids) {
+  // Paystack refs first — never query orders.id with zuri_ps_* (uuid column → 22P02/400).
+  if (raw.startsWith('zuri_ps_')) {
+    const { data } = await supabase
+      .from('orders')
+      .select(ORDER_VERIFY_SELECT)
+      .eq('paystack_payment_reference', raw)
+      .maybeSingle();
+    if (data) return data;
+  }
+
+  const candidateIds = [...new Set([parsed.orderId].filter(Boolean))].filter(
+    (id) => UUID_RE.test(String(id)) || String(id).startsWith('sub_')
+  );
+  for (const id of candidateIds) {
     const { data } = await supabase.from('orders').select(ORDER_VERIFY_SELECT).eq('id', id).maybeSingle();
     if (data) return data;
   }
 
-  const monnifyRefs = [...new Set([parsed.monnifyPaymentReference, parsed.raw].filter(
+  const monnifyRefs = [...new Set([parsed.monnifyPaymentReference].filter(
     (r) => r && String(r).startsWith('zuri_') && !String(r).startsWith('zuri_ps_')
   ))];
   for (const mref of monnifyRefs) {
@@ -835,8 +848,13 @@ async function findOrderForPaymentVerify(rawReference) {
     if (data) return data;
   }
 
-  const raw = String(rawReference || '').trim();
-  if (raw.startsWith('zuri_ps_')) {
+  if (UUID_RE.test(raw)) {
+    const { data } = await supabase.from('orders').select(ORDER_VERIFY_SELECT).eq('id', raw).maybeSingle();
+    if (data) return data;
+  }
+
+  // Last resort: any non-UUID raw that looks like a Paystack reference stored on the order.
+  if (raw && !UUID_RE.test(raw) && !raw.startsWith('zuri_')) {
     const { data } = await supabase
       .from('orders')
       .select(ORDER_VERIFY_SELECT)
@@ -845,16 +863,11 @@ async function findOrderForPaymentVerify(rawReference) {
     if (data) return data;
   }
 
-  if (UUID_RE.test(raw)) {
-    const { data } = await supabase.from('orders').select(ORDER_VERIFY_SELECT).eq('id', raw).maybeSingle();
-    if (data) return data;
-  }
-
   if (isMonnifyConfigured()) {
-    for (const mref of monnifyRefs.length ? monnifyRefs : [parsed.raw].filter(Boolean)) {
+    for (const mref of monnifyRefs.length ? monnifyRefs : []) {
       const tx = await getTransactionByPaymentReference(mref);
       const orderId = orderIdFromMonnifyMeta(tx);
-      if (orderId) {
+      if (orderId && UUID_RE.test(orderId)) {
         const { data } = await supabase.from('orders').select(ORDER_VERIFY_SELECT).eq('id', orderId).maybeSingle();
         if (data) return data;
       }
@@ -892,6 +905,7 @@ router.get('/verify/:reference', async (req, res) => {
         return res.json({
           success: true,
           data: {
+            orderId,
             reference: orderId,
             amount: Number(order.total_amount),
             status: 'success',
@@ -936,6 +950,7 @@ router.get('/verify/:reference', async (req, res) => {
       return res.json({
         success: true,
         data: {
+          orderId,
           reference: orderId,
           amount: paid,
           status: 'success',
@@ -955,6 +970,7 @@ router.get('/verify/:reference', async (req, res) => {
       return res.json({
         success: true,
         data: {
+          orderId,
           reference: order.paystack_payment_reference || orderId,
           amount: Number(order.total_amount),
           status: 'success',
@@ -1017,6 +1033,7 @@ router.get('/verify/:reference', async (req, res) => {
     res.json({
       success: true,
       data: {
+        orderId,
         reference: response.data.reference,
         amount: response.data.amount / 100,
         status: response.data.status,

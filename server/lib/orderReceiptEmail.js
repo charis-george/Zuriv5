@@ -785,7 +785,7 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
 </html>`.trim();
 
   try {
-    await sendResendEmail(
+    const resendResult = await sendResendEmail(
       {
         to,
         subject,
@@ -811,6 +811,7 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
         reason: 'mark_sent_failed',
         cause,
         to,
+        resendMessageId: resendResult?.messageId || resendResult?.id || null,
         severity: 'critical'
       });
       try {
@@ -832,9 +833,10 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
       ticketing: isTicketing,
       ticketQrCount: ticketQrAttachments.length,
       ticketTokenCount: ticketCount,
+      resendMessageId: resendResult?.messageId || resendResult?.id || null,
       reason: 'sent'
     });
-    return { ok: true, to };
+    return { ok: true, to, resendMessageId: resendResult?.messageId || resendResult?.id || null };
   } catch (err) {
     // Same key already accepted with a different body (or prior success) —
     // treat as delivered and persist receipt_sent_at so we never loop forever.
@@ -842,10 +844,19 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
       console.warn('[ZURI] Receipt Resend idempotent conflict — marking sent', {
         orderId,
         reason: 'idempotent_replay',
-        cause: err.message || String(err)
+        cause: err.message || String(err),
+        to
       });
       const marked = await forceMarkReceiptSent(orderId);
       if (marked.ok) {
+        console.log('[ZURI] Receipt email sent', {
+          orderId,
+          to,
+          ticketing: isTicketing,
+          ticketQrCount: ticketQrAttachments.length,
+          ticketTokenCount: ticketCount,
+          reason: 'idempotent_replay'
+        });
         return { ok: true, to, reason: 'idempotent_replay' };
       }
       return skipped(
