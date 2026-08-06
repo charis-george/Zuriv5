@@ -72,7 +72,7 @@ async function getOrderTicketCount(orderId) {
  * Payment webhook can race order_items visibility under replica lag / burst writes.
  * Brief retries avoid permanent:no_tickets on a paid order that still has lines.
  */
-async function getOrderTicketCountWithRetry(orderId, { attempts = 4, baseDelayMs = 300 } = {}) {
+async function getOrderTicketCountWithRetry(orderId, { attempts = 8, baseDelayMs = 400 } = {}) {
   let last = { count: 0 };
   for (let i = 0; i < attempts; i += 1) {
     last = await getOrderTicketCount(orderId);

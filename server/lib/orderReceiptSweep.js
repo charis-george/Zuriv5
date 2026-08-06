@@ -34,11 +34,10 @@ function isPermanentReceiptError(errorMessage) {
   if (s.startsWith('permanent:')) {
     return /permanent:(no_tickets|no_recipients|no_customer_email)\|/i.test(s);
   }
+  // Bare no_tickets / empty items without permanent: prefix stay retryable (payment race).
   return (
-    /\bno_tickets\b/i.test(s) ||
     /\bno_recipients\b/i.test(s) ||
-    /\bno_customer_email\b/i.test(s) ||
-    /no order_items quantity to mint ticket QRs/i.test(s)
+    /\bno_customer_email\b/i.test(s)
   );
 }
 

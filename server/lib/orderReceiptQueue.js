@@ -43,8 +43,8 @@ function shouldRetryResult(result, attempt) {
   if (result.permanent) return false;
   if (result.reason === 'already_sent') return false;
   if (result.reason === 'no_recipients') return false;
-  if (result.reason === 'no_tickets') return false;
   if (result.reason === 'no_customer_email') return false;
+  // no_tickets stays retryable until sendOrderReceiptOnce marks it permanent.
   if (attempt >= MAX_ATTEMPTS) return false;
   return Boolean(result.retryable);
 }
@@ -172,17 +172,27 @@ async function drainQueue() {
       continue;
     }
 
-    queuedOrderIds.delete(orderId);
     if (inFlightOrderIds.has(orderId)) {
-      console.log('[ZURI] Receipt email job skipped', {
+      queuedOrderIds.delete(orderId);
+      console.log('[ZURI] Receipt email job requeued after in-flight race', {
         orderId,
         reason: 'already_in_flight',
         cause: 'another worker claimed this order between dequeue and start'
       });
+      enqueueOrderReceipt(job.args, {
+        attempt: job.attempt,
+        softRetries: (Number(job.softRetries) || 0) + 1,
+        delayMs: 800,
+        priority: true,
+        markSentOnly: Boolean(job.markSentOnly)
+      });
       continue;
     }
 
+    // Claim in-flight before clearing queued — prevents a second enqueue from
+    // slipping in and then being dropped with no retry.
     inFlightOrderIds.add(orderId);
+    queuedOrderIds.delete(orderId);
     activeWorkers += 1;
 
     void processJob(job).finally(() => {
@@ -281,11 +291,22 @@ async function processJob(job) {
         });
         return;
       }
-      console.warn('[ZURI] Receipt email lock wait exhausted — will retry via safety re-queue/sweep', {
+      console.warn('[ZURI] Receipt email lock wait exhausted — requeue after lock TTL', {
         orderId,
         reason: 'in_flight_soft_exhausted',
         cause: result.cause || result.reason,
         softRetries: soft
+      });
+      // Do not rely on sweep alone — schedule another try after the DB lock can go stale.
+      const lockStaleMs = Math.max(
+        60_000,
+        Number(process.env.ORDER_RECEIPT_LOCK_STALE_MS) || 10 * 60_000
+      );
+      enqueueOrderReceipt(job.args, {
+        attempt: job.attempt,
+        softRetries: 0,
+        delayMs: Math.min(lockStaleMs + 1_000, 11 * 60_000),
+        priority: true
       });
       return;
     }

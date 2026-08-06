@@ -3,11 +3,16 @@ const {
   ensureTicketReceiptQrsForOrder,
   generateTicketReceiptQrImagePng
 } = require('./ticketReceiptQr');
-const { sendResendEmail, isResendConfigured } = require('./resendMail');
+const { sendResendEmail, isResendConfigured, isInvalidIdempotentConflict } = require('./resendMail');
 
-// After crash/deploy, reclaim faster so undelivered tickets are not stuck for minutes.
-const SEND_LOCK_STALE_MS = Math.max(60_000, Number(process.env.ORDER_RECEIPT_LOCK_STALE_MS) || 2 * 60_000);
+// Long enough for multi-ticket PNG generation + Resend (45s timeout) without lock steal.
+const SEND_LOCK_STALE_MS = Math.max(180_000, Number(process.env.ORDER_RECEIPT_LOCK_STALE_MS) || 10 * 60_000);
 const LOCK_RELEASE_RETRIES = Math.max(2, Number(process.env.ORDER_RECEIPT_LOCK_RELEASE_RETRIES) || 5);
+/** Empty order_items often race payment — only permanize after enough failed attempts. */
+const NO_TICKETS_PERMANENT_AFTER_ATTEMPTS = Math.max(
+  3,
+  Number(process.env.ORDER_RECEIPT_NO_TICKETS_PERMANENT_AFTER) || 8
+);
 
 function getSupabase() {
   return getDb();
@@ -18,36 +23,35 @@ function sleep(ms) {
 }
 
 /**
- * Only true data defects — never give up on transient DB/API blips.
- * business_not_found / order_not_found / missing_resend_key stay retryable
- * so tickets keep flowing once the underlying issue clears.
+ * Hard permanent defects only. no_tickets is decided dynamically (race vs true empty).
+ * business_not_found / order_not_found / missing_resend_key stay retryable.
  */
-const PERMANENT_RECEIPT_REASONS = new Set([
-  'no_tickets',
-  'no_recipients',
-  'no_customer_email'
-]);
+const PERMANENT_RECEIPT_REASONS = new Set(['no_recipients', 'no_customer_email']);
 
-function isPermanentReceiptReason(reason) {
-  return PERMANENT_RECEIPT_REASONS.has(String(reason || ''));
+function isPermanentReceiptReason(reason, { attempts = 0 } = {}) {
+  const r = String(reason || '');
+  if (PERMANENT_RECEIPT_REASONS.has(r)) return true;
+  if (r === 'no_tickets' && attempts >= NO_TICKETS_PERMANENT_AFTER_ATTEMPTS) return true;
+  return false;
 }
 
-function formatReceiptErrorMessage(reason, cause) {
+function formatReceiptErrorMessage(reason, cause, { attempts = 0 } = {}) {
   const body = String(cause || reason || 'unknown').slice(0, 460);
-  if (isPermanentReceiptReason(reason)) {
+  if (isPermanentReceiptReason(reason, { attempts })) {
     return `permanent:${reason}|${body}`.slice(0, 500);
   }
   return body.slice(0, 500);
 }
 
-function skipped(reason, retryable = false, cause = null) {
+function skipped(reason, retryable = false, cause = null, { attempts = 0 } = {}) {
+  const permanent = isPermanentReceiptReason(reason, { attempts });
   return {
     ok: false,
     skipped: true,
     reason,
-    retryable: isPermanentReceiptReason(reason) ? false : retryable,
+    retryable: permanent ? false : retryable,
     cause: cause || reason,
-    permanent: isPermanentReceiptReason(reason)
+    permanent
   };
 }
 
@@ -116,7 +120,11 @@ async function claimReceiptSendLock(orderId) {
         cause: attemptsError.message || String(attemptsError)
       });
     }
-    return { claimed: true, order: { ...claimed, receipt_send_attempts: attempts } };
+    return {
+      claimed: true,
+      lockToken: nowIso,
+      order: { ...claimed, receipt_send_attempts: attempts }
+    };
   }
 
   // If both claim attempts failed with a transport error, retry later — do not treat as in_flight.
@@ -186,7 +194,10 @@ async function claimReceiptSendLock(orderId) {
   };
 }
 
-async function releaseReceiptSendLock(orderId, { sent = false, errorMessage = null } = {}) {
+async function releaseReceiptSendLock(
+  orderId,
+  { sent = false, errorMessage = null, lockToken = null } = {}
+) {
   const supabase = getSupabase();
   const updates = sent
     ? {
@@ -202,13 +213,41 @@ async function releaseReceiptSendLock(orderId, { sent = false, errorMessage = nu
   let lastError = null;
   for (let attempt = 0; attempt < LOCK_RELEASE_RETRIES; attempt += 1) {
     try {
-      const { error } = await supabase.from('orders').update(updates).eq('id', orderId);
-      if (!error) return { ok: true };
+      let q = supabase.from('orders').update(updates).eq('id', orderId);
+      // Only the worker that holds this lock token may clear it (avoids steal races).
+      if (lockToken && !sent) {
+        q = q.eq('receipt_sending_at', lockToken);
+      }
+      if (sent) {
+        // Mark sent even if another worker holds the lock — Resend already accepted.
+        q = q.is('receipt_sent_at', null);
+      }
+      const { error, data } = await q.select('id').maybeSingle();
+      if (!error) {
+        // Ownership miss on non-sent release: another worker owns the lock — OK.
+        if (!sent && lockToken && !data) return { ok: true, skippedOwnership: true };
+        return { ok: true };
+      }
       lastError = error;
     } catch (err) {
       lastError = err;
     }
     await sleep(200 * 2 ** attempt);
+  }
+
+  // Last resort for sent=true: unconditional mark if still unsent.
+  if (sent) {
+    try {
+      const { error } = await supabase
+        .from('orders')
+        .update(updates)
+        .eq('id', orderId)
+        .is('receipt_sent_at', null);
+      if (!error) return { ok: true };
+      lastError = error;
+    } catch (err) {
+      lastError = err;
+    }
   }
 
   console.error('[ZURI] Receipt email lock release failed', {
@@ -287,7 +326,7 @@ async function loadOrderReceiptData(orderId) {
   const supabase = getSupabase();
   const { data: order, error: oErr } = await supabase
     .from('orders')
-    .select('id,business_id,total_amount,customer_name,customer_phone,customer_email,created_at,payment_status,receipt_sent_at')
+    .select('id,business_id,total_amount,customer_name,customer_phone,customer_email,created_at,payment_status,receipt_sent_at,paystack_payment_reference')
     .eq('id', orderId)
     .single();
   if (oErr || !order) {
@@ -392,6 +431,9 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
     return result;
   }
 
+  const lockToken = lock.lockToken || null;
+  const sendAttempts = Number(lock.order?.receipt_send_attempts) || 0;
+
   const loaded = await loadOrderReceiptData(orderId);
   if (loaded.error) {
     console.warn('[ZURI] Receipt email skipped', {
@@ -402,7 +444,8 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
     });
     await releaseReceiptSendLock(orderId, {
       sent: false,
-      errorMessage: loaded.cause || loaded.error
+      errorMessage: loaded.cause || loaded.error,
+      lockToken
     });
     // All load failures are retryable — transient Supabase blips must not strand tickets.
     return skipped(loaded.error, true, loaded.cause || loaded.error);
@@ -410,7 +453,7 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
 
   const { order, biz, receiptItems } = loaded;
   if (order.receipt_sent_at) {
-    await releaseReceiptSendLock(orderId, { sent: true });
+    await releaseReceiptSendLock(orderId, { sent: true, lockToken });
     return skipped(
       'already_sent',
       false,
@@ -425,7 +468,11 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
       cause,
       payment_status: order.payment_status
     });
-    await releaseReceiptSendLock(orderId, { sent: false, errorMessage: 'not_paid' });
+    await releaseReceiptSendLock(orderId, {
+      sent: false,
+      errorMessage: 'not_paid',
+      lockToken
+    });
     return skipped('not_paid', true, cause);
   }
 
@@ -435,7 +482,9 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
 
   if (biz?.business_mode === 'ticketing' && ticketQrResult?.error) {
     const cause = ticketQrResult.cause || ticketQrResult.error;
-    const permanent = isPermanentReceiptReason(ticketQrResult.error);
+    const permanent = isPermanentReceiptReason(ticketQrResult.error, {
+      attempts: sendAttempts
+    });
     console.warn(
       permanent
         ? '[ZURI] Ticket QR generation failed — permanent, will not retry'
@@ -444,14 +493,18 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
         orderId,
         reason: ticketQrResult.error,
         cause,
-        permanent
+        permanent,
+        attempts: sendAttempts
       }
     );
     await releaseReceiptSendLock(orderId, {
       sent: false,
-      errorMessage: formatReceiptErrorMessage(ticketQrResult.error, cause)
+      errorMessage: formatReceiptErrorMessage(ticketQrResult.error, cause, {
+        attempts: sendAttempts
+      }),
+      lockToken
     });
-    return skipped(ticketQrResult.error, !permanent, cause);
+    return skipped(ticketQrResult.error, !permanent, cause, { attempts: sendAttempts });
   }
 
   if (biz?.business_mode === 'ticketing' && ticketQrResult?.skipped) {
@@ -471,26 +524,34 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
   // Never mark a ticketing order "sent" without QR tokens — guest cannot check in.
   if (biz?.business_mode === 'ticketing' && ticketCount < 1) {
     const underlying = ticketQrResult?.error || ticketQrResult?.reason || 'missing_ticket_qrs';
-    // Empty order_items is permanent; other missing-token races may still recover.
+    // Empty order_items often race payment — only permanize after enough attempts.
     const reason = underlying === 'no_tickets' ? 'no_tickets' : 'missing_ticket_qrs';
     const cause =
       ticketQrResult?.cause ||
       ticketQrResult?.reason ||
       'ticketing order produced 0 QR tokens — refusing to send empty ticket email';
-    const permanent = isPermanentReceiptReason(reason);
+    const permanent = isPermanentReceiptReason(reason, { attempts: sendAttempts });
     console.error('[ZURI] Ticket receipt blocked — missing QR tokens', {
       orderId,
       reason,
       cause,
       permanent,
+      attempts: sendAttempts,
       severity: permanent ? 'permanent' : 'critical'
     });
     await releaseReceiptSendLock(orderId, {
       sent: false,
-      errorMessage: formatReceiptErrorMessage(reason, cause)
+      errorMessage: formatReceiptErrorMessage(reason, cause, { attempts: sendAttempts }),
+      lockToken
     });
-    return skipped(reason, !permanent, cause);
+    return skipped(reason, !permanent, cause, { attempts: sendAttempts });
   }
+
+  // Stable identity fields — must not change between webhook vs sweep retries
+  // or Resend returns 409 invalid_idempotent_request for the same key.
+  const stableRef =
+    order.paystack_payment_reference || reference || orderId;
+  const stablePaidAt = order.created_at || paidAt || '';
 
   // Generate PNGs in parallel so multi-ticket orders stay fast under load.
   const ticketQrAttachments = (
@@ -499,7 +560,7 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
         const png = await generateTicketReceiptQrImagePng(ticket.token);
         if (!png.error && png.pngBuffer) {
           return {
-            filename: ticketQrAttachmentFilename(reference, orderId, ticket.ticketNumber, ticketCount),
+            filename: ticketQrAttachmentFilename(stableRef, orderId, ticket.ticketNumber, ticketCount),
             content: png.pngBuffer.toString('base64'),
             content_type: 'image/png',
             content_id: `ticket-qr-${ticket.ticketNumber}`
@@ -536,7 +597,11 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
   const customerEmail = (order.customer_email && String(order.customer_email).trim().toLowerCase()) || '';
   const businessEmail = (biz?.email && String(biz.email).trim().toLowerCase()) || '';
   const isTicketing = biz?.business_mode === 'ticketing';
-  const to = [...new Set([customerEmail, businessEmail].filter(Boolean))];
+  // Ticketing: guest-only. A bad business inbox must never block the buyer's QR.
+  // Venue still gets notifyTicketingSalePaid from finalizePaidOrder.
+  const to = isTicketing
+    ? [customerEmail].filter(Boolean)
+    : [...new Set([customerEmail, businessEmail].filter(Boolean))];
   if (!to.length) {
     const cause =
       'order.customer_email and business.email are both empty — nowhere to deliver the receipt';
@@ -549,7 +614,8 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
     });
     await releaseReceiptSendLock(orderId, {
       sent: false,
-      errorMessage: formatReceiptErrorMessage('no_recipients', cause)
+      errorMessage: formatReceiptErrorMessage('no_recipients', cause),
+      lockToken
     });
     return skipped('no_recipients', false, cause);
   }
@@ -567,7 +633,8 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
     });
     await releaseReceiptSendLock(orderId, {
       sent: false,
-      errorMessage: formatReceiptErrorMessage('no_customer_email', cause)
+      errorMessage: formatReceiptErrorMessage('no_customer_email', cause),
+      lockToken
     });
     return skipped('no_customer_email', false, cause);
   }
@@ -575,7 +642,7 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
   const businessName = biz?.name || 'ZURI business';
   const subject = isTicketing
     ? `Your ZURI ticket — ${businessName}`
-    : `ZURI receipt — Ref ${reference || orderId}`;
+    : `ZURI receipt — Ref ${stableRef}`;
   const ticketQrTextBlock = ticketQrs.length
     ? [
         '',
@@ -599,7 +666,7 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
     : [];
 
   const text = [
-    `Receipt (Ref: ${reference || orderId})`,
+    `Receipt (Ref: ${stableRef})`,
     `Business: ${businessName}`,
     '',
     `Amount paid: ${money(order.total_amount)}`,
@@ -612,7 +679,7 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
     'Order:',
     summarizeItems(receiptItems),
     '',
-    `Paid at: ${paidAt || ''}`,
+    `Paid at: ${stablePaidAt}`,
     ...ticketQrTextBlock
   ].join('\n');
 
@@ -674,7 +741,7 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
             <tr>
               <td style="padding:0 22px 18px 22px;">
                 <h1 style="margin:0 0 6px 0;font-size:18px;line-height:1.3;color:#1a1a1a;">${isTicketing ? 'Your ticket' : 'Payment receipt'}</h1>
-                <p style="margin:0;color:#555;font-size:13px;">Ref: <strong>${escapeHtml(reference || orderId)}</strong></p>
+                <p style="margin:0;color:#555;font-size:13px;">Ref: <strong>${escapeHtml(stableRef)}</strong></p>
               </td>
             </tr>
             <tr>
@@ -707,7 +774,7 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
             <tr>
               <td style="padding:14px 22px 22px 22px;border-top:1px solid #f5f0e8;">
                 <p style="margin:0;color:#666;font-size:12px;">Business: ${escapeHtml(businessName)}</p>
-                <p style="margin:6px 0 0 0;color:#666;font-size:12px;">Paid at: ${escapeHtml(paidAt || '')}</p>
+                <p style="margin:6px 0 0 0;color:#666;font-size:12px;">Paid at: ${escapeHtml(stablePaidAt)}</p>
               </td>
             </tr>
           </table>
@@ -733,7 +800,7 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
       }
     );
 
-    const marked = await releaseReceiptSendLock(orderId, { sent: true });
+    const marked = await releaseReceiptSendLock(orderId, { sent: true, lockToken });
     if (!marked.ok) {
       // Email already left Resend — keep retrying the DB mark without treating as a full resend miss.
       const cause =
@@ -769,6 +836,25 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
     });
     return { ok: true, to };
   } catch (err) {
+    // Same key already accepted with a different body (or prior success) —
+    // treat as delivered and persist receipt_sent_at so we never loop forever.
+    if (isInvalidIdempotentConflict(err)) {
+      console.warn('[ZURI] Receipt Resend idempotent conflict — marking sent', {
+        orderId,
+        reason: 'idempotent_replay',
+        cause: err.message || String(err)
+      });
+      const marked = await forceMarkReceiptSent(orderId);
+      if (marked.ok) {
+        return { ok: true, to, reason: 'idempotent_replay' };
+      }
+      return skipped(
+        'mark_sent_failed',
+        true,
+        marked.error?.message || 'idempotent replay but could not persist receipt_sent_at'
+      );
+    }
+
     const msg = err && err.message ? err.message : String(err);
     const code = err && err.code ? err.code : undefined;
     console.error('[ZURI] Receipt email failed', {
@@ -778,7 +864,11 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
       code,
       to
     });
-    await releaseReceiptSendLock(orderId, { sent: false, errorMessage: msg });
+    await releaseReceiptSendLock(orderId, {
+      sent: false,
+      errorMessage: msg,
+      lockToken
+    });
     throw err;
   }
 }

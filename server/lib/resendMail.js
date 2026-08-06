@@ -63,6 +63,19 @@ function isConcurrentIdempotentConflict(err) {
   return body.includes('concurrent_idempotent') || body.includes('concurrent');
 }
 
+/** Same key used with a different payload — prior accept likely already happened. */
+function isInvalidIdempotentConflict(err) {
+  if (!err) return false;
+  if (Number(err.status) !== 409) return false;
+  if (isConcurrentIdempotentConflict(err)) return false;
+  const body = String(err.body || err.message || '').toLowerCase();
+  return (
+    body.includes('invalid_idempotent') ||
+    body.includes('idempotent') ||
+    body.includes('409')
+  );
+}
+
 /**
  * @param {{
  *   to: string | string[],
@@ -225,9 +238,10 @@ function isPermanentResendError(err) {
   ) {
     return true;
   }
-  if (code === 'RESEND_HTTP_409' && !isConcurrentIdempotentConflict(err)) {
+  if (code === 'RESEND_HTTP_409' && !isConcurrentIdempotentConflict(err) && !isInvalidIdempotentConflict(err)) {
     return true;
   }
+  // invalid_idempotent is handled by sendOrderReceiptOnce as mark-sent — not permanent give-up.
   return false;
 }
 
@@ -274,6 +288,7 @@ function isRetryableResendError(err) {
   if (code === 'RESEND_TIMEOUT') return true;
   if (code === 'RESEND_HTTP_429') return true;
   if (code === 'RESEND_HTTP_409' && isConcurrentIdempotentConflict(err)) return true;
+  if (code === 'RESEND_HTTP_409' && isInvalidIdempotentConflict(err)) return true;
   if (/^RESEND_HTTP_5\d\d$/.test(code)) return true;
   if (isRetryableNetworkError(err)) return true;
   // Fail-safe for ticket delivery: unknown errors retry until MAX_ATTEMPTS.
@@ -288,6 +303,8 @@ module.exports = {
   isPermanentResendError,
   isRetryableNetworkError,
   isRetryableResendError,
+  isConcurrentIdempotentConflict,
+  isInvalidIdempotentConflict,
   normalizeRecipients,
   RESEND_MAX_RPS
 };
