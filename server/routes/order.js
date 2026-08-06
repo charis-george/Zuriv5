@@ -12,6 +12,7 @@ const { refundOrderPayment } = require('../lib/paystack-refund');
 const { validateOrderTicketQuantities, getTicketsSoldMap } = require('../lib/ticketQuantityRules');
 const { notifyBusinessNewOrder } = require('../lib/webPush');
 const { sendTicketInviteEmail } = require('../lib/ticketInviteEmail');
+const { selectInChunks } = require('../lib/supabaseInChunks');
 
 const supabase = getDb();
 
@@ -500,10 +501,13 @@ router.get('/business/:businessId', requireBusinessAuth, async (req, res) => {
     const orderIds = (orders || []).map((o) => o.id).filter(Boolean);
     let allOrderItems = [];
     if (orderIds.length) {
-      const { data: batchedItems, error: itemsErr } = await supabase
-        .from('order_items')
-        .select('order_id, menu_item_id, quantity, price, special_notes')
-        .in('order_id', orderIds);
+      const { data: batchedItems, error: itemsErr } = await selectInChunks(
+        supabase,
+        'order_items',
+        'order_id, menu_item_id, quantity, price, special_notes',
+        'order_id',
+        orderIds
+      );
       if (itemsErr) {
         console.error('Get order items batch error:', itemsErr?.message || itemsErr);
         return res.status(500).json({ error: 'Database error' });

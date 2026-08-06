@@ -1,5 +1,6 @@
 const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../database');
+const { selectInChunks } = require('./supabaseInChunks');
 
 function normalizeEmail(email) {
   if (!email || typeof email !== 'string') return null;
@@ -123,10 +124,13 @@ async function getStatsForCustomerIds(customerIds) {
   if (ids.length === 0) return map;
 
   const supabase = getDb();
-  const { data: rows, error } = await supabase
-    .from('orders')
-    .select('zuri_customer_id, total_amount, business_id')
-    .in('zuri_customer_id', ids);
+  const { data: rows, error } = await selectInChunks(
+    supabase,
+    'orders',
+    'zuri_customer_id, total_amount, business_id',
+    'zuri_customer_id',
+    ids
+  );
 
   if (error) {
     console.error('getStatsForCustomerIds:', error);

@@ -1,6 +1,6 @@
 /** Ticketing purchase rules enforced on order creation. */
 
-
+const { selectInChunks } = require('./supabaseInChunks');
 
 function getTicketStep(item) {
 
@@ -210,17 +210,14 @@ async function getTicketsSoldMap(supabase, businessId, menuItemIds = []) {
 
   const orderIds = orders.map((o) => o.id).filter(Boolean);
 
-  const { data: lines, error: lineErr } = await supabase
-
-    .from('order_items')
-
-    .select('menu_item_id,quantity')
-
-    .in('order_id', orderIds)
-
-    .in('menu_item_id', menuItemIds);
-
-
+  const { data: lines, error: lineErr } = await selectInChunks(
+    supabase,
+    'order_items',
+    'menu_item_id,quantity',
+    'order_id',
+    orderIds,
+    { refine: (q) => q.in('menu_item_id', menuItemIds) }
+  );
 
   if (lineErr || !lines?.length) return {};
 

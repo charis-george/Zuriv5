@@ -3,6 +3,7 @@ const { getDb } = require('../database');
 const { getOrCreateNetworkCustomer } = require('./zuri-network');
 const { getBusinessPlan, canAccessGuestAiStorefront } = require('./plans');
 const { applyGuestPersonalizationRnr } = require('./guest-personalization-rnr');
+const { selectInChunks } = require('./supabaseInChunks');
 
 const supabase = getDb();
 
@@ -112,10 +113,13 @@ async function getVenueTrending(businessId, days = 14) {
   const orderIds = (orders || []).map((o) => o.id).filter(Boolean);
   if (!orderIds.length) return { trendingItemIds: [], upsellSeedIds: [] };
 
-  const { data: lines } = await supabase
-    .from('order_items')
-    .select('menu_item_id, quantity')
-    .in('order_id', orderIds.slice(0, 400));
+  const { data: lines } = await selectInChunks(
+    supabase,
+    'order_items',
+    'menu_item_id, quantity',
+    'order_id',
+    orderIds
+  );
 
   const counts = {};
   for (const row of lines || []) {
@@ -215,10 +219,13 @@ async function getPersonalCountsAtVenue(customerId, businessId, limit = 24) {
   const orderIds = (orders || []).map((o) => o.id).filter(Boolean);
   if (!orderIds.length) return [];
 
-  const { data: lines } = await supabase
-    .from('order_items')
-    .select('menu_item_id, quantity')
-    .in('order_id', orderIds);
+  const { data: lines } = await selectInChunks(
+    supabase,
+    'order_items',
+    'menu_item_id, quantity',
+    'order_id',
+    orderIds
+  );
 
   const counts = new Map();
   for (const row of lines || []) {
@@ -292,10 +299,13 @@ async function getCrossVenueFavorites(customerId, excludeBusinessId, limit = 8) 
   const orderIds = orders.map((o) => o.id);
   const businessIds = [...new Set(orders.map((o) => o.business_id).filter(Boolean))];
 
-  const { data: lines } = await supabase
-    .from('order_items')
-    .select('order_id, menu_item_id, quantity')
-    .in('order_id', orderIds.slice(0, 200));
+  const { data: lines } = await selectInChunks(
+    supabase,
+    'order_items',
+    'order_id, menu_item_id, quantity',
+    'order_id',
+    orderIds
+  );
 
   const orderBiz = new Map(orders.map((o) => [o.id, o.business_id]));
   const itemCounts = new Map();

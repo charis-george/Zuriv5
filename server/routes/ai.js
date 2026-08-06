@@ -5,6 +5,7 @@ const router = express.Router();
 const { getDb } = require('../database');
 const { generateStorefrontWithClaude } = require('../lib/storefrontAiGenerate');
 const { requireBusinessAuth } = require('../middleware/auth');
+const { selectInChunks } = require('../lib/supabaseInChunks');
 const {
   getBusinessPlan,
   canAccessAIFeatures,
@@ -199,10 +200,13 @@ router.post('/insights', requireBusinessAuth, async (req, res) => {
     const orderIds = completed.map((o) => o.id).filter(Boolean).slice(0, 2000);
     let topItems = [];
     if (orderIds.length > 0) {
-      const { data: lines, error: liErr } = await supabase
-        .from('order_items')
-        .select('menu_item_id,quantity')
-        .in('order_id', orderIds);
+      const { data: lines, error: liErr } = await selectInChunks(
+        supabase,
+        'order_items',
+        'menu_item_id,quantity',
+        'order_id',
+        orderIds
+      );
 
       if (liErr) {
         console.error('[ZURI] ai.insights order_items query error:', liErr);
@@ -343,10 +347,13 @@ router.get('/signals', requireBusinessAuth, async (req, res) => {
     const paidTodayIds = paidToday.map((o) => o.id).filter(Boolean).slice(0, 5000);
     let topItems = [];
     if (paidTodayIds.length) {
-      const { data: lines } = await supabase
-        .from('order_items')
-        .select('menu_item_id,quantity,order_id')
-        .in('order_id', paidTodayIds);
+      const { data: lines } = await selectInChunks(
+        supabase,
+        'order_items',
+        'menu_item_id,quantity,order_id',
+        'order_id',
+        paidTodayIds
+      );
       const counts = new Map();
       for (const l of lines || []) {
         const id = l.menu_item_id;
@@ -399,10 +406,13 @@ router.get('/signals', requireBusinessAuth, async (req, res) => {
     const paidLast2hIds = paidLast2h.map((o) => o.id).filter(Boolean).slice(0, 4000);
     const velocityByItem = new Map();
     if (paidLast2hIds.length) {
-      const { data: lines2h } = await supabase
-        .from('order_items')
-        .select('menu_item_id,quantity,order_id')
-        .in('order_id', paidLast2hIds);
+      const { data: lines2h } = await selectInChunks(
+        supabase,
+        'order_items',
+        'menu_item_id,quantity,order_id',
+        'order_id',
+        paidLast2hIds
+      );
       for (const l of lines2h || []) {
         const id = l.menu_item_id;
         if (!id) continue;
@@ -562,10 +572,13 @@ router.get('/briefing', requireBusinessAuth, async (req, res) => {
     const ids = paid.map((o) => o.id).filter(Boolean);
     let topItem = null;
     if (ids.length) {
-      const { data: lines } = await supabase
-        .from('order_items')
-        .select('menu_item_id,quantity,order_id')
-        .in('order_id', ids.slice(0, 5000));
+      const { data: lines } = await selectInChunks(
+        supabase,
+        'order_items',
+        'menu_item_id,quantity,order_id',
+        'order_id',
+        ids
+      );
       const counts = new Map();
       for (const l of lines || []) counts.set(l.menu_item_id, (counts.get(l.menu_item_id) || 0) + (Number(l.quantity) || 0));
       const topId = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];

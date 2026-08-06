@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { getDb } = require('../database');
 const { requireBusinessAuth } = require('../middleware/auth');
+const { selectInChunks } = require('../lib/supabaseInChunks');
 
 const supabase = getDb();
 
@@ -57,10 +58,13 @@ router.get('/market-insights', requireBusinessAuth, async (req, res) => {
     let topItemNames = [];
 
     if (orderIds.length > 0) {
-      const { data: lines, error: liErr } = await supabase
-        .from('order_items')
-        .select('menu_item_id, quantity')
-        .in('order_id', orderIds.slice(0, 5000));
+      const { data: lines, error: liErr } = await selectInChunks(
+        supabase,
+        'order_items',
+        'menu_item_id, quantity',
+        'order_id',
+        orderIds
+      );
 
       if (!liErr && lines && lines.length > 0) {
         const counts = new Map();
