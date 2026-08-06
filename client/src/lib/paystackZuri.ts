@@ -313,9 +313,20 @@ export async function startZuriPayment(
     reference: ref,
     onSuccess: (paidReference) => {
       const finalRef = resolvePaidReference(ref, paidReference, paymentKind)
-      // Confirm payment + queue receipt immediately (don't rely on redirect alone).
-      void fetch(apiUrl(`/api/payment/verify/${encodeURIComponent(finalRef)}`)).catch(() => {})
-      window.location.href = buildSuccessRedirectUrl(successPath, finalRef)
+      // Confirm payment + kick receipt send before leaving checkout (venue bursts need this).
+      // Keepalive so the request can finish even if navigation starts; still await briefly.
+      const verifyUrl = apiUrl(`/api/payment/verify/${encodeURIComponent(finalRef)}`)
+      const verifyPromise = fetch(verifyUrl, {
+        method: 'GET',
+        credentials: 'include',
+        keepalive: true,
+      }).catch(() => null)
+      const proceed = () => {
+        window.location.href = buildSuccessRedirectUrl(successPath, finalRef)
+      }
+      // Prefer waiting up to 4s so finalize+receipt enqueue completes; then redirect.
+      const timeout = new Promise<void>((resolve) => setTimeout(resolve, 4000))
+      void Promise.race([verifyPromise.then(() => undefined), timeout]).finally(proceed)
     },
     onCancel: opts?.onCancel,
     onError: opts?.onError,

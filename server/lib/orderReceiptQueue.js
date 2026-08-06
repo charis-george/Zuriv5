@@ -2,14 +2,17 @@ const { sendOrderReceiptOnce } = require('./orderReceiptEmail');
 const { isPermanentResendError, isRetryableResendError } = require('./resendMail');
 
 const MAX_ATTEMPTS = Math.max(3, Number(process.env.ORDER_RECEIPT_MAX_ATTEMPTS) || 12);
-// Allow a couple of parallel sends so ticket bursts clear faster without stampeding free-tier DB.
-const CONCURRENCY = Math.max(1, Math.min(12, Number(process.env.ORDER_RECEIPT_EMAIL_CONCURRENCY) || 2));
-const BASE_RETRY_MS = Math.max(500, Number(process.env.ORDER_RECEIPT_RETRY_BASE_MS) || 1500);
-const MAX_RETRY_MS = Math.max(BASE_RETRY_MS, Number(process.env.ORDER_RECEIPT_RETRY_MAX_MS) || 90_000);
+/**
+ * Resend allows ~10 req/s. Default 8 parallel ticket emails so a venue burst
+ * of 100 buyers clears in seconds — not minutes (old default was 2).
+ */
+const CONCURRENCY = Math.max(1, Math.min(15, Number(process.env.ORDER_RECEIPT_EMAIL_CONCURRENCY) || 8));
+const BASE_RETRY_MS = Math.max(250, Number(process.env.ORDER_RECEIPT_RETRY_BASE_MS) || 800);
+const MAX_RETRY_MS = Math.max(BASE_RETRY_MS, Number(process.env.ORDER_RECEIPT_RETRY_MAX_MS) || 45_000);
 /** Extra patience while another worker / stale DB lock holds the send. */
-const MAX_IN_FLIGHT_SOFT_RETRIES = Math.max(5, Number(process.env.ORDER_RECEIPT_IN_FLIGHT_SOFT_RETRIES) || 30);
+const MAX_IN_FLIGHT_SOFT_RETRIES = Math.max(5, Number(process.env.ORDER_RECEIPT_IN_FLIGHT_SOFT_RETRIES) || 40);
 
-/** @type {Array<{ args: object, attempt: number, runAt: number, softRetries?: number }>} */
+/** @type {Array<{ args: object, attempt: number, runAt: number, softRetries?: number, markSentOnly?: boolean, priority?: boolean }>} */
 const queue = [];
 const queuedOrderIds = new Set();
 const inFlightOrderIds = new Set();
@@ -31,7 +34,7 @@ function markReceiptSent(orderId) {
 
 function retryDelayMs(attempt) {
   const exp = Math.min(MAX_RETRY_MS, BASE_RETRY_MS * 2 ** Math.max(0, attempt));
-  const jitter = Math.floor(Math.random() * Math.min(1000, exp * 0.2));
+  const jitter = Math.floor(Math.random() * Math.min(800, exp * 0.25));
   return exp + jitter;
 }
 
@@ -42,7 +45,6 @@ function shouldRetryResult(result, attempt) {
   if (result.reason === 'no_recipients') return false;
   if (result.reason === 'no_tickets') return false;
   if (result.reason === 'no_customer_email') return false;
-  // Keep retrying until key is configured / DB recovers — sweep also recovers these.
   if (attempt >= MAX_ATTEMPTS) return false;
   return Boolean(result.retryable);
 }
@@ -60,6 +62,26 @@ function schedulePump() {
     pumpScheduled = false;
     void drainQueue();
   });
+}
+
+/** Fill every free worker slot immediately (venue burst). */
+function kickWorkersHard() {
+  schedulePump();
+  // Second tick catches jobs that landed while first drain was starting.
+  setImmediate(schedulePump);
+}
+
+function findNextRunnableIndex(now) {
+  let priorityIdx = -1;
+  let normalIdx = -1;
+  for (let i = 0; i < queue.length; i += 1) {
+    const job = queue[i];
+    if (job.runAt > now) continue;
+    if (job.priority && priorityIdx < 0) priorityIdx = i;
+    else if (!job.priority && normalIdx < 0) normalIdx = i;
+    if (priorityIdx >= 0) break;
+  }
+  return priorityIdx >= 0 ? priorityIdx : normalIdx;
 }
 
 /**
@@ -97,18 +119,33 @@ function enqueueOrderReceipt(args, opts = {}) {
   const delayMs = Math.max(0, Number(opts.delayMs) || 0);
   const runAt = Date.now() + delayMs;
   const markSentOnly = Boolean(opts.markSentOnly);
+  // Payment success path always priority so venue buys jump ahead of sweep retries.
+  const priority = opts.priority !== false && attempt === 0 && softRetries === 0 && !markSentOnly;
 
   queuedOrderIds.add(orderId);
-  queue.push({ args, attempt, runAt, softRetries, markSentOnly });
+  const job = { args, attempt, runAt, softRetries, markSentOnly, priority };
+  if (priority && delayMs === 0) {
+    queue.unshift(job);
+  } else {
+    queue.push(job);
+  }
 
   if (attempt === 0 && softRetries === 0 && delayMs === 0 && !markSentOnly) {
-    console.log('[ZURI] Receipt email queued', { orderId, reason: 'enqueued', attempt, delayMs });
+    console.log('[ZURI] Receipt email queued', {
+      orderId,
+      reason: 'enqueued',
+      attempt,
+      delayMs,
+      priority,
+      concurrency: CONCURRENCY,
+      queuedDepth: queue.length
+    });
   }
 
   if (delayMs > 0) {
-    setTimeout(schedulePump, delayMs + 10);
+    setTimeout(kickWorkersHard, delayMs + 5);
   } else {
-    schedulePump();
+    kickWorkersHard();
   }
 
   return { queued: true, reason: 'enqueued', orderId, attempt, delayMs };
@@ -117,10 +154,10 @@ function enqueueOrderReceipt(args, opts = {}) {
 async function drainQueue() {
   while (activeWorkers < CONCURRENCY && queue.length > 0) {
     const now = Date.now();
-    const nextIdx = queue.findIndex((job) => job.runAt <= now);
+    const nextIdx = findNextRunnableIndex(now);
     if (nextIdx < 0) {
       const soonest = Math.min(...queue.map((job) => job.runAt));
-      const waitMs = Math.max(50, soonest - now);
+      const waitMs = Math.max(25, soonest - now);
       setTimeout(schedulePump, waitMs);
       break;
     }
@@ -182,7 +219,8 @@ async function processJob(job) {
         enqueueOrderReceipt(job.args, {
           attempt: job.attempt + 1,
           delayMs,
-          markSentOnly: true
+          markSentOnly: true,
+          priority: false
         });
       } else {
         console.error('[ZURI] Receipt mark-sent giving up', {
@@ -206,7 +244,7 @@ async function processJob(job) {
     }
 
     if (result?.reason === 'mark_sent_failed') {
-      const delayMs = Math.min(10_000, BASE_RETRY_MS);
+      const delayMs = Math.min(3_000, BASE_RETRY_MS);
       console.warn('[ZURI] Receipt email delivered — scheduling mark-sent only', {
         orderId,
         reason: 'mark_sent_failed',
@@ -216,16 +254,17 @@ async function processJob(job) {
       enqueueOrderReceipt(job.args, {
         attempt: job.attempt,
         delayMs,
-        markSentOnly: true
+        markSentOnly: true,
+        priority: true
       });
       return;
     }
 
-    // Lock contention / deploy overlap: wait without burning hard attempts as fast.
+    // Lock contention / deploy overlap: wait briefly without burning hard attempts.
     if (result?.reason === 'in_flight') {
       const soft = Number(job.softRetries) || 0;
       if (soft < MAX_IN_FLIGHT_SOFT_RETRIES) {
-        const delayMs = Math.min(30_000, 3_000 + soft * 1_500);
+        const delayMs = Math.min(8_000, 600 + soft * 400);
         console.warn('[ZURI] Receipt email waiting on lock', {
           orderId,
           softRetry: soft + 1,
@@ -237,11 +276,12 @@ async function processJob(job) {
         enqueueOrderReceipt(job.args, {
           attempt: job.attempt,
           softRetries: soft + 1,
-          delayMs
+          delayMs,
+          priority: true
         });
         return;
       }
-      console.warn('[ZURI] Receipt email lock wait exhausted — sweep will retry', {
+      console.warn('[ZURI] Receipt email lock wait exhausted — will retry via safety re-queue/sweep', {
         orderId,
         reason: 'in_flight_soft_exhausted',
         cause: result.cause || result.reason,
@@ -261,7 +301,7 @@ async function processJob(job) {
         retryable: true,
         delayMs
       });
-      enqueueOrderReceipt(job.args, { attempt: job.attempt + 1, delayMs });
+      enqueueOrderReceipt(job.args, { attempt: job.attempt + 1, delayMs, priority: true });
       return;
     }
     if (result && !result.ok && result.skipped) {
@@ -292,7 +332,7 @@ async function processJob(job) {
         retryable: true,
         delayMs
       });
-      enqueueOrderReceipt(job.args, { attempt: job.attempt + 1, delayMs });
+      enqueueOrderReceipt(job.args, { attempt: job.attempt + 1, delayMs, priority: true });
       return;
     }
     console.error('[ZURI] Receipt email failed (giving up)', {
@@ -309,8 +349,9 @@ async function processJob(job) {
   }
 }
 
+/** Payment / verify hot path — priority, zero delay, immediate worker kick. */
 function queueOrderReceiptOnce(args) {
-  return enqueueOrderReceipt(args, { attempt: 0, delayMs: 0 });
+  return enqueueOrderReceipt(args, { attempt: 0, delayMs: 0, priority: true });
 }
 
 function getReceiptQueueStats() {
@@ -326,17 +367,18 @@ function getReceiptQueueStats() {
  * Stop accepting brand-new jobs and wait for in-flight sends to finish
  * so deploy SIGTERM does not strand a delivered email without receipt_sent_at.
  */
-async function drainOrderReceiptQueueForShutdown(timeoutMs = 15_000) {
+async function drainOrderReceiptQueueForShutdown(timeoutMs = 25_000) {
   acceptingJobs = false;
   const deadline = Date.now() + Math.max(1_000, timeoutMs);
-  schedulePump();
-  while (activeWorkers > 0 && Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 100));
+  kickWorkersHard();
+  while ((activeWorkers > 0 || queue.some((j) => j.runAt <= Date.now())) && Date.now() < deadline) {
+    schedulePump();
+    await new Promise((r) => setTimeout(r, 80));
   }
   const stats = getReceiptQueueStats();
   console.log('[ZURI] Receipt queue shutdown drain', {
     ...stats,
-    drained: activeWorkers === 0,
+    drained: activeWorkers === 0 && queue.length === 0,
     reason: activeWorkers === 0 ? 'in_flight_complete' : 'timeout'
   });
   return stats;
@@ -349,6 +391,7 @@ module.exports = {
   drainOrderReceiptQueueForShutdown,
   getReceiptQueueStats,
   markReceiptSent,
+  kickWorkersHard,
   CONCURRENCY,
   MAX_ATTEMPTS
 };

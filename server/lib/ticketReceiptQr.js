@@ -68,6 +68,28 @@ async function getOrderTicketCount(orderId) {
   };
 }
 
+/**
+ * Payment webhook can race order_items visibility under replica lag / burst writes.
+ * Brief retries avoid permanent:no_tickets on a paid order that still has lines.
+ */
+async function getOrderTicketCountWithRetry(orderId, { attempts = 4, baseDelayMs = 300 } = {}) {
+  let last = { count: 0 };
+  for (let i = 0; i < attempts; i += 1) {
+    last = await getOrderTicketCount(orderId);
+    if (last.error) return last;
+    if (last.count >= 1) {
+      if (i > 0) {
+        console.log('[ZURI] Ticket count appeared after retry', { orderId, attempt: i + 1, count: last.count });
+      }
+      return last;
+    }
+    if (i < attempts - 1) {
+      await new Promise((r) => setTimeout(r, baseDelayMs * (i + 1)));
+    }
+  }
+  return last;
+}
+
 async function loadTicketReceiptOrderByToken(token) {
   const supabase = getDb();
   const normalized = String(token || '').trim();
@@ -213,7 +235,7 @@ async function ensureTicketReceiptQrsForOrder(orderId) {
     };
   }
 
-  const ticketCountResult = await getOrderTicketCount(orderId);
+  const ticketCountResult = await getOrderTicketCountWithRetry(orderId);
   if (ticketCountResult.error) {
     console.warn('[ZURI] Ticket QR ensure failed', {
       orderId,

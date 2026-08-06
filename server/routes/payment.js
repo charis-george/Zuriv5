@@ -156,10 +156,12 @@ async function finalizePaidOrder({
   if (tap) emitTapSuccess(req, bid, orderId);
   const isSplit = marked.order?.payment_method === 'split' || marked.order?.payout_status === 'split_settled';
   if (!isSplit && payoutAmount != null) schedulePayout(orderId, payoutAmount, paymentProvider);
-  queueOrderReceiptOnce({ orderId, paidAt: paidAt || null, reference: reference || orderId });
-  // Safety net: if the first enqueue raced a deploy/shutdown, re-queue shortly after.
-  // Deduped by in-memory queue + DB send lock + Resend Idempotency-Key.
+  // Immediate priority enqueue (concurrency workers start in the same tick).
+  // Guest QR email must leave the moment payment clears — like Paystack's own receipts.
   const receiptArgs = { orderId, paidAt: paidAt || null, reference: reference || orderId };
+  queueOrderReceiptOnce(receiptArgs);
+  // Short safety net only: if the first worker lost a race with deploy/lock, re-kick once.
+  // Deduped by in-memory queue + DB send lock + Resend Idempotency-Key (zuri-receipt-{orderId}).
   setTimeout(() => {
     try {
       queueOrderReceiptOnce(receiptArgs);
@@ -169,7 +171,7 @@ async function finalizePaidOrder({
         cause: err?.message || String(err)
       });
     }
-  }, 12_000);
+  }, 3_000);
 
   // Ticketing checkouts create unpaid orders first — alert the venue only once payment clears.
   if (bid) {
@@ -455,7 +457,16 @@ router.post('/webhook', (req, res) => {
 
     findPromise
       .then(({ data: order }) => {
-        if (!order || order.payment_status === 'paid') {
+        if (!order) {
+          res.status(200).json({ received: true });
+          return null;
+        }
+        if (order.payment_status === 'paid') {
+          // Same recovery as charge.success — already paid must still get QR email if missing.
+          queueOrderReceiptIfNeeded(order, {
+            paidAt: event.data.paid_at || event.data.paidAt || null,
+            reference: offlineReference || order.id
+          });
           res.status(200).json({ received: true });
           return null;
         }

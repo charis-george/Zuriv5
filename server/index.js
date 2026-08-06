@@ -525,8 +525,9 @@ function scheduleOrderReceiptSweep() {
       console.error('[ZURI] Receipt sweep module error:', err);
     }
   };
-  // First pass soon after boot so deploy restarts do not strand paid tickets.
-  setTimeout(run, 20_000);
+  // First pass quickly after boot so deploy restarts do not strand paid tickets.
+  // Sweep is a safety net only — primary delivery is immediate enqueue on pay.
+  setTimeout(run, 5_000);
   setInterval(run, RECEIPT_SWEEP_INTERVAL_MS);
 }
 scheduleOrderReceiptSweep();
@@ -547,7 +548,7 @@ async function gracefulShutdown(signal) {
   try {
     const { drainOrderReceiptQueueForShutdown } = require('./lib/orderReceiptQueue');
     await drainOrderReceiptQueueForShutdown(
-      Math.max(5_000, Number(process.env.ORDER_RECEIPT_SHUTDOWN_DRAIN_MS) || 15_000)
+      Math.max(5_000, Number(process.env.ORDER_RECEIPT_SHUTDOWN_DRAIN_MS) || 25_000)
     );
   } catch (err) {
     console.error('[ZURI] Receipt queue drain error:', err?.message || err);
