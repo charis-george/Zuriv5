@@ -51,7 +51,8 @@ function hourBucketUtc(iso) {
 }
 
 /** Cap `.in()` URL size — PostgREST/undici reject ~16KB request URLs (UND_ERR_HEADERS_OVERFLOW). */
-const SUPABASE_IN_CHUNK = Math.max(20, Math.min(120, Number(process.env.ANALYTICS_IN_CHUNK) || 80));
+const SUPABASE_IN_CHUNK = Math.max(20, Math.min(80, Number(process.env.ANALYTICS_IN_CHUNK) || 40));
+const ORDER_ITEMS_PAGE = 1000;
 
 /**
  * Run `.in(column, ids)` in chunks and merge rows.
@@ -73,6 +74,45 @@ async function selectInChunks(table, columns, column, ids, refine) {
     const { data, error } = await q;
     if (error) return { data: null, error };
     if (data?.length) all.push(...data);
+  }
+  return { data: all, error: null };
+}
+
+/**
+ * Load paid order_items via inner join — avoids building a 20KB `.in(order_id, …)` URL.
+ * Falls back to chunked `.in()` if the embed filter is unavailable.
+ */
+async function fetchPaidOrderItemLines(businessId, startIso, lineColumns = 'menu_item_id, quantity, price') {
+  const all = [];
+  for (let from = 0; from < 100_000; from += ORDER_ITEMS_PAGE) {
+    const { data, error } = await supabase
+      .from('order_items')
+      .select(`${lineColumns}, orders!inner(id)`)
+      .eq('orders.business_id', businessId)
+      .eq('orders.payment_status', 'paid')
+      .gte('orders.created_at', startIso)
+      .range(from, from + ORDER_ITEMS_PAGE - 1);
+
+    if (error) {
+      // Fallback: paid order ids + chunked .in (never one giant URL).
+      const { data: orders, error: oErr } = await paidOrdersQuery(
+        businessId,
+        startIso,
+        'id'
+      );
+      if (oErr) return { data: null, error: oErr };
+      const orderIds = (orders || []).map((o) => o.id);
+      if (orderIds.length === 0) return { data: [], error: null };
+      return selectInChunks('order_items', lineColumns, 'order_id', orderIds);
+    }
+
+    if (data?.length) {
+      for (const row of data) {
+        const { orders: _orders, ...line } = row;
+        all.push(line);
+      }
+    }
+    if (!data || data.length < ORDER_ITEMS_PAGE) break;
   }
   return { data: all, error: null };
 }
@@ -183,25 +223,10 @@ router.get('/popular-items/:businessId', requireBusinessAuth, async (req, res) =
     const days = Math.min(365, Math.max(1, parseInt(req.query.days, 10) || 90));
     const start = addDays(new Date(), -days);
 
-    const { data: orders, error: oErr } = await paidOrdersQuery(
+    const { data: lines, error: liErr } = await fetchPaidOrderItemLines(
       businessId,
       start.toISOString(),
-      'id'
-    );
-
-    if (oErr) {
-      console.error('analytics popular orders error:', oErr);
-      return res.status(500).json({ error: 'Failed to load analytics' });
-    }
-
-    const orderIds = (orders || []).map((o) => o.id);
-    if (orderIds.length === 0) return res.json([]);
-
-    const { data: lines, error: liErr } = await selectInChunks(
-      'order_items',
-      'menu_item_id, quantity, price',
-      'order_id',
-      orderIds
+      'menu_item_id, quantity, price'
     );
 
     if (liErr) {
@@ -209,16 +234,16 @@ router.get('/popular-items/:businessId', requireBusinessAuth, async (req, res) =
       return res.status(500).json({ error: 'Failed to load analytics' });
     }
 
-    const itemIds = [...new Set((lines || []).map((l) => l.menu_item_id).filter(Boolean))];
-    if (itemIds.length === 0) return res.json([]);
+    if (!lines?.length) return res.json([]);
 
-    const { data: menuItems, error: mErr } = await selectInChunks(
-      'menu_items',
-      'id, name, price',
-      'id',
-      itemIds,
-      (q) => q.eq('business_id', businessId)
-    );
+    const itemIds = new Set((lines || []).map((l) => l.menu_item_id).filter(Boolean));
+    if (itemIds.size === 0) return res.json([]);
+
+    // Scope by business — avoids a second huge `.in(id, …)` URL.
+    const { data: menuItems, error: mErr } = await supabase
+      .from('menu_items')
+      .select('id, name, price')
+      .eq('business_id', businessId);
 
     if (mErr) {
       console.error('analytics menu lookup error:', mErr);
@@ -226,7 +251,7 @@ router.get('/popular-items/:businessId', requireBusinessAuth, async (req, res) =
     }
 
     const menuMap = (menuItems || []).reduce((acc, m) => {
-      acc[m.id] = m;
+      if (itemIds.has(m.id)) acc[m.id] = m;
       return acc;
     }, {});
 
@@ -306,25 +331,10 @@ router.get('/profit-margins/:businessId', requireBusinessAuth, async (req, res) 
     const days = Math.min(365, Math.max(1, parseInt(req.query.days, 10) || 90));
     const start = addDays(new Date(), -days);
 
-    const { data: orders, error: oErr } = await paidOrdersQuery(
+    const { data: lines, error: liErr } = await fetchPaidOrderItemLines(
       businessId,
       start.toISOString(),
-      'id'
-    );
-
-    if (oErr) {
-      console.error('analytics profit orders error:', oErr);
-      return res.status(500).json({ error: 'Failed to load analytics' });
-    }
-
-    const orderIds = (orders || []).map((o) => o.id);
-    if (orderIds.length === 0) return res.json([]);
-
-    const { data: lines, error: liErr } = await selectInChunks(
-      'order_items',
-      'menu_item_id, quantity, price',
-      'order_id',
-      orderIds
+      'menu_item_id, quantity, price'
     );
 
     if (liErr) {
@@ -332,16 +342,15 @@ router.get('/profit-margins/:businessId', requireBusinessAuth, async (req, res) 
       return res.status(500).json({ error: 'Failed to load analytics' });
     }
 
-    const itemIds = [...new Set((lines || []).map((l) => l.menu_item_id).filter(Boolean))];
-    if (itemIds.length === 0) return res.json([]);
+    if (!lines?.length) return res.json([]);
 
-    const { data: menuItems, error: mErr } = await selectInChunks(
-      'menu_items',
-      'id, name, price, cost',
-      'id',
-      itemIds,
-      (q) => q.eq('business_id', businessId)
-    );
+    const itemIds = new Set((lines || []).map((l) => l.menu_item_id).filter(Boolean));
+    if (itemIds.size === 0) return res.json([]);
+
+    const { data: menuItems, error: mErr } = await supabase
+      .from('menu_items')
+      .select('id, name, price, cost')
+      .eq('business_id', businessId);
 
     if (mErr) {
       console.error('analytics profit menu error:', mErr);
@@ -349,7 +358,7 @@ router.get('/profit-margins/:businessId', requireBusinessAuth, async (req, res) 
     }
 
     const menuMap = (menuItems || []).reduce((acc, m) => {
-      acc[m.id] = m;
+      if (itemIds.has(m.id)) acc[m.id] = m;
       return acc;
     }, {});
 
