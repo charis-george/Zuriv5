@@ -14,7 +14,7 @@ function newProfileId() {
 function defaultStorefrontDetails(businessName) {
   return {
     name: String(businessName || '').trim() || 'Your store',
-    tagline: 'Fresh, fast, and loved by locals',
+    tagline: '',
     cuisineTags: []
   };
 }

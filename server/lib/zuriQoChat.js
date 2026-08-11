@@ -35,7 +35,11 @@ async function loadBusinessContext(businessId) {
   const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
   const [{ data: business }, { data: orders }, { data: menuItems }, { data: categories }] = await Promise.all([
-    supabase.from('businesses').select('id,name,business_mode,plan').eq('id', businessId).maybeSingle(),
+    supabase
+      .from('businesses')
+      .select('id,name,business_mode,plan,bank_verified_at,account_status,logo_url')
+      .eq('id', businessId)
+      .maybeSingle(),
     supabase
       .from('orders')
       .select('id,status,total_amount,payment_status,created_at,customer_name,customer_email,table_number')
@@ -54,6 +58,33 @@ async function loadBusinessContext(businessId) {
       .eq('business_id', businessId)
       .limit(100)
   ]);
+
+  let tap = {
+    enabled: false,
+    eligible: false,
+    planOk: false,
+    bankOk: false,
+    staffCodeCount: 0,
+    expiresAt: null,
+    code: null
+  };
+  try {
+    const { canAccessAnalytics } = require('./plans');
+    const planOk = canAccessAnalytics(business?.plan);
+    const bankOk = Boolean(business?.bank_verified_at);
+    tap.planOk = planOk;
+    tap.bankOk = bankOk;
+    tap.eligible = planOk && bankOk;
+    const { getActiveRoomByBusiness, listStaffCodes } = require('./tapRooms');
+    const room = await getActiveRoomByBusiness(businessId);
+    const staffCodes = room?.staffCodes || (await listStaffCodes(businessId)) || [];
+    tap.enabled = Boolean(room?.enabled);
+    tap.expiresAt = room?.expiresAt || null;
+    tap.code = room?.code || staffCodes[0]?.code || null;
+    tap.staffCodeCount = staffCodes.length;
+  } catch (err) {
+    console.warn('[ZURI] zuriQoChat tap context', err?.message || err);
+  }
 
   const list = orders || [];
   const mode = normalizeBusinessMode(business?.business_mode);
@@ -97,6 +128,7 @@ async function loadBusinessContext(businessId) {
   return {
     business,
     mode,
+    tap,
     paidToday,
     paidWeek,
     paid,
@@ -116,6 +148,7 @@ function contextBrief(ctx) {
     businessName: ctx.business?.name,
     mode: ctx.mode,
     plan: ctx.business?.plan,
+    tap: ctx.tap,
     today: { paidOrders: ctx.paidToday.length, revenue: ctx.revenueToday },
     week: { paidOrders: ctx.paidWeek.length, revenue: ctx.revenueWeek },
     openOrders: ctx.openOrders.slice(0, 12).map((o) => ({
@@ -145,7 +178,18 @@ function contextBrief(ctx) {
       available: m.available,
       stock: m.stock_on_hand
     })),
-    categories: ctx.categories.map((c) => ({ id: c.id, name: c.name }))
+    categories: ctx.categories.map((c) => ({ id: c.id, name: c.name })),
+    whereToGo: {
+      orders: 'Orders tab — live tickets/orders and Assist queues',
+      menu: 'Menu / Catalog / Tickets tab — edit items for current mode',
+      qr: 'QR Code tab — download guest link QR',
+      analytics: 'Analytics tab — Growth+ sales charts',
+      tap: 'Top of dashboard — Zuri Tap toggle + staff codes (Growth+)',
+      payment: 'Payouts & billing — bank verify, plans, upgrades',
+      customize: 'Customize storefront — themes and guest link look',
+      settings: 'Settings — profile, slug, Tap staff codes',
+      modeSwitch: 'Profile / header — switch Menu · Shops · Tickets'
+    }
   };
 }
 
@@ -153,22 +197,45 @@ const TOOLS = [
   {
     name: 'get_dashboard_data',
     description:
-      'Read live Zuri business data: revenue, orders, catalog, low stock, unpaid guests. Use for any factual question.',
+      'Read live Zuri snapshot: revenue, orders, catalog, Tap status, mode, unpaid guests, and where-to-go map. Use for factual questions and real-time coaching.',
     input_schema: {
       type: 'object',
       properties: {
         focus: {
           type: 'string',
-          enum: ['overview', 'orders', 'catalog', 'payments', 'tickets'],
+          enum: ['overview', 'orders', 'catalog', 'payments', 'tickets', 'tap', 'mode'],
           description: 'Optional focus area'
         }
       }
     }
   },
   {
+    name: 'guide_owner',
+    description:
+      'Coach the owner in real time: which tab/screen to open and step-by-step what to do. Does not change data. Prefer this when they ask “where do I…”, “how do I…”, or need a snapshot of next actions.',
+    input_schema: {
+      type: 'object',
+      required: ['destination', 'title', 'steps'],
+      properties: {
+        destination: {
+          type: 'string',
+          enum: ['orders', 'menu', 'qr', 'analytics', 'tap', 'payment', 'customize', 'settings', 'mode_switch'],
+          description: 'Dashboard area to open'
+        },
+        title: { type: 'string' },
+        steps: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Short numbered coaching steps (3–6)'
+        },
+        tip: { type: 'string', description: 'Optional enhancement idea (esp. for Zuri Tap)' }
+      }
+    }
+  },
+  {
     name: 'propose_draft',
     description:
-      'Create a reversible draft the owner reviews. Use kind=catalog_item for new menu/ticket/shop items (owner can Publish). Use kind=message for promo/SMS/email/apology copy.',
+      'Create a reversible draft the owner reviews. Use kind=catalog_item for new menu/ticket/shop items (owner can Publish). Use kind=message for promo/SMS/email/apology/Tap table script copy.',
     input_schema: {
       type: 'object',
       required: ['kind'],
@@ -185,14 +252,22 @@ const TOOLS = [
   {
     name: 'propose_write',
     description:
-      'Propose a state-changing action. The owner must Confirm before it runs. Never claim it already happened.',
+      'Propose a state-changing action. The owner must Confirm before it runs. Supports orders, availability, catalog publish, business mode switch (menu/shop/ticketing), and Zuri Tap room on/off/extend.',
     input_schema: {
       type: 'object',
       required: ['actionType', 'label', 'description'],
       properties: {
         actionType: {
           type: 'string',
-          enum: ['order_status', 'item_availability', 'create_catalog_item']
+          enum: [
+            'order_status',
+            'item_availability',
+            'create_catalog_item',
+            'switch_business_mode',
+            'tap_room_on',
+            'tap_room_off',
+            'tap_room_extend'
+          ]
         },
         label: { type: 'string' },
         description: { type: 'string' },
@@ -203,21 +278,22 @@ const TOOLS = [
         itemName: { type: 'string' },
         price: { type: 'number' },
         itemDescription: { type: 'string' },
-        categoryName: { type: 'string' }
+        categoryName: { type: 'string' },
+        businessMode: { type: 'string', enum: ['menu', 'shop', 'ticketing'] }
       }
     }
   },
   {
     name: 'run_agent',
     description:
-      'Run a multi-step Zuri agent across Assist, inventory, settlement, anomaly watch, or onboarding.',
+      'Run a multi-step Zuri agent across Assist, inventory, settlement, anomaly watch, onboarding, or Tap coaching.',
     input_schema: {
       type: 'object',
       required: ['agent'],
       properties: {
         agent: {
           type: 'string',
-          enum: ['reconcile_assist', 'inventory_menu', 'settlement', 'anomaly', 'onboarding']
+          enum: ['reconcile_assist', 'inventory_menu', 'settlement', 'anomaly', 'onboarding', 'tap_coach']
         }
       }
     }
@@ -319,6 +395,63 @@ async function runAgentTool(agent, ctx) {
     };
   }
 
+  if (agent === 'onboarding') {
+    return {
+      agentRun: {
+        id: runId,
+        name: 'Catalog onboarding',
+        steps: [
+          { label: 'Wait for menu photo or PDF', status: 'pending' },
+          { label: 'Extract items & prices', status: 'pending' },
+          { label: 'Ask you to confirm before publishing', status: 'pending' }
+        ],
+        summary: 'Use Menu → AI upload, or ask me to draft items from a description.'
+      },
+      note: 'Onboarding agent is ready for a menu photo or drafted items.'
+    };
+  }
+
+  if (agent === 'tap_coach') {
+    const tap = ctx.tap || {};
+    const steps = [
+      {
+        label: tap.planOk ? 'Plan allows Zuri Tap (Growth+)' : 'Upgrade to Growth to unlock Zuri Tap',
+        status: tap.planOk ? 'done' : 'needs_review'
+      },
+      {
+        label: tap.bankOk ? 'Payout bank verified' : 'Verify bank in Payouts & billing',
+        status: tap.bankOk ? 'done' : 'needs_review'
+      },
+      {
+        label: tap.enabled ? 'Tap room is LIVE' : 'Turn Tap on from the dashboard header',
+        status: tap.enabled ? 'done' : 'pending'
+      },
+      {
+        label: 'Share staff Tap code with floor staff; guests join with Tap app + code',
+        status: 'pending'
+      },
+      {
+        label: 'Send payment requests from Orders / Tap panel for tables in the room',
+        status: 'pending'
+      }
+    ];
+    return {
+      agentRun: {
+        id: runId,
+        name: 'Zuri Tap coach',
+        steps,
+        summary: tap.enabled
+          ? `Tap is live${tap.code ? ` · code ${tap.code}` : ''}. Keep the room open while guests pay by Tap.`
+          : tap.eligible
+            ? 'You’re ready — confirm “Turn Zuri Tap on” when you want the room live.'
+            : 'Finish plan + bank setup, then turn Tap on.'
+      },
+      note: tap.enabled
+        ? 'Tap room is live. Ask me for scripts to pitch Tap at tables.'
+        : 'Tap coach finished — follow the steps (or confirm Turn Tap on).'
+    };
+  }
+
   return {
     agentRun: {
       id: runId,
@@ -346,13 +479,31 @@ async function executeTool(name, input, ctx, bag) {
         week: brief.week
       };
     }
-    if (focus === 'catalog') {
-      return { catalogSample: brief.catalogSample, lowStock: brief.lowStock, categories: brief.categories };
+    if (focus === 'catalog' || focus === 'tickets') {
+      return { catalogSample: brief.catalogSample, lowStock: brief.lowStock, categories: brief.categories, mode: brief.mode };
     }
     if (focus === 'payments') {
       return { unpaidSample: brief.unpaidSample, today: brief.today };
     }
+    if (focus === 'tap') {
+      return { tap: brief.tap, whereToGo: { tap: brief.whereToGo.tap, settings: brief.whereToGo.settings } };
+    }
+    if (focus === 'mode') {
+      return { mode: brief.mode, whereToGo: { modeSwitch: brief.whereToGo.modeSwitch, menu: brief.whereToGo.menu } };
+    }
     return brief;
+  }
+
+  if (name === 'guide_owner') {
+    const destination = String(input?.destination || 'orders');
+    const title = String(input?.title || 'Next steps').trim().slice(0, 120);
+    const steps = Array.isArray(input?.steps)
+      ? input.steps.map((s) => String(s || '').trim()).filter(Boolean).slice(0, 8)
+      : [];
+    const tip = String(input?.tip || '').trim().slice(0, 400) || null;
+    bag.guide = { destination, title, steps, tip };
+    bag.tier = Math.max(bag.tier || 1, 1);
+    return { ok: true, guide: bag.guide };
   }
 
   if (name === 'propose_draft') {
@@ -408,17 +559,25 @@ async function executeTool(name, input, ctx, bag) {
       if (!itemId && ctx.lowStock[0]) itemId = ctx.lowStock[0].id;
       payload = { itemId, available: input?.available !== false };
     } else if (actionType === 'create_catalog_item') {
-      const name = String(input?.itemName || 'New item').trim().slice(0, 120);
+      const nameItem = String(input?.itemName || 'New item').trim().slice(0, 120);
       const price = Math.max(0, Number(input?.price) || 0);
       const descriptionText = String(input?.itemDescription || input?.description || '').trim().slice(0, 800);
       const categoryName = String(input?.categoryName || '').trim().slice(0, 80) || null;
-      payload = { name, price, description: descriptionText, categoryName, mode: ctx.mode };
+      payload = { name: nameItem, price, description: descriptionText, categoryName, mode: ctx.mode };
       bag.draft = {
         kind: 'catalog_item',
-        title: name,
-        body: descriptionText || `${name} · ${naira(price)}`,
-        item: { name, description: descriptionText, price, categoryName }
+        title: nameItem,
+        body: descriptionText || `${nameItem} · ${naira(price)}`,
+        item: { name: nameItem, description: descriptionText, price, categoryName }
       };
+    } else if (actionType === 'switch_business_mode') {
+      const nextMode = normalizeBusinessMode(input?.businessMode || 'menu');
+      if (nextMode === ctx.mode) {
+        return { ok: true, note: `Already in ${nextMode} mode.`, skipped: true };
+      }
+      payload = { businessMode: nextMode };
+    } else if (actionType === 'tap_room_on' || actionType === 'tap_room_off' || actionType === 'tap_room_extend') {
+      payload = {};
     } else {
       return { error: 'Unsupported actionType' };
     }
@@ -445,20 +604,16 @@ async function executeTool(name, input, ctx, bag) {
 }
 
 function buildSystemPrompt(ctx) {
+  const tap = ctx.tap || {};
   return [
-    'You are ZuriQO, the in-dashboard AI for ZURI — helping a business owner with menus, shops, and ticketing.',
-    'Help with anything ZURI can do: orders, catalog/menu/tickets, payouts awareness, Zuri Assist payment matching, Tap, QR storefront, analytics, drafts, and multi-step agents.',
-    'You are not a general web search assistant. Stay within ZuriQO product capabilities.',
-    '',
-    'Trust rules:',
-    '- Tier 1: answer from tools/data; nothing changes.',
-    '- Tier 2: drafts only. For new catalog items, use propose_draft kind=catalog_item so the owner can Publish.',
-    '- Tier 3: any mutation must go through propose_write; never claim you already changed data.',
-    '- Tier 4: use run_agent for multi-step workflows.',
-    '',
-    'Be concise (2–5 short sentences). Prefer tools once, then answer. Use Naira (₦) for money.',
+    'You are ZuriQO, the in-dashboard AI for ZURI — menus, shops, ticketing, Zuri Tap, Assist, QR, and payouts.',
+    'You coach in real time: use get_dashboard_data for a live snapshot, then guide_owner so the owner knows exactly where to tap.',
+    'Business modes: menu (food/service), shop (retail catalog), ticketing (events). Switching mode uses propose_write actionType=switch_business_mode (confirm first).',
+    'Zuri Tap: in-venue pay-by-code for saved-card guests (Growth+ + verified bank). Turn room on/off/extend via propose_write tap_room_*. Enhance Tap ideas (table scripts, staff roles, when to rotate codes, pairing with QR).',
+    'Never claim a change already happened — mutations need Confirm. Prefer short answers (2–6 sentences) plus a guide when teaching.',
     `Business: ${ctx.business?.name || 'Business'} · mode: ${ctx.mode} · plan: ${ctx.business?.plan || 'unknown'}`,
-    `Quick snapshot: today ${ctx.paidToday.length} paid / ${naira(ctx.revenueToday)}; open ${ctx.openOrders.length}; low-stock ${ctx.lowStock.length}.`
+    `Tap: ${tap.enabled ? 'LIVE' : 'off'}${tap.code ? ` · code ${tap.code}` : ''} · eligible=${tap.eligible ? 'yes' : 'no'} (planOk=${tap.planOk}, bankOk=${tap.bankOk})`,
+    `Snapshot: today ${ctx.paidToday.length} paid / ${naira(ctx.revenueToday)}; open ${ctx.openOrders.length}; low-stock ${ctx.lowStock.length}.`
   ].join('\n');
 }
 
@@ -519,6 +674,169 @@ function tryInstantChat(ctx, message, preferredTier) {
       .map((m) => `• **${m.name}**${m.stock_on_hand != null ? ` (${m.stock_on_hand} left)` : ' (marked unavailable)'}`)
       .join('\n');
     return { tier: 1, reply: `Low stock / unavailable:\n${lines}` };
+  }
+
+  if (/snapshot|what should i (do|focus)|status report|how.?s (my )?business|dashboard overview/i.test(lower)) {
+    const tap = ctx.tap || {};
+    const next =
+      !tap.planOk
+        ? 'Next: upgrade to Growth for Zuri Tap + analytics.'
+        : !tap.bankOk
+          ? 'Next: verify your bank in Payouts & billing, then turn Tap on.'
+          : !tap.enabled
+            ? 'Next: turn Zuri Tap on for walk-up saved-card pay.'
+            : ctx.openOrders.length
+              ? `Next: clear ${ctx.openOrders.length} open order(s) on the Orders tab.`
+              : 'Next: check Analytics or ask me to draft a promo.';
+    return {
+      tier: 1,
+      reply: [
+        `**Live snapshot** · mode **${ctx.mode}** · plan **${ctx.business?.plan || 'free'}**`,
+        `Today **${ctx.paidToday.length}** paid (${naira(ctx.revenueToday)}) · open **${ctx.openOrders.length}** · low-stock **${ctx.lowStock.length}**`,
+        `Zuri Tap: **${tap.enabled ? 'LIVE' : 'off'}**${tap.code ? ` · code \`${tap.code}\`` : ''}`,
+        next
+      ].join('\n'),
+      guide: {
+        destination: tap.enabled || !tap.eligible ? 'orders' : tap.bankOk ? 'tap' : 'payment',
+        title: 'Suggested next screen',
+        steps: [next, 'Tap “Take me there” and I’ll open the right place.'],
+        tip: null
+      }
+    };
+  }
+
+  if (/switch.*(to )?(shop|menu|ticket)|change.*(mode|to )(shop|menu|ticket)|set (mode )?to (shop|menu|ticket)/i.test(lower)) {
+    let next = 'menu';
+    if (/ticket/i.test(lower)) next = 'ticketing';
+    else if (/shop|catalog|retail/i.test(lower)) next = 'shop';
+    if (next === ctx.mode) {
+      return { tier: 1, reply: `You’re already in **${next}** mode.` };
+    }
+    return {
+      tier: 3,
+      reply: `Ready to switch storefront type to **${next}**. Confirm to apply — your ${ctx.mode} catalog stays saved.`,
+      proposedAction: {
+        id: `pa_${Date.now().toString(36)}`,
+        actionType: 'switch_business_mode',
+        label: `Switch to ${next}`,
+        description: `Change business mode from ${ctx.mode} to ${next}.`,
+        payload: { businessMode: next }
+      }
+    };
+  }
+
+  if (/turn (on |off )?tap|zuri tap|enable tap|disable tap|tap room|start tap|stop tap/i.test(lower)) {
+    const tap = ctx.tap || {};
+    const wantOff = /turn off|disable|stop tap|end tap|close tap/i.test(lower);
+    const wantExtend = /extend|keep.?alive|rotate.?window|more time/i.test(lower);
+    if (wantOff) {
+      if (!tap.enabled) return { tier: 1, reply: 'Zuri Tap is already off.' };
+      return {
+        tier: 3,
+        reply: 'Ready to turn **Zuri Tap off**. Guests in the room will need a new session later. Confirm to apply.',
+        proposedAction: {
+          id: `pa_${Date.now().toString(36)}`,
+          actionType: 'tap_room_off',
+          label: 'Turn Zuri Tap off',
+          description: 'Close the live Tap room for this business.',
+          payload: {}
+        }
+      };
+    }
+    if (wantExtend) {
+      if (!tap.enabled) {
+        return { tier: 1, reply: 'Tap isn’t live yet — ask me to turn it on first.' };
+      }
+      return {
+        tier: 3,
+        reply: 'Ready to **extend** the live Tap window without changing staff codes. Confirm to apply.',
+        proposedAction: {
+          id: `pa_${Date.now().toString(36)}`,
+          actionType: 'tap_room_extend',
+          label: 'Extend Zuri Tap',
+          description: 'Keep the Tap room live longer.',
+          payload: {}
+        }
+      };
+    }
+    if (tap.enabled) {
+      return {
+        tier: 1,
+        reply: `Zuri Tap is **LIVE**${tap.code ? ` · staff code \`${tap.code}\`` : ''}. Share the code with floor staff; guests pay from the Tap app.`,
+        guide: {
+          destination: 'tap',
+          title: 'Use Tap on the floor',
+          steps: [
+            'Show the Tap toggle / codes at the top of the dashboard.',
+            'Give each waiter the staff code (or their own code in Settings).',
+            'Ask guests to open Zuri Tap, enter the code, then send a payment request from Orders.'
+          ],
+          tip: 'Idea: print table tents “Pay with Zuri Tap — ask your server for the code.”'
+        }
+      };
+    }
+    if (!tap.eligible) {
+      return {
+        tier: 1,
+        reply: !tap.planOk
+          ? 'Zuri Tap needs **Growth** or above. I can open Payouts & billing so you can upgrade.'
+          : 'Verify your **payout bank** in Payouts & billing before turning Tap on.',
+        guide: {
+          destination: 'payment',
+          title: 'Unlock Zuri Tap',
+          steps: [
+            !tap.planOk ? 'Open Payouts & billing and upgrade to Growth.' : 'Open Payouts & billing.',
+            'Verify your bank account name.',
+            'Come back and ask me to turn Zuri Tap on.'
+          ],
+          tip: 'Tap lets seated guests pay with a saved card using a short room code — no QR scan at the table.'
+        }
+      };
+    }
+    return {
+      tier: 3,
+      reply: 'Ready to **turn Zuri Tap on** so guests can join with a staff code. Confirm to go live.',
+      proposedAction: {
+        id: `pa_${Date.now().toString(36)}`,
+        actionType: 'tap_room_on',
+        label: 'Turn Zuri Tap on',
+        description: 'Open a live Tap room for in-venue saved-card payments.',
+        payload: {}
+      }
+    };
+  }
+
+  if (/where (is|do i)|how do i (open|find|get to)|take me to|show me (the )?(orders|menu|tap|qr|analytics|settings|payout)/i.test(lower)) {
+    let destination = 'orders';
+    if (/tap/i.test(lower)) destination = 'tap';
+    else if (/analytics|sales chart/i.test(lower)) destination = 'analytics';
+    else if (/qr/i.test(lower)) destination = 'qr';
+    else if (/menu|catalog|ticket type/i.test(lower)) destination = 'menu';
+    else if (/payout|billing|bank|upgrade|plan/i.test(lower)) destination = 'payment';
+    else if (/customiz|storefront|theme/i.test(lower)) destination = 'customize';
+    else if (/setting/i.test(lower)) destination = 'settings';
+    else if (/mode|shop|ticket/i.test(lower)) destination = 'mode_switch';
+    const map = {
+      orders: 'Orders tab',
+      menu: 'Menu / Catalog / Tickets tab',
+      qr: 'QR Code tab',
+      analytics: 'Analytics tab',
+      tap: 'Zuri Tap controls at the top of the dashboard',
+      payment: 'Payouts & billing',
+      customize: 'Customize storefront',
+      settings: 'Settings',
+      mode_switch: 'Profile menu — Menu / Shops / Tickets switcher'
+    };
+    return {
+      tier: 1,
+      reply: `Open **${map[destination] || destination}**. Tap **Take me there** and I’ll jump you over.`,
+      guide: {
+        destination,
+        title: `Go to ${map[destination] || destination}`,
+        steps: [`Open ${map[destination] || destination}.`, 'Follow the on-screen controls for what you need.'],
+        tip: null
+      }
+    };
   }
 
   if (
@@ -600,6 +918,7 @@ async function tryInstantAgent(ctx, message, preferredTier) {
   if (/reconcile|unmatched.*assist|assist transaction/i.test(lower)) agent = 'reconcile_assist';
   else if (/anomal/i.test(lower)) agent = 'anomaly';
   else if (/inventory/i.test(lower)) agent = 'inventory_menu';
+  else if (/tap (coach|setup|help)|coach.*tap|help.*tap/i.test(lower)) agent = 'tap_coach';
   else if (tierHint === 4 && /settlement|onboard/i.test(lower)) {
     agent = /settlement/i.test(lower) ? 'settlement' : 'onboarding';
   }
@@ -607,14 +926,26 @@ async function tryInstantAgent(ctx, message, preferredTier) {
     if (/reconcile/i.test(lower)) agent = 'reconcile_assist';
     else if (/anomal/i.test(lower)) agent = 'anomaly';
     else if (/inventory/i.test(lower)) agent = 'inventory_menu';
+    else if (/tap/i.test(lower)) agent = 'tap_coach';
   }
   if (!agent) return null;
   const result = await runAgentTool(agent, ctx);
-  return {
+  const out = {
     tier: 4,
     reply: result.note || result.agentRun?.summary || 'Agent finished.',
     agentRun: result.agentRun
   };
+  if (agent === 'tap_coach') {
+    const tap = ctx.tap || {};
+    out.guide = {
+      destination: !tap.planOk || !tap.bankOk ? 'payment' : 'tap',
+      title: 'Zuri Tap — what to do now',
+      steps: (result.agentRun?.steps || []).map((s) => s.label).filter(Boolean).slice(0, 6),
+      tip:
+        'Enhance Tap: one staff code per section (bar / floor), table tents with “Ask for the Tap code,” and extend the room before busy rushes.'
+    };
+  }
+  return out;
 }
 
 async function handleZuriQoChat({ businessId, message, preferredTier, history }) {
@@ -640,7 +971,7 @@ async function handleZuriQoChat({ businessId, message, preferredTier, history })
 
   const anthropic = new (require('@anthropic-ai/sdk'))({ apiKey });
   const model = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
-  const bag = { tier: 1, draft: null, proposedAction: null, agentRun: null };
+  const bag = { tier: 1, draft: null, proposedAction: null, agentRun: null, guide: null };
 
   const prior = Array.isArray(history)
     ? history
@@ -717,7 +1048,8 @@ async function handleZuriQoChat({ businessId, message, preferredTier, history })
         reply,
         draft: bag.draft || undefined,
         proposedAction: bag.proposedAction || undefined,
-        agentRun: bag.agentRun || undefined
+        agentRun: bag.agentRun || undefined,
+        guide: bag.guide || undefined
       }
     };
   } catch (err) {
@@ -885,6 +1217,73 @@ async function confirmZuriQoAction({ businessId, actionType, payload }) {
         refreshMenu: true
       }
     };
+  }
+
+  if (actionType === 'switch_business_mode') {
+    const nextMode = normalizeBusinessMode(payload?.businessMode || 'menu');
+    if (nextMode === mode) {
+      return { data: { ok: true, message: `Already in ${nextMode} mode.`, businessMode: nextMode } };
+    }
+    const { error } = await supabase.from('businesses').update({ business_mode: nextMode }).eq('id', businessId);
+    if (error) {
+      console.error('[ZURI] switch_business_mode', error);
+      return { error: 'Could not switch storefront type. Please try again.', status: 500 };
+    }
+    try {
+      const { invalidateBusinessReads } = require('./publicReadCache');
+      invalidateBusinessReads(businessId);
+    } catch {
+      /* optional */
+    }
+    return {
+      data: {
+        ok: true,
+        message: `Switched to **${nextMode}** mode. Open the Menu tab to edit that catalog.`,
+        businessMode: nextMode,
+        refreshMenu: true,
+        refreshBusiness: true
+      }
+    };
+  }
+
+  if (actionType === 'tap_room_on' || actionType === 'tap_room_off' || actionType === 'tap_room_extend') {
+    try {
+      const { turnRoomOn, turnRoomOff, extendRoom } = require('./tapRooms');
+      const { getBusinessPlan, canAccessAnalytics } = require('./plans');
+      if (actionType === 'tap_room_off') {
+        await turnRoomOff(businessId);
+        return { data: { ok: true, message: 'Zuri Tap is off.', refreshTap: true, tapEnabled: false } };
+      }
+      const plan = await getBusinessPlan(businessId);
+      if (!canAccessAnalytics(plan)) {
+        return { error: 'Zuri Tap requires Growth plan or above.', status: 403 };
+      }
+      const { data: bizRow } = await supabase
+        .from('businesses')
+        .select('bank_verified_at, account_status')
+        .eq('id', businessId)
+        .maybeSingle();
+      if (!bizRow?.bank_verified_at) {
+        return { error: 'Verify your payout bank account before turning on Zuri Tap.', status: 403 };
+      }
+      const room = actionType === 'tap_room_extend' ? await extendRoom(businessId) : await turnRoomOn(businessId);
+      return {
+        data: {
+          ok: true,
+          message:
+            actionType === 'tap_room_extend'
+              ? `Tap window extended${room?.staffCodes?.[0]?.code ? ` · code ${room.staffCodes[0].code}` : ''}.`
+              : `Zuri Tap is live${room?.staffCodes?.[0]?.code ? ` · staff code ${room.staffCodes[0].code}` : ''}.`,
+          refreshTap: true,
+          tapEnabled: true,
+          tapExpiresAt: room?.expiresAt || null,
+          tapCode: room?.staffCodes?.[0]?.code || room?.code || null
+        }
+      };
+    } catch (err) {
+      console.error('[ZURI] tap action', err?.message || err);
+      return { error: 'Could not update Zuri Tap right now. Please try again.', status: 500 };
+    }
   }
 
   return { error: 'Unknown action', status: 400 };

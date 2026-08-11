@@ -18,9 +18,9 @@ export function isOpsAiTier(plan: string | undefined | null): boolean {
   return ['scale', 'zuri_plus', 'enterprise'].includes(plan)
 }
 
-/** Guest-facing AI menu personalization — all plans (tease with other paid gates elsewhere). */
-export function isGuestAiMenuTier(_plan?: string | null): boolean {
-  return true
+/** Guest-facing AI menu personalization — Growth+ (with storefront customizer). */
+export function isGuestAiMenuTier(plan?: string | null): boolean {
+  return isGrowthPlusPlan(plan)
 }
 
 /** ZuriQO chat — all plans; server enforces daily AI credits. */

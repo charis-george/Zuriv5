@@ -17,7 +17,8 @@ const {
 const {
   canAccessGuestAiStorefront,
   GUEST_AI_STOREFRONT_DISABLED,
-  canUseStorefrontHeroBanner
+  canUseStorefrontHeroBanner,
+  canAccessAnalytics
 } = require('../lib/plans');
 const { canAcceptOrders, statusMessage, normalizeAccountStatus } = require('../lib/businessStatus');
 const {
@@ -367,7 +368,18 @@ router.get('/business/:businessId', async (req, res) => {
 
     let storefrontConfig = rawCfg;
     let storefrontDetails = rawDet;
-    if (!guestAi) {
+
+    const placeholderTagline = /^fresh,?\s*fast,?\s*and\s*loved\s*by\s*locals\.?$/i;
+    if (placeholderTagline.test(String(storefrontDetails.tagline || '').trim())) {
+      storefrontDetails = { ...storefrontDetails, tagline: '' };
+    }
+
+    // Customization (taglines, hero, AI personalization) unlocks on Growth+
+    if (!canAccessAnalytics(plan)) {
+      storefrontDetails = { ...storefrontDetails, tagline: '' };
+      storefrontConfig = { ...storefrontConfig, aiGuest: { ...GUEST_AI_STOREFRONT_DISABLED } };
+      delete storefrontConfig.heroBannerUrl;
+    } else if (!guestAi) {
       storefrontConfig = { ...rawCfg, aiGuest: { ...GUEST_AI_STOREFRONT_DISABLED } };
       if (storefrontDetails.menuTranslations) {
         const { menuTranslations: _omit, ...rest } = storefrontDetails;
@@ -393,7 +405,7 @@ router.get('/business/:businessId', async (req, res) => {
       activeStorefrontId: activeProfile?.id || null,
       activeStorefrontSlug: activeProfile?.slug || null,
       businessMode: business.business_mode || 'menu',
-      paymentProvider: business.payment_provider === 'monnify' ? 'monnify' : 'paystack',
+      paymentProvider: 'paystack',
       accountStatus: normalizeAccountStatus(business.account_status),
       scaleGuestMenuTags
     };

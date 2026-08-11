@@ -214,7 +214,10 @@ function PricingPage(): JSX.Element {
               </div>
 
               {/* Growth */}
-              <div className="bg-white rounded-2xl p-6 border border-blue-400 flex flex-col">
+              <div className="bg-white rounded-2xl p-6 border border-blue-400 flex flex-col relative lg:scale-[1.02]">
+                <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-zuri-yellow text-zuri-black text-xs font-semibold px-2.5 py-0.5 rounded-lg">
+                  Recommended
+                </div>
                 <div className="text-center mb-6">
                   <span className="inline-block w-3 h-3 rounded-full bg-blue-500 mb-2" aria-hidden />
                   <h2 className="text-lg font-medium text-zuri-black">Growth</h2>
@@ -264,10 +267,7 @@ function PricingPage(): JSX.Element {
               </div>
 
               {/* Scale */}
-              <div className="bg-zuri-black text-white rounded-2xl p-6 border border-purple-400 flex flex-col relative lg:scale-[1.02]">
-                <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-zuri-yellow text-zuri-black text-xs font-semibold px-2.5 py-0.5 rounded-lg">
-                  Recommended
-                </div>
+              <div className="bg-zuri-black text-white rounded-2xl p-6 border border-purple-400 flex flex-col">
                 <div className="text-center mb-6">
                   <span className="inline-block w-3 h-3 rounded-full bg-purple-400 mb-2" aria-hidden />
                   <h2 className="text-lg font-medium">Scale</h2>

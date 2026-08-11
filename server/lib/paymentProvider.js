@@ -2,10 +2,8 @@
  * Resolve business payment provider and route payouts.
  */
 
-const { getDb } = require('../database');
 const paystackTransfer = require('./paystack-transfer');
 const monnifyTransfer = require('./monnify-transfer');
-const { isMonnifyConfigured } = require('./monnify');
 
 const VALID_PROVIDERS = new Set(['paystack', 'monnify']);
 
@@ -14,19 +12,12 @@ function normalizeProvider(value) {
   return VALID_PROVIDERS.has(v) ? v : 'paystack';
 }
 
-async function getBusinessPaymentProvider(businessId) {
-  const supabase = getDb();
-  const { data, error } = await supabase
-    .from('businesses')
-    .select('payment_provider')
-    .eq('id', businessId)
-    .single();
-  if (error || !data) return 'paystack';
-  return normalizeProvider(data.payment_provider);
+async function getBusinessPaymentProvider(_businessId) {
+  return 'paystack';
 }
 
 function providerAvailable(provider) {
-  if (provider === 'monnify') return isMonnifyConfigured();
+  if (provider === 'monnify') return false;
   return Boolean(process.env.PAYSTACK_SECRET_KEY);
 }
 

@@ -179,7 +179,7 @@ function BusinessStorefrontCustomizer(): JSX.Element {
         if (cfg) setConfig((prev) => ({ ...prev, ...cfg }))
         const loadedDetails: StorefrontDetails = {
           name: dt?.name || res.data.name || 'Your store',
-          tagline: dt?.tagline || 'Fresh, fast, and loved by locals',
+          tagline: dt?.tagline || '',
           cuisineTags: Array.isArray(dt?.cuisineTags) ? dt.cuisineTags : [],
           contactPhone: dt?.contactPhone || res.data.phone || '',
           instagramHandle: dt?.instagramHandle || '',
@@ -198,7 +198,7 @@ function BusinessStorefrontCustomizer(): JSX.Element {
     setConfig((prev) => ({ ...prev, ...(profile.config ?? {}) }))
     const loadedDetails: StorefrontDetails = {
       name: profile.details?.name || business?.name || 'Your store',
-      tagline: profile.details?.tagline || 'Fresh, fast, and loved by locals',
+      tagline: profile.details?.tagline || '',
       cuisineTags: Array.isArray(profile.details?.cuisineTags) ? profile.details.cuisineTags : [],
       contactPhone: profile.details?.contactPhone || business?.phone || '',
       instagramHandle: profile.details?.instagramHandle || '',
@@ -1256,7 +1256,7 @@ function BusinessStorefrontCustomizer(): JSX.Element {
                           </div>
                           {previewAg.localPaymentHints ? (
                             <p className="text-[11px] mt-3 leading-relaxed" style={{ color: previewTheme.sub }}>
-                              Pay securely by card here. Your host may also offer MoMo or bank transfer for the bill — ask before you checkout.
+                              Pay securely by card at checkout.
                             </p>
                           ) : null}
                         </div>

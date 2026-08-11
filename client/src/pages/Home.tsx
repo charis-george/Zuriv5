@@ -460,7 +460,7 @@ function Home(): JSX.Element {
             <div>
               <h3 className="text-base md:text-lg font-medium text-zuri-black tracking-tight mb-1">Plans that scale with your AI ambition</h3>
               <p className="text-gray-600 text-sm leading-relaxed font-normal">
-                From free menus with ZuriQO and guest personalization, to analytics on Growth — upgrade to Scale when you want unlimited AI credits plus live ops Assist.
+                From free menus with ZuriQO, to analytics and guest AI on Growth — upgrade to Scale when you want unlimited AI credits plus live ops Assist.
               </p>
             </div>
             <Link to="/pricing" className="shrink-0 inline-flex items-center gap-2 text-sm font-medium rounded-full border border-gray-300 text-zuri-black px-6 py-2.5 hover:border-zuri-orange hover:text-zuri-orange transition-colors">
@@ -707,7 +707,10 @@ function Home(): JSX.Element {
             </div>
 
             {/* Growth */}
-            <div className="bg-white rounded-2xl p-6 border border-blue-400 flex flex-col">
+            <div className="bg-white rounded-2xl p-6 border border-blue-400 flex flex-col relative scale-[1.02]">
+              <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-zuri-yellow text-zuri-black text-xs font-semibold px-2.5 py-0.5 rounded-lg">
+                Recommended
+              </div>
               <div className="text-center mb-6">
                 <span className="inline-block w-3 h-3 rounded-full bg-blue-500 mb-2" aria-hidden />
                 <h3 className="text-lg font-medium text-zuri-black">Growth</h3>
@@ -752,14 +755,11 @@ function Home(): JSX.Element {
               </div>
             </div>
 
-            {/* Scale flagship tier */}
+            {/* Scale */}
             <div
-              className="bg-zuri-black text-white rounded-2xl p-6 border border-purple-400 flex flex-col relative scale-[1.02]"
+              className="bg-zuri-black text-white rounded-2xl p-6 border border-purple-400 flex flex-col"
               style={{ transitionDelay: '280ms' }}
             >
-              <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-zuri-yellow text-zuri-black text-xs font-semibold px-2.5 py-0.5 rounded-lg">
-                Recommended
-              </div>
               <div className="text-center mb-6">
                 <span className="inline-block w-3 h-3 rounded-full bg-purple-400 mb-2" aria-hidden />
                 <h3 className="text-lg font-medium">Scale</h3>

@@ -153,20 +153,6 @@ async function initializeMonnifyOrder({ email, orderTotal, orderId, businessId, 
 }
 
 async function initializeOrderPayment(params) {
-  const provider = normalizeProvider(params.paymentProvider);
-  if (!providerAvailable(provider)) {
-    const err = new Error(provider === 'monnify' ? 'Monnify payment not configured' : 'Payment not configured');
-    err.status = 503;
-    throw err;
-  }
-  if (provider === 'monnify') {
-    if (!isMonnifyConfigured()) {
-      const err = new Error('Monnify payment not configured');
-      err.status = 503;
-      throw err;
-    }
-    return initializeMonnifyOrder(params);
-  }
   if (!appPaystack) {
     const err = new Error('Payment not configured');
     err.status = 503;
@@ -292,15 +278,6 @@ async function initializeMonnifySubscription({ email, reference, amountNaira, bu
 }
 
 async function initializeSubscriptionPayment(params) {
-  const provider = normalizeProvider(params.paymentProvider);
-  if (!providerAvailable(provider)) {
-    const err = new Error(provider === 'monnify' ? 'Monnify payment not configured' : 'Payment not configured');
-    err.status = 503;
-    throw err;
-  }
-  if (provider === 'monnify') {
-    return initializeMonnifySubscription(params);
-  }
   if (!appPaystack) {
     const err = new Error('Payment not configured');
     err.status = 503;

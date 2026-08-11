@@ -17,7 +17,7 @@ export function newStorefrontProfileId(): string {
 export function defaultStorefrontDetails(name: string): StorefrontDetails {
   return {
     name: name.trim() || 'Your store',
-    tagline: 'Fresh, fast, and loved by locals',
+    tagline: '',
     cuisineTags: []
   }
 }

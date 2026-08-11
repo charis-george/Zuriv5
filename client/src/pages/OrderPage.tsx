@@ -26,6 +26,7 @@ import { preloadZuriPayment, startZuriPayment, type ZuriPaymentInitializePayload
 import { clearStorefrontCache, readStorefrontCache, writeStorefrontCache } from '../lib/storefrontCache'
 import { usePageSeo } from '../lib/seo'
 import { formatUserFacingError } from '../lib/formatApiError'
+import { isGrowthPlusPlan, isGuestAiMenuTier } from '../lib/planAccess'
 import {
   getMinTicketQty,
   getMaxTicketQty,
@@ -254,12 +255,29 @@ function OrderPage(): JSX.Element {
   )
   const storefrontDetails: StorefrontDetails = {
     ...DEFAULT_STOREFRONT_DETAILS,
-    ...(activeStorefrontProfile?.details ?? business?.storefrontDetails ?? {})
+    ...(activeStorefrontProfile?.details ?? business?.storefrontDetails ?? {}),
+    ...(!isGrowthPlusPlan(business?.plan)
+      ? { tagline: '' }
+      : /^fresh,?\s*fast,?\s*and\s*loved\s*by\s*locals\.?$/i.test(
+            String(activeStorefrontProfile?.details?.tagline || business?.storefrontDetails?.tagline || '').trim()
+          )
+        ? { tagline: '' }
+        : {})
   }
   const theme = getStorefrontTheme(storefrontConfig)
   const isTicketing = business?.businessMode === 'ticketing'
   const brand = storefrontConfig.brandColor || '#f97316'
-  const ag = storefrontConfig.aiGuest ?? {}
+  const ag = isGuestAiMenuTier(business?.plan)
+    ? storefrontConfig.aiGuest ?? {}
+    : {
+        trendingOnMenu: false,
+        intelligentUpsell: false,
+        personalisedRecs: false,
+        tasteSortEnabled: false,
+        dietaryPromptEnabled: false,
+        localPaymentHints: false,
+        sharedTableHints: false
+      }
   const storefrontName = storefrontDetails.name?.trim() || business?.name?.trim() || 'Storefront'
   const activeEvent = isTicketing ? findEventPage(storefrontDetails.eventPages, activeEventSlug) : null
   const displayPhone = storefrontDetails.contactPhone?.trim() || business?.phone?.trim() || ''
@@ -1500,7 +1518,7 @@ function OrderPage(): JSX.Element {
 
             {/* Payment section — saved cards are Paystack-only */}
             <div className="space-y-4 mb-6">
-              {business?.paymentProvider !== 'monnify' && savedCards.length > 0 && (
+              {savedCards.length > 0 && (
                 <div className="text-left">
                   <p className="text-sm font-semibold text-zuri-black mb-2">Saved cards</p>
                   <div className="space-y-2">
@@ -1530,7 +1548,7 @@ function OrderPage(): JSX.Element {
                   </div>
                 </div>
               )}
-              {business?.paymentProvider !== 'monnify' && selectedSavedCardId === '' && (
+              {selectedSavedCardId === '' && (
                 <label className="flex items-center gap-2 text-left">
                   <input
                     type="checkbox"
@@ -1784,7 +1802,7 @@ function OrderPage(): JSX.Element {
               </div>
               {ag.localPaymentHints ? (
                 <p className="text-[11px] mt-3 leading-relaxed" style={{ color: theme.sub }}>
-                  Pay securely by card here. Your host may also offer MoMo or bank transfer for the bill — ask before you checkout.
+                  Pay securely by card at checkout.
                 </p>
               ) : null}
             </div>

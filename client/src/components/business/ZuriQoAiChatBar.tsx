@@ -6,6 +6,7 @@ import {
   ZURIQO_CHIPS,
   ZURIQO_TIER_META,
   type ZuriQoChip,
+  type ZuriQoGuide,
   type ZuriQoTier
 } from '../../lib/zuriQoAiPrompts'
 
@@ -40,6 +41,7 @@ export type ZuriQoMessage = {
     steps: ZuriQoAgentStep[]
     summary: string
   }
+  guide?: ZuriQoGuide
   confirmed?: boolean
 }
 
@@ -48,6 +50,17 @@ type AiDailyQuota = {
   limit: number | null
   remaining: number | null
   unlimited: boolean
+}
+
+type ConfirmResult = {
+  message?: string
+  refreshMenu?: boolean
+  refreshBusiness?: boolean
+  refreshTap?: boolean
+  businessMode?: string
+  tapEnabled?: boolean
+  tapExpiresAt?: string | null
+  tapCode?: string | null
 }
 
 type ZuriQoAiChatBarProps = {
@@ -60,6 +73,9 @@ type ZuriQoAiChatBarProps = {
   onUpgradeClick?: () => void
   businessMode?: string
   onCatalogPublished?: () => void
+  onGuideNavigate?: (destination: string) => void
+  onBusinessModeChanged?: (mode: string) => void
+  onTapRefreshed?: (info?: { tapEnabled?: boolean; tapExpiresAt?: string | null; tapCode?: string | null }) => void
 }
 
 
@@ -181,7 +197,10 @@ export function ZuriQoAiChatBar({
   canUseAi = true,
   onUpgradeClick,
   businessMode,
-  onCatalogPublished
+  onCatalogPublished,
+  onGuideNavigate,
+  onBusinessModeChanged,
+  onTapRefreshed
 }: ZuriQoAiChatBarProps): JSX.Element | null {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -196,9 +215,11 @@ export function ZuriQoAiChatBar({
 
   const chips = ZURIQO_CHIPS.filter((c) => {
     if (tierFilter !== 'all' && c.tier !== tierFilter) return false
-    if (businessMode !== 'ticketing' && /ticket|check.?in/i.test(c.prompt) && c.id.includes('ticket')) return false
+    // Keep mode-switch chips visible even when not currently on that mode
+    if (c.id.startsWith('switch-')) return true
+    if (businessMode !== 'ticketing' && /check.?in/i.test(c.prompt)) return false
     return true
-  }).slice(0, tierFilter === 'all' ? 6 : 8)
+  }).slice(0, tierFilter === 'all' ? 8 : 10)
 
   const applyQuota = (q: AiDailyQuota | undefined | null) => {
     if (!q) return
@@ -303,7 +324,8 @@ export function ZuriQoAiChatBar({
         tier: data.tier,
         draft: data.draft,
         proposedAction: data.proposedAction,
-        agentRun: data.agentRun
+        agentRun: data.agentRun,
+        guide: data.guide
       })
     } catch (err: unknown) {
       const ax = err as { response?: { status?: number; data?: { quota?: AiDailyQuota; error?: string } } }
@@ -333,7 +355,7 @@ export function ZuriQoAiChatBar({
     if (confirmingId) return
     setConfirmingId(msgId)
     try {
-      const { data } = await axios.post(
+      const { data } = await axios.post<ConfirmResult>(
         '/api/ai/chat/confirm',
         {
           businessId,
@@ -346,8 +368,35 @@ export function ZuriQoAiChatBar({
         prev.map((m) => (m.id === msgId ? { ...m, confirmed: true } : m))
       )
       pushAssistant({ text: String(data?.message || 'Change applied.'), tier: 3 })
-      if (data?.refreshMenu || action.actionType === 'create_catalog_item' || action.actionType === 'create_item_draft') {
+      if (
+        data?.refreshMenu ||
+        action.actionType === 'create_catalog_item' ||
+        action.actionType === 'create_item_draft'
+      ) {
         onCatalogPublished?.()
+      }
+      if (data?.refreshBusiness || action.actionType === 'switch_business_mode') {
+        const mode =
+          data?.businessMode ||
+          (typeof action.payload?.businessMode === 'string' ? action.payload.businessMode : undefined)
+        if (mode) onBusinessModeChanged?.(mode)
+        else onCatalogPublished?.()
+      }
+      if (
+        data?.refreshTap ||
+        action.actionType === 'tap_room_on' ||
+        action.actionType === 'tap_room_off' ||
+        action.actionType === 'tap_room_extend'
+      ) {
+        onTapRefreshed?.({
+          tapEnabled: data?.tapEnabled,
+          tapExpiresAt: data?.tapExpiresAt,
+          tapCode: data?.tapCode
+        })
+        onGuideNavigate?.('tap')
+      }
+      if (action.actionType === 'switch_business_mode') {
+        onGuideNavigate?.('menu')
       }
     } catch (err: unknown) {
       const ax = err as { response?: { data?: unknown } }
@@ -514,7 +563,11 @@ export function ZuriQoAiChatBar({
                               ? 'Applying…'
                               : m.proposedAction.actionType === 'create_catalog_item'
                                 ? 'Publish'
-                                : 'Confirm'}
+                                : m.proposedAction.actionType === 'switch_business_mode'
+                                  ? 'Switch mode'
+                                  : m.proposedAction.actionType.startsWith('tap_room_')
+                                    ? 'Confirm Tap'
+                                    : 'Confirm'}
                           </button>
                           <button
                             type="button"
@@ -552,6 +605,34 @@ export function ZuriQoAiChatBar({
                           ))}
                         </ul>
                         <p className="text-[11px] text-gray-600 mt-2 leading-relaxed">{m.agentRun.summary}</p>
+                      </div>
+                    ) : null}
+                    {m.guide ? (
+                      <div className="mt-2 rounded-xl border border-zuri-orange/25 bg-orange-50/80 px-3 py-2.5 text-left">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-zuri-orange">Live guide</p>
+                        <p className="text-sm font-semibold text-zuri-black mt-0.5">{m.guide.title}</p>
+                        {m.guide.steps?.length ? (
+                          <ol className="mt-2 space-y-1 list-decimal list-inside text-[11px] text-gray-800">
+                            {m.guide.steps.map((step, i) => (
+                              <li key={`${m.id}_g_${i}`}>{step}</li>
+                            ))}
+                          </ol>
+                        ) : null}
+                        {m.guide.tip ? (
+                          <p className="mt-2 text-[11px] text-gray-600 leading-relaxed">
+                            <span className="font-semibold text-zuri-black">Idea · </span>
+                            {m.guide.tip}
+                          </p>
+                        ) : null}
+                        {onGuideNavigate ? (
+                          <button
+                            type="button"
+                            onClick={() => onGuideNavigate(m.guide!.destination)}
+                            className={`${BTN} mt-2.5 w-full rounded-lg bg-zuri-black text-white text-xs font-semibold px-3 py-2`}
+                          >
+                            Take me there
+                          </button>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>

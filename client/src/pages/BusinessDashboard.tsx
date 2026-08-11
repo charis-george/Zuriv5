@@ -1829,7 +1829,7 @@ function BusinessDashboard(): JSX.Element {
                         </span>
                       )}
                     </div>
-                    <div className="px-4 py-3 border-b border-gray-100">
+                    <div id="zuri-mode-switch" className="px-4 py-3 border-b border-gray-100">
                       <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Account</p>
                       <p className="text-xs text-gray-600 mb-2">Storefront for your customers</p>
                       <div className="flex rounded-xl border border-gray-200 overflow-hidden">
@@ -1960,7 +1960,7 @@ function BusinessDashboard(): JSX.Element {
       )}
 
       {(isGrowthPlusPlan(business?.plan)) && !isPhone && (
-        <div className="bg-white border-b border-gray-200">
+        <div id="zuri-tap-controls" className="bg-white border-b border-gray-200">
           <div className="max-w-6xl mx-auto px-4 py-3 flex flex-col items-center gap-2">
             <div className="flex items-center gap-3">
               <span className="text-sm font-medium text-zuri-black">Zuri Tap</span>
@@ -3100,7 +3100,6 @@ function BusinessDashboard(): JSX.Element {
                           ['personalisedRecs', 'AI recommendations', 'Zuri picks row on the menu.'],
                           ['tasteSortEnabled', 'Taste sorting', 'Reorder list when guests pick dietary prefs.'],
                           ['dietaryPromptEnabled', 'Dietary prefs', 'Vegetarian, meat-forward, no-dairy chips.'],
-                          ['localPaymentHints', 'Local payment hints', 'MoMo & bank-transfer nudges at checkout.'],
                           ['sharedTableHints', 'Shared table hints', 'Split-bill / shared-table copy.']
                         ] as const
                       ).map(([key, label, hint]) => (
@@ -4726,7 +4725,7 @@ function BusinessDashboard(): JSX.Element {
       subtitle={business?.email}
     >
       <div className="px-1 pb-2">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Storefront type</p>
+        <p id="zuri-mode-switch" className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Storefront type</p>
         <div className="flex rounded-xl border border-gray-200 overflow-hidden mb-4">
           <button type="button" disabled={businessModeSaving} onClick={() => void patchBusinessMode('menu')} className={`dashboard-btn flex-1 py-2.5 text-xs font-semibold ${business?.businessMode === 'menu' || !business?.businessMode ? 'bg-zuri-orange text-white' : 'bg-white text-gray-700'}`}>Menu</button>
           <button type="button" disabled={businessModeSaving} onClick={() => void patchBusinessMode('shop')} className={`dashboard-btn flex-1 py-2.5 text-xs font-semibold border-l border-gray-200 ${business?.businessMode === 'shop' ? 'bg-zuri-orange text-white' : 'bg-white text-gray-700'}`}>Shops</button>
@@ -4750,6 +4749,86 @@ function BusinessDashboard(): JSX.Element {
       onCatalogPublished={() => {
         fetchMenu()
         if (activeTab !== 'menu') setActiveTab('menu')
+      }}
+      onBusinessModeChanged={(mode) => {
+        setBusiness((prev) => (prev ? { ...prev, businessMode: mode as BusinessMode } : null))
+        fetchMenu()
+        setActiveTab('menu')
+      }}
+      onTapRefreshed={(info) => {
+        if (typeof info?.tapEnabled === 'boolean') {
+          setTapEnabled(info.tapEnabled)
+          setTapOptimisticOn(info.tapEnabled)
+        }
+        if (info?.tapExpiresAt !== undefined) setTapExpiresAt(info.tapExpiresAt || null)
+        if (!businessId) return
+        void axios
+          .get<{
+            enabled?: boolean
+            code: string | null
+            expiresAt?: string
+            staffCodes?: Array<{ id: string; code: string; label: string }>
+          }>(apiUrl(`/api/tap/room?businessId=${businessId}`), { headers: getAuthHeaders() })
+          .then((res) => {
+            const codes = res.data?.staffCodes || []
+            setTapStaffCodes(codes)
+            if (codes[0]?.id) setTapSelectedStaffId(codes[0].id)
+            if (typeof res.data?.enabled === 'boolean') {
+              setTapEnabled(!!res.data.enabled)
+              setTapOptimisticOn(!!res.data.enabled)
+            }
+            if (res.data?.expiresAt) setTapExpiresAt(res.data.expiresAt)
+          })
+          .catch(() => {})
+      }}
+      onGuideNavigate={(destination) => {
+        const dest = String(destination || '').toLowerCase()
+        if (dest === 'payment') {
+          setZuriQoOpen(false)
+          navigate(`/business/dashboard/${businessId}/payment`)
+          return
+        }
+        if (dest === 'customize') {
+          setZuriQoOpen(false)
+          navigate(`/business/dashboard/${businessId}/customize`)
+          return
+        }
+        if (dest === 'settings') {
+          setZuriQoOpen(false)
+          navigate(`/business/dashboard/${businessId}/settings`)
+          return
+        }
+        if (dest === 'mode_switch') {
+          if (isPhone) {
+            setNotificationsOpen(false)
+            setLogoMenuOpen(false)
+            setProfileOpen(true)
+          } else {
+            setProfileOpen(true)
+            window.setTimeout(() => {
+              document.getElementById('zuri-mode-switch')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            }, 80)
+          }
+          return
+        }
+        if (dest === 'tap') {
+          setActiveTab('orders')
+          if (isPhone) {
+            // Tap controls are desktop-first; keep chat open with steps
+            return
+          }
+          window.setTimeout(() => {
+            document.getElementById('zuri-tap-controls')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          }, 80)
+          return
+        }
+        if (dest === 'orders' || dest === 'menu' || dest === 'qr' || dest === 'analytics') {
+          if ((dest === 'analytics') && (business?.plan === 'free' || business?.plan === 'starter')) {
+            setActiveTab('orders')
+            return
+          }
+          setActiveTab(dest)
+        }
       }}
       onUpgradeClick={() => {
         setZuriQoOpen(false)

@@ -38,7 +38,7 @@ export type BillingInterval = 'monthly' | 'yearly'
 export type BusinessMode = 'menu' | 'ticketing' | 'shop'
 
 /** Customer checkout + payout gateway */
-export type PaymentProvider = 'paystack' | 'monnify'
+export type PaymentProvider = 'paystack'
 
 /** Guest order / ticket email branding (server-normalized) */
 export type ReceiptEmailConfig = {

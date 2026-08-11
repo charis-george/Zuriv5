@@ -431,7 +431,7 @@ async function buildBusinessPayload(req, business) {
       plan: effectivePlan,
       storedPlan: business.plan || 'free',
       paystackPublicKey,
-      paymentProvider: business.payment_provider === 'monnify' ? 'monnify' : 'paystack',
+      paymentProvider: 'paystack',
       logoUrl: business.logo_url || null,
       storefrontConfig: business.storefront_config || null,
       storefrontDetails: business.storefront_details || null,
@@ -555,7 +555,7 @@ router.patch('/:id', requireBusinessAuth, async (req, res) => {
       }
 
       try {
-        const provider = biz.payment_provider === 'monnify' ? 'monnify' : 'paystack';
+        const provider = 'paystack';
         const verified = await verifyBankAccount({
           accountNumber: acctNum,
           bankCode,
@@ -603,16 +603,10 @@ router.patch('/:id', requireBusinessAuth, async (req, res) => {
     }
     if (paymentProvider !== undefined) {
       const v = String(paymentProvider).toLowerCase();
-      if (v !== 'paystack' && v !== 'monnify') {
-        return res.status(400).json({ error: 'paymentProvider must be paystack or monnify' });
+      if (v !== 'paystack') {
+        return res.status(400).json({ error: 'Checkout and payouts use Paystack only.' });
       }
-      if (v === 'monnify') {
-        const { isMonnifyConfigured } = require('../lib/monnify');
-        if (!isMonnifyConfigured()) {
-          return res.status(503).json({ error: 'Monnify payouts aren’t available right now. Contact Zuri support or choose Paystack.' });
-        }
-      }
-      updates.payment_provider = v;
+      updates.payment_provider = 'paystack';
     }
     if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No fields to update' });
 
@@ -624,7 +618,7 @@ router.patch('/:id', requireBusinessAuth, async (req, res) => {
       .single();
     if (error) return res.status(500).json({ error: 'Update failed' });
 
-    if (isBankUpdate && data.bank_verified_at && data.payment_provider !== 'monnify') {
+    if (isBankUpdate && data.bank_verified_at) {
       ensurePaystackSubaccount(id).catch((err) =>
         console.error('Subaccount provisioning after bank verify', id, err)
       );
@@ -982,6 +976,10 @@ router.patch('/:id/ai-menu-settings', requireBusinessAuth, async (req, res) => {
     const plan = await getBusinessPlan(id);
     if (!plan) {
       return res.status(403).json({ error: 'Could not verify your plan.' });
+    }
+    const { canAccessGuestAiStorefront } = require('../lib/plans');
+    if (!canAccessGuestAiStorefront(plan)) {
+      return res.status(403).json({ error: 'Guest AI menu settings unlock on Growth and above.' });
     }
 
     const { data: row, error: fetchErr } = await supabase

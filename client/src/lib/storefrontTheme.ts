@@ -2,13 +2,13 @@ import type { AiGuestStorefrontConfig, StorefrontConfig } from '../types'
 import { ensureGoogleFontPairingLoaded, getFontPairing, normalizeFontPairingId } from './storefrontFontPairings'
 
 export const DEFAULT_AI_GUEST: AiGuestStorefrontConfig = {
-  trendingOnMenu: true,
-  intelligentUpsell: true,
-  personalisedRecs: true,
-  tasteSortEnabled: true,
+  trendingOnMenu: false,
+  intelligentUpsell: false,
+  personalisedRecs: false,
+  tasteSortEnabled: false,
   translationsEnabled: false,
-  dietaryPromptEnabled: true,
-  localPaymentHints: true,
+  dietaryPromptEnabled: false,
+  localPaymentHints: false,
   sharedTableHints: false
 }
 

@@ -81,9 +81,9 @@ function canAccessAnalytics(plan) {
   return plan !== PLANS.FREE && plan !== PLANS.STARTER;
 }
 
-/** Guest-facing AI menu personalization — available on all plans (usage-capped elsewhere where needed). */
-function canAccessGuestAiStorefront(_plan) {
-  return true;
+/** Guest-facing AI menu personalization — Growth+ (same unlock as storefront customizer). */
+function canAccessGuestAiStorefront(plan) {
+  return canAccessAnalytics(plan);
 }
 
 /** When guest AI is forcibly off (reserved for emergency kill-switch / future flags). */
