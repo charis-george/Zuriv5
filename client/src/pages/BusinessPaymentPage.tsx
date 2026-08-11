@@ -591,7 +591,7 @@ function BusinessPaymentPage(): JSX.Element {
           ) : null}
           <p className="text-gray-500 text-xs mt-4">
             Transaction fee:{' '}
-            {formatModeTransactionFee(business.businessMode === 'ticketing' ? 'ticketing' : 'menu')}.
+            {formatModeTransactionFee(business.businessMode || 'menu')}.
           </p>
         </div>
       </div>

@@ -17,8 +17,8 @@ const FAQ_GENERAL: FaqItem[] = [
     a: 'Go to Business login, choose sign up, and follow the steps. You can start on the Free plan and upgrade when you need photos, analytics, or a branded storefront.'
   },
   {
-    q: 'Do you support both menus and tickets?',
-    a: 'Yes. When you set up your business you choose Menus or Ticketing. You can switch modes from the dashboard; pricing stays on the same plan, while payout fees follow the mode (see comparison table).'
+    q: 'Do you support menus, shops, and tickets?',
+    a: 'Yes. When you set up your business you choose Menus, Shops (catalog), or Ticketing. You can switch modes from the dashboard; pricing stays on the same plan, while payout fees follow the mode (see comparison table).'
   },
   {
     q: 'What payment methods can my customers use?',
@@ -33,7 +33,7 @@ const FAQ_BILLING: FaqItem[] = [
   },
   {
     q: 'How do payout transaction fees work?',
-    a: `For ticketing storefronts we apply ${formatModeTransactionFee('ticketing')}; for menu storefronts we apply ${formatModeTransactionFee('menu')}, unless your account has a custom fee schedule.`
+    a: `For ticketing we apply ${formatModeTransactionFee('ticketing')}; for shops ${formatModeTransactionFee('shop')}; for menus ${formatModeTransactionFee('menu')}, unless your account has a custom fee schedule.`
   }
 ]
 
@@ -47,9 +47,9 @@ function PricingPage(): JSX.Element {
   const [openFaq, setOpenFaq] = useState<number>(0)
 
   usePageSeo({
-    title: 'ZURI Pricing | Menus, Ticketing & Growth Plans',
+    title: 'ZURI Pricing | Menus, Shops, Ticketing & Growth Plans',
     description:
-      'Compare ZURI plans: QR menus and ticketing, payouts, storefront customizer, AI tools, and transparent fees. Monthly or yearly billing.',
+      'Compare ZURI plans: QR menus, shop catalogs, and ticketing, payouts, storefront customizer, AI tools, and transparent fees. Monthly or yearly billing.',
     path: '/pricing',
     jsonLd: [organizationJsonLd]
   })
@@ -343,7 +343,7 @@ function PricingPage(): JSX.Element {
           <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
             <h2 className="text-2xl md:text-3xl font-medium text-zuri-black tracking-tight mb-2">Compare plans</h2>
             <p className="text-gray-600 text-sm md:text-base mb-8 max-w-2xl">
-              Core limits and fees at a glance. Ticketing and menu modes use different customer-facing flows; payout fees reflect the active mode.
+              Core limits and fees at a glance. Menu, shop, and ticketing modes use different customer-facing flows; payout fees reflect the active mode.
             </p>
             <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow-sm">
               <table className="min-w-[720px] w-full text-sm text-left border-collapse">
@@ -364,7 +364,7 @@ function PricingPage(): JSX.Element {
                     </td>
                   </tr>
                   <tr className="border-b border-gray-100">
-                    <td className="py-3 px-4">QR storefront (menu or tickets)</td>
+                    <td className="py-3 px-4">QR storefront (menu, shop, or tickets)</td>
                     <td className="py-3 px-3 text-center"><CheckCell ok /></td>
                     <td className="py-3 px-3 text-center"><CheckCell ok /></td>
                     <td className="py-3 px-3 text-center"><CheckCell ok /></td>
@@ -401,9 +401,10 @@ function PricingPage(): JSX.Element {
                     </td>
                   </tr>
                   <tr className="border-b border-gray-100">
-                    <td className="py-3 px-4">Transaction fee — menu &amp; ticketing storefronts</td>
+                    <td className="py-3 px-4">Transaction fee — by storefront mode</td>
                     <td className="py-3 px-3 text-center text-xs font-medium" colSpan={5}>
-                      Tickets: {formatModeTransactionFee('ticketing')} (menu: {formatModeTransactionFee('menu')})
+                      Tickets: {formatModeTransactionFee('ticketing')} · Shops: {formatModeTransactionFee('shop')} · Menu:{' '}
+                      {formatModeTransactionFee('menu')}
                     </td>
                   </tr>
                   <tr className="border-b border-gray-100">

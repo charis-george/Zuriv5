@@ -5,6 +5,7 @@ import { PLAN_LABELS } from '../../types'
 import { clearBusinessAuth } from '../../lib/businessAuthStorage'
 import { isAiInsightsTier } from '../../lib/planAccess'
 import { useMobileShellViewport } from '../../hooks/useMobileShellViewport'
+import { catalogLabelForMode } from '../../lib/businessMode'
 import { MobileBottomSheet } from './MobileBottomSheet'
 
 type TabType = 'orders' | 'analytics' | 'menu' | 'qr' | 'payment' | 'ai'
@@ -16,7 +17,6 @@ type BusinessDashboardMobileShellProps = {
   businessId: string
   activeTab: TabType
   setActiveTab: (tab: TabType) => void
-  isTicketing: boolean
   notificationsCount: number
   onNotificationsClick: () => void
   onProfileClick: () => void
@@ -98,7 +98,6 @@ export function BusinessDashboardMobileShell({
   businessId,
   activeTab,
   setActiveTab,
-  isTicketing,
   notificationsCount,
   onNotificationsClick,
   onProfileClick,
@@ -146,9 +145,7 @@ export function BusinessDashboardMobileShell({
       : activeTab === 'analytics'
         ? 'Analytics'
         : activeTab === 'menu'
-          ? isTicketing
-            ? 'Tickets'
-            : 'Menu'
+          ? catalogLabelForMode(business?.businessMode)
           : activeTab === 'qr'
             ? 'QR Code'
             : activeTab === 'ai'
@@ -220,7 +217,7 @@ export function BusinessDashboardMobileShell({
           {(
             [
               { key: 'orders' as const, label: 'Orders', onClick: () => pickTab('orders') },
-              { key: 'menu' as const, label: isTicketing ? 'Tickets' : 'Menu', onClick: () => pickTab('menu') },
+              { key: 'menu' as const, label: catalogLabelForMode(business?.businessMode), onClick: () => pickTab('menu') },
               { key: 'qr' as const, label: 'QR', onClick: () => pickTab('qr') },
               { key: 'scan' as const, label: 'Scan', onClick: () => navigate('/scan') },
               { key: 'more' as const, label: 'More', onClick: () => setMoreOpen(true) }

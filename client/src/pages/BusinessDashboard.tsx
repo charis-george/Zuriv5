@@ -22,6 +22,7 @@ import { mergeStorefrontConfig, DEFAULT_AI_GUEST } from '../lib/storefrontTheme'
 import { normalizeStorefrontProfiles, storefrontShareUrl, canonicalStorefrontPath } from '../lib/storefrontProfiles'
 import { eventShareUrl } from '../lib/storefrontEventPages'
 import { computeNetAfterFeeNaira, computeTransactionFeeNaira, formatModeTransactionFee } from '../lib/transactionFees'
+import { catalogLabelForMode } from '../lib/businessMode'
 import { MenuCatalogPresets } from '../components/menu/MenuCatalogPresets'
 import { StorefrontProfilePicker } from '../components/storefront/StorefrontProfilePicker'
 import { useDialog } from '../components/DialogProvider'
@@ -330,6 +331,7 @@ function BusinessDashboard(): JSX.Element {
   const selectedTapStaff = tapStaffCodes.find((c) => c.id === tapSelectedStaffId) || tapStaffCodes[0] || null
 
   const isTicketing = business?.businessMode === 'ticketing'
+  const catalogLabel = catalogLabelForMode(business?.businessMode)
   const storefrontProfiles = useMemo(
     () => normalizeStorefrontProfiles(business ?? undefined),
     [business]
@@ -1885,7 +1887,9 @@ function BusinessDashboard(): JSX.Element {
                             void patchBusinessMode('menu')
                           }}
                           className={`flex-1 py-2 text-xs font-semibold transition ${
-                            !isTicketing ? 'bg-zuri-orange text-white' : 'bg-white text-gray-700 hover:bg-gray-50'
+                            business?.businessMode === 'menu' || !business?.businessMode
+                              ? 'bg-zuri-orange text-white'
+                              : 'bg-white text-gray-700 hover:bg-gray-50'
                           } disabled:opacity-60`}
                         >
                           Menu
@@ -1894,9 +1898,23 @@ function BusinessDashboard(): JSX.Element {
                           type="button"
                           disabled={businessModeSaving}
                           onClick={() => {
+                            void patchBusinessMode('shop')
+                          }}
+                          className={`flex-1 py-2 text-xs font-semibold transition border-l border-gray-200 ${
+                            business?.businessMode === 'shop'
+                              ? 'bg-zuri-orange text-white'
+                              : 'bg-white text-gray-700 hover:bg-gray-50'
+                          } disabled:opacity-60`}
+                        >
+                          Shops
+                        </button>
+                        <button
+                          type="button"
+                          disabled={businessModeSaving}
+                          onClick={() => {
                             void patchBusinessMode('ticketing')
                           }}
-                          className={`flex-1 py-2 text-xs font-semibold transition ${
+                          className={`flex-1 py-2 text-xs font-semibold transition border-l border-gray-200 ${
                             isTicketing ? 'bg-zuri-orange text-white' : 'bg-white text-gray-700 hover:bg-gray-50'
                           } disabled:opacity-60`}
                         >
@@ -2243,7 +2261,9 @@ function BusinessDashboard(): JSX.Element {
                     Sending as <strong className="text-white">{selectedTapStaff.label}</strong> · customers must enter <strong className="font-mono text-white">{selectedTapStaff.code}</strong>
                   </p>
                 )}
-                <p className="text-sm font-semibold text-gray-300 mb-2">{isTicketing ? 'Select ticket types' : 'Select menu items'}</p>
+                <p className="text-sm font-semibold text-gray-300 mb-2">
+                  {isTicketing ? 'Select ticket types' : business?.businessMode === 'shop' ? 'Select catalog items' : 'Select menu items'}
+                </p>
                 <div className="space-y-2 max-h-48 overflow-y-auto">
                   {menu.flatMap(c => c.items).filter(i => i.available).map(item => (
                     <div key={item.id} className="flex items-center justify-between gap-2 bg-white/10 rounded-lg px-3 py-2">
@@ -2270,7 +2290,11 @@ function BusinessDashboard(): JSX.Element {
                   ))}
                   {menu.flatMap(c => c.items).filter(i => i.available).length === 0 && (
                     <p className="text-sm text-gray-400">
-                      {isTicketing ? 'No ticket types yet. Add them in the Tickets tab.' : 'No menu items. Add items in the Menu tab.'}
+                      {isTicketing
+                        ? 'No ticket types yet. Add them in the Tickets tab.'
+                        : business?.businessMode === 'shop'
+                          ? 'No catalog items. Add items in the Catalog tab.'
+                          : 'No menu items. Add items in the Menu tab.'}
                     </p>
                   )}
                 </div>
@@ -2601,7 +2625,7 @@ function BusinessDashboard(): JSX.Element {
                   : 'text-gray-600 hover:text-zuri-black'
               }`}
             >
-              {isTicketing ? 'Tickets' : 'Menu'}
+              {catalogLabel}
             </button>
             <button
               onClick={() => setActiveTab('qr')}
@@ -3506,7 +3530,7 @@ function BusinessDashboard(): JSX.Element {
             {/* Menu Management Tab */}
             {activeTab === 'menu' && (
               <div className={isPhone ? 'rounded-2xl bg-white border border-gray-100 p-4 shadow-sm' : ''}>
-                <h2 className="text-lg font-bold text-zuri-black mb-6">{isTicketing ? 'Tickets' : 'Menu'}</h2>
+                <h2 className="text-lg font-bold text-zuri-black mb-6">{catalogLabel}</h2>
                 {hasMultipleStorefronts ? (
                   <div className="mb-4 rounded-xl border border-zuri-orange/30 bg-zuri-orange/5 p-4">
                     <StorefrontProfilePicker
@@ -3525,7 +3549,7 @@ function BusinessDashboard(): JSX.Element {
                   <MenuCatalogPresets
                     businessId={businessId || ''}
                     plan={business?.plan}
-                    catalogMode={isTicketing ? 'ticketing' : 'menu'}
+                    catalogMode={business?.businessMode === 'ticketing' ? 'ticketing' : business?.businessMode === 'shop' ? 'shop' : 'menu'}
                     editingPresetId={editingPresetId}
                     onEditingPresetChange={setEditingPresetId}
                     onCatalogChanged={fetchMenu}
@@ -3615,7 +3639,13 @@ function BusinessDashboard(): JSX.Element {
 
                 {menu.length === 0 ? (
                   <div className="text-center py-12 bg-gray-50/50 rounded-xl border border-gray-100">
-                    <p className="text-gray-500 text-sm mb-4">{isTicketing ? 'No ticket types yet' : 'No menu items yet'}</p>
+                    <p className="text-gray-500 text-sm mb-4">
+                      {isTicketing
+                        ? 'No ticket types yet'
+                        : business?.businessMode === 'shop'
+                          ? 'No catalog items yet'
+                          : 'No menu items yet'}
+                    </p>
                     <button
                       onClick={() => setShowItemForm(true)}
                       className="bg-zuri-orange text-white px-5 py-2.5 rounded-xl text-sm font-semibold hover:bg-zuri-orange-dark transition"
@@ -5063,8 +5093,9 @@ function BusinessDashboard(): JSX.Element {
       <div className="px-1 pb-2">
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Storefront type</p>
         <div className="flex rounded-xl border border-gray-200 overflow-hidden mb-4">
-          <button type="button" disabled={businessModeSaving} onClick={() => void patchBusinessMode('menu')} className={`dashboard-btn flex-1 py-2.5 text-xs font-semibold ${!isTicketing ? 'bg-zuri-orange text-white' : 'bg-white text-gray-700'}`}>Menu</button>
-          <button type="button" disabled={businessModeSaving} onClick={() => void patchBusinessMode('ticketing')} className={`dashboard-btn flex-1 py-2.5 text-xs font-semibold ${isTicketing ? 'bg-zuri-orange text-white' : 'bg-white text-gray-700'}`}>Tickets</button>
+          <button type="button" disabled={businessModeSaving} onClick={() => void patchBusinessMode('menu')} className={`dashboard-btn flex-1 py-2.5 text-xs font-semibold ${business?.businessMode === 'menu' || !business?.businessMode ? 'bg-zuri-orange text-white' : 'bg-white text-gray-700'}`}>Menu</button>
+          <button type="button" disabled={businessModeSaving} onClick={() => void patchBusinessMode('shop')} className={`dashboard-btn flex-1 py-2.5 text-xs font-semibold border-l border-gray-200 ${business?.businessMode === 'shop' ? 'bg-zuri-orange text-white' : 'bg-white text-gray-700'}`}>Shops</button>
+          <button type="button" disabled={businessModeSaving} onClick={() => void patchBusinessMode('ticketing')} className={`dashboard-btn flex-1 py-2.5 text-xs font-semibold border-l border-gray-200 ${isTicketing ? 'bg-zuri-orange text-white' : 'bg-white text-gray-700'}`}>Tickets</button>
         </div>
         {business?.plan && business.plan !== 'free' ? (
           <button type="button" onClick={() => { setProfileOpen(false); setShowLogoModal(true); setLogoUploadError(null) }} className={`dashboard-btn w-full rounded-xl px-4 py-3 text-left text-sm font-semibold text-zuri-black hover:bg-gray-50 ${BTN_PRESS}`}>Change logo</button>
@@ -5081,7 +5112,6 @@ function BusinessDashboard(): JSX.Element {
           businessId={businessId}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
-          isTicketing={isTicketing}
           notificationsCount={notificationsCount}
           onNotificationsClick={() => {
             setProfileOpen(false)

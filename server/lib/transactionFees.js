@@ -9,6 +9,13 @@ const MENU_FEE_FLAT_NAIRA = process.env.TRANSFER_MENU_FEE_NAIRA != null
   ? Math.max(0, Number(process.env.TRANSFER_MENU_FEE_NAIRA))
   : 0;
 
+const SHOP_FEE_PERCENT = process.env.TRANSFER_SHOP_FEE_PERCENT != null
+  ? Math.max(0, Math.min(100, Number(process.env.TRANSFER_SHOP_FEE_PERCENT)))
+  : 2.5;
+const SHOP_FEE_FLAT_NAIRA = process.env.TRANSFER_SHOP_FEE_NAIRA != null
+  ? Math.max(0, Number(process.env.TRANSFER_SHOP_FEE_NAIRA))
+  : 25;
+
 const TICKETING_FEE_PERCENT = process.env.TRANSFER_TICKETING_FEE_PERCENT != null
   ? Math.max(0, Math.min(100, Number(process.env.TRANSFER_TICKETING_FEE_PERCENT)))
   : 4;
@@ -16,9 +23,15 @@ const TICKETING_FEE_FLAT_NAIRA = process.env.TRANSFER_TICKETING_FEE_NAIRA != nul
   ? Math.max(0, Number(process.env.TRANSFER_TICKETING_FEE_NAIRA))
   : 50;
 
+const { normalizeBusinessMode } = require('./businessMode');
+
 function feeConfigForMode(businessMode = 'menu') {
-  if (businessMode === 'ticketing') {
+  const mode = normalizeBusinessMode(businessMode);
+  if (mode === 'ticketing') {
     return { percent: TICKETING_FEE_PERCENT, flatNaira: TICKETING_FEE_FLAT_NAIRA };
+  }
+  if (mode === 'shop') {
+    return { percent: SHOP_FEE_PERCENT, flatNaira: SHOP_FEE_FLAT_NAIRA };
   }
   return { percent: MENU_FEE_PERCENT, flatNaira: MENU_FEE_FLAT_NAIRA };
 }
@@ -27,7 +40,7 @@ function computePlatformFeeNaira(amountNaira, businessMode = 'menu') {
   const amount = Number(amountNaira);
   if (!Number.isFinite(amount) || amount <= 0) return 0;
   const { percent, flatNaira } = feeConfigForMode(businessMode);
-  return (amount * (percent / 100)) + flatNaira;
+  return amount * (percent / 100) + flatNaira;
 }
 
 function computeVenueShareNaira(amountNaira, businessMode = 'menu') {
@@ -46,7 +59,7 @@ function maxAcceptablePaymentNaira(orderTotalNaira) {
   const passThroughFlat = process.env.PAYSTACK_PASS_THROUGH_FLAT_NAIRA != null
     ? Math.max(0, Number(process.env.PAYSTACK_PASS_THROUGH_FLAT_NAIRA))
     : 150;
-  return orderTotal + (orderTotal * (passThroughPercent / 100)) + passThroughFlat;
+  return orderTotal + orderTotal * (passThroughPercent / 100) + passThroughFlat;
 }
 
 /** True when paid amount matches order total or a reasonable fee pass-through from Paystack. */

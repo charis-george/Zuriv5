@@ -67,7 +67,7 @@ function normalizeDigitizedMenu(parsed, catalogMode = 'menu') {
   }
 
   return {
-    catalogMode: catalogMode === 'ticketing' ? 'ticketing' : 'menu',
+    catalogMode: require('./businessMode').normalizeBusinessMode(catalogMode),
     categories,
     notes: String(parsed?.notes || '').trim().slice(0, 500) || null,
     itemCount,

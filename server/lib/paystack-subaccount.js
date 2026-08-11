@@ -50,7 +50,8 @@ async function ensurePaystackSubaccount(businessId) {
     return { error: 'Bank account must be verified before creating subaccount' };
   }
 
-  const mode = business.business_mode === 'ticketing' ? 'ticketing' : 'menu';
+  const { normalizeBusinessMode } = require('./businessMode');
+  const mode = normalizeBusinessMode(business.business_mode);
   const { percent } = feeConfigForMode(mode);
 
   const payload = {
@@ -96,7 +97,8 @@ function buildSplitCheckoutParams(business, orderTotalNaira) {
   if (!business?.paystack_subaccount_code || !business.bank_verified_at) {
     return null;
   }
-  const mode = business.business_mode === 'ticketing' ? 'ticketing' : 'menu';
+  const { normalizeBusinessMode } = require('./businessMode');
+  const mode = normalizeBusinessMode(business.business_mode);
   const params = {
     subaccount: business.paystack_subaccount_code,
     bearer: 'subaccount'

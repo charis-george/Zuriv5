@@ -78,8 +78,8 @@ const bannerUpload = multer({
 router.post('/register', async (req, res) => {
   try {
     const { name, email, password, phone, address, businessMode, contactName } = req.body;
-    const normalizedBusinessMode = businessMode === 'ticketing' ? 'ticketing' : 'menu';
-
+    const { normalizeBusinessMode } = require('../lib/businessMode');
+    const normalizedBusinessMode = normalizeBusinessMode(businessMode);
 
     if (!name || !email || !password) {
       return res.status(400).json({ error: 'Name, email, and password are required' });
@@ -576,10 +576,26 @@ router.patch('/:id', requireBusinessAuth, async (req, res) => {
       updates.logo_url = logo_url || null;
     }
     if (businessMode !== undefined) {
-      if (businessMode !== 'menu' && businessMode !== 'ticketing') {
+      const { normalizeBusinessMode } = require('../lib/businessMode');
+      const raw = String(businessMode || '').trim().toLowerCase();
+      const allowed = new Set([
+        'menu',
+        'ticketing',
+        'shop',
+        'ticket',
+        'tickets',
+        'event',
+        'events',
+        'shops',
+        'catalog',
+        'retail',
+        'store',
+        ''
+      ]);
+      if (!allowed.has(raw)) {
         return res.status(400).json({ error: 'Invalid business mode' });
       }
-      updates.business_mode = businessMode;
+      updates.business_mode = normalizeBusinessMode(businessMode);
     }
     if (businessGroupId !== undefined) {
       const v = businessGroupId && String(businessGroupId).trim() ? String(businessGroupId).trim().slice(0, 80) : null;

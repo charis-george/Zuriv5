@@ -63,7 +63,8 @@ async function processOrderPayout(orderId, amountPaidNaira) {
     .single();
 
   if (bizErr || !biz) return { ok: false, error: 'Business not found' };
-  if (biz.business_mode === 'ticketing') businessMode = 'ticketing';
+  const { normalizeBusinessMode } = require('./businessMode');
+  businessMode = normalizeBusinessMode(biz.business_mode);
   if (!biz.bank_verified_at || !biz.bank_code || !biz.account_number || !biz.account_name) {
     await supabase
       .from('orders')

@@ -34,8 +34,8 @@ export type AiGuestStorefrontConfig = {
 
 export type BillingInterval = 'monthly' | 'yearly'
 
-/** Restaurant menu ordering vs event ticketing storefront */
-export type BusinessMode = 'menu' | 'ticketing'
+/** Restaurant menu ordering vs event ticketing vs retail shop catalog */
+export type BusinessMode = 'menu' | 'ticketing' | 'shop'
 
 /** Customer checkout + payout gateway */
 export type PaymentProvider = 'paystack' | 'monnify'

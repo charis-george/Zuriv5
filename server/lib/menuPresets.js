@@ -1,13 +1,14 @@
 const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../database');
 const { getBusinessPlan, canAccessAnalytics } = require('./plans');
+const { normalizeBusinessMode } = require('./businessMode');
 
 function db() {
   return getDb();
 }
 
 function normalizeCatalogMode(value) {
-  return value === 'ticketing' ? 'ticketing' : 'menu';
+  return normalizeBusinessMode(value);
 }
 
 let presetsTableAvailable = null;
@@ -78,7 +79,7 @@ async function ensureDefaultPresets(businessId, catalogMode) {
   if (existing?.length) return existing;
 
   const id = uuidv4();
-  const name = mode === 'ticketing' ? 'Main tickets' : 'Main menu';
+  const name = mode === 'ticketing' ? 'Main tickets' : mode === 'shop' ? 'Main catalog' : 'Main menu';
   const { data: created, error } = await db()
     .from('menu_presets')
     .insert({
@@ -510,7 +511,7 @@ async function ensureCatalogPresetsForProfiles(businessId, profiles, catalogMode
     const { error } = await db().from('menu_presets').insert({
       id: newId,
       business_id: businessId,
-      name: String(profile.name || (mode === 'ticketing' ? 'Tickets' : 'Menu')).slice(0, 80),
+      name: String(profile.name || (mode === 'ticketing' ? 'Tickets' : mode === 'shop' ? 'Catalog' : 'Menu')).slice(0, 80),
       preset_mode: mode,
       display_order: displayOrder
     });

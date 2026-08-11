@@ -397,7 +397,9 @@ function OrderPage(): JSX.Element {
             storefrontProfiles: nextProfiles ?? prev.storefrontProfiles,
             storefrontConfig: (payload.config as Business['storefrontConfig']) ?? prev.storefrontConfig,
             storefrontDetails: (payload.details as Business['storefrontDetails']) ?? prev.storefrontDetails,
-            ...(payload.businessMode === 'menu' || payload.businessMode === 'ticketing'
+            ...(payload.businessMode === 'menu' ||
+            payload.businessMode === 'ticketing' ||
+            payload.businessMode === 'shop'
               ? { businessMode: payload.businessMode }
               : {})
           }

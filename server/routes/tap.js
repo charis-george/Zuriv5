@@ -50,7 +50,8 @@ function normalizeEmail(email) {
 }
 
 function normalizeCatalogMode(value) {
-  return value === 'ticketing' ? 'ticketing' : 'menu';
+  const { normalizeBusinessMode } = require('../lib/businessMode');
+  return normalizeBusinessMode(value);
 }
 
 function sanitizeLabel(value, max = 40) {

@@ -27,7 +27,8 @@ function validateGuestContact({ customerName, customerPhone, customerEmail }) {
 }
 
 function normalizeCatalogMode(value) {
-  return value === 'ticketing' ? 'ticketing' : 'menu';
+  const { normalizeBusinessMode } = require('../lib/businessMode');
+  return normalizeBusinessMode(value);
 }
 
 async function resolveOrderCatalogPresetId(businessId, activeMode, { eventSlug, storefrontSlug } = {}) {

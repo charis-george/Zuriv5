@@ -8,6 +8,7 @@ import { normalizeUuidParam } from '../lib/normalizeUuid'
 import { ZURI_FEATURES_BY_TIER, planHighlights } from '../lib/zuriFeaturesByTier'
 import { CustomDropdown } from '../components/CustomDropdown'
 import { formatModeTransactionFee } from '../lib/transactionFees'
+import { catalogLabelForMode, catalogNounForMode } from '../lib/businessMode'
 
 const ONBOARDING_KEY = 'zuri_onboarding_done'
 
@@ -52,6 +53,19 @@ const dashboardHighlightsTicketing: { title: string; description: string }[] = [
   { title: 'Profile', description: 'Event name, branding, Zuri Tap (Growth+), and password — all in one place.' }
 ]
 
+const dashboardHighlightsShop: { title: string; description: string }[] = [
+  { title: 'Orders', description: 'See catalog orders in real time and update fulfillment as you pack.' },
+  { title: 'Catalog', description: 'Add categories and products, set prices, and toggle availability.' },
+  {
+    title: 'Analytics',
+    description:
+      'Sales, trends, popular products, and peak hours from Growth. Scale adds Zuri Assist metrics and richer margin views.'
+  },
+  { title: 'QR Code', description: 'Download your QR so customers can browse your catalog and pay from their phone.' },
+  { title: 'Payment & pricing', description: 'Payouts, plans — upgrade to Growth for analytics, Scale for Zuri Assist & CSV import.' },
+  { title: 'Profile', description: 'Shop details, logo, Zuri Tap (Growth+), and password — all in one place.' }
+]
+
 const SAMPLE_MENU_CATEGORIES = [
   {
     name: 'Popular',
@@ -85,6 +99,30 @@ type DigitizedMenuCategory = {
     available?: boolean
   }>
 }
+
+const SAMPLE_SHOP_CATEGORIES = [
+  {
+    name: 'Featured',
+    items: [
+      { name: 'Signature tote', description: 'Everyday carry with your brand mark.', price: 8500, cost: 0 },
+      { name: 'Limited drop tee', description: 'Soft cotton, small-batch print.', price: 12000, cost: 0 }
+    ]
+  },
+  {
+    name: 'Accessories',
+    items: [
+      { name: 'Cap', description: 'Adjustable fit.', price: 5500, cost: 0 },
+      { name: 'Sticker pack', description: 'Five designs.', price: 1500, cost: 0 }
+    ]
+  },
+  {
+    name: 'Care',
+    items: [
+      { name: 'Gift wrap', description: 'Optional wrap for presents.', price: 1000, cost: 0 },
+      { name: 'Express pack', description: 'Priority packing for same-day pickup.', price: 2000, cost: 0 }
+    ]
+  }
+]
 
 const SAMPLE_TICKET_CATEGORIES = [
   {
@@ -165,11 +203,19 @@ function BusinessOnboarding(): JSX.Element {
     businessPlan === 'scale' || businessPlan === 'pro' || businessPlan === 'zuri_plus' || businessPlan === 'enterprise'
   const canUploadMenuPictures = businessPlan !== 'free'
   const previewHighlights =
-    storefrontUseCase === 'ticketing' ? dashboardHighlightsTicketing : dashboardHighlights
+    storefrontUseCase === 'ticketing'
+      ? dashboardHighlightsTicketing
+      : storefrontUseCase === 'shop'
+        ? dashboardHighlightsShop
+        : dashboardHighlights
+  const catalogLabel = catalogLabelForMode(storefrontUseCase)
+  const catalogNoun = catalogNounForMode(storefrontUseCase)
   const previewNavTabs =
     storefrontUseCase === 'ticketing'
       ? (['Orders', 'Analytics', 'Tickets', 'QR Code', 'Payment', 'Profile'] as const)
-      : (['Orders', 'Analytics', 'Menu', 'QR Code', 'Payment', 'Profile'] as const)
+      : storefrontUseCase === 'shop'
+        ? (['Orders', 'Analytics', 'Catalog', 'QR Code', 'Payment', 'Profile'] as const)
+        : (['Orders', 'Analytics', 'Menu', 'QR Code', 'Payment', 'Profile'] as const)
 
   const parseCsvLine = (line: string): string[] => {
     const out: string[] = []
@@ -203,7 +249,11 @@ function BusinessOnboarding(): JSX.Element {
     setMenuSetupError(null)
     try {
       const isTickets = storefrontUseCase === 'ticketing'
-      const categories = isTickets ? SAMPLE_TICKET_CATEGORIES : SAMPLE_MENU_CATEGORIES
+      const categories = isTickets
+        ? SAMPLE_TICKET_CATEGORIES
+        : storefrontUseCase === 'shop'
+          ? SAMPLE_SHOP_CATEGORIES
+          : SAMPLE_MENU_CATEGORIES
 
       const createdCategoryIds: Record<string, string> = {}
       // Create categories first so items can reference them.
@@ -241,7 +291,9 @@ function BusinessOnboarding(): JSX.Element {
       const fallback =
         storefrontUseCase === 'ticketing'
           ? 'Failed to create sample tickets. Please try again.'
-          : 'Failed to create sample menu. Please try again.'
+          : storefrontUseCase === 'shop'
+            ? 'Failed to create sample catalog. Please try again.'
+            : 'Failed to create sample menu. Please try again.'
       setMenuSetupError(axios.isAxiosError(err) ? formatUserFacingError(err.response?.data, fallback) : fallback)
     } finally {
       setMenuSetupLoading(false)
@@ -477,7 +529,7 @@ function BusinessOnboarding(): JSX.Element {
         const plan = res.data?.plan as PlanId | undefined
         if (plan) setBusinessPlan(plan)
         const bm = res.data?.businessMode
-        if (bm === 'menu' || bm === 'ticketing') setStorefrontUseCase(bm)
+        if (bm === 'menu' || bm === 'ticketing' || bm === 'shop') setStorefrontUseCase(bm)
         if (res.data?.bankAccount?.accountName) setShowBankForm(false)
       })
       .catch(() => {})
@@ -509,7 +561,11 @@ function BusinessOnboarding(): JSX.Element {
   useEffect(() => {
     if (step !== 3) return
     const len =
-      storefrontUseCase === 'ticketing' ? dashboardHighlightsTicketing.length : dashboardHighlights.length
+      storefrontUseCase === 'ticketing'
+        ? dashboardHighlightsTicketing.length
+        : storefrontUseCase === 'shop'
+          ? dashboardHighlightsShop.length
+          : dashboardHighlights.length
     const t = setInterval(() => {
       setHighlightIndex((i) => (i + 1) % len)
     }, 2200)
@@ -660,15 +716,15 @@ function BusinessOnboarding(): JSX.Element {
           </div>
         )}
 
-        {/* Step 2: Menu vs ticketing storefront */}
+        {/* Step 2: Menu vs shop vs ticketing storefront */}
         {step === 2 && (
           <div className="animate-fadeIn">
             <h1 className="text-2xl md:text-3xl font-bold text-zuri-black mb-2">
               What will customers order from you?
             </h1>
             <p className="text-gray-600 mb-8">
-              Menus are built for restaurants and cafés. Ticketing uses a focused checkout for events and paid entry — you can switch anytime in Account. On{' '}
-              <strong>Growth</strong> and above, guests get Zuri Assist on your public menu (trending dishes, languages, taste preferences) when you enable it in the dashboard.
+              Menus suit restaurants and cafés. Shops use a product catalog. Ticketing is for events and paid entry — you can switch anytime in Account. On{' '}
+              <strong>Growth</strong> and above, guests get Zuri Assist on your public storefront when you enable it in the dashboard.
             </p>
             <div className="grid gap-4">
               <button
@@ -693,6 +749,36 @@ function BusinessOnboarding(): JSX.Element {
                   }`}
                 >
                   {storefrontUseCase === 'menu' && (
+                    <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                    </svg>
+                  )}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setStorefrontUseCase('shop')}
+                className={`text-left p-5 rounded-2xl border-2 transition-all duration-200 flex items-start gap-4 ${
+                  storefrontUseCase === 'shop'
+                    ? 'border-zuri-orange bg-white shadow-md shadow-zuri-orange/20'
+                    : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm'
+                }`}
+              >
+                <span className="flex-shrink-0 w-10 h-10 rounded-xl bg-gray-100 flex items-center justify-center text-zuri-black" aria-hidden>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
+                  </svg>
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-zuri-black">Shops & catalog</p>
+                  <p className="text-sm text-gray-600 mt-0.5">Sell products from a catalog — more frequent than events, simpler than a full restaurant menu.</p>
+                </div>
+                <span
+                  className={`flex-shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center ${
+                    storefrontUseCase === 'shop' ? 'border-zuri-orange bg-zuri-orange' : 'border-gray-300'
+                  }`}
+                >
+                  {storefrontUseCase === 'shop' && (
                     <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
                     </svg>
@@ -769,7 +855,11 @@ function BusinessOnboarding(): JSX.Element {
                 <div className="flex items-center justify-between mb-4">
                   <div>
                     <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                      {storefrontUseCase === 'ticketing' ? 'Demo event' : 'Demo restaurant'}
+                      {storefrontUseCase === 'ticketing'
+                        ? 'Demo event'
+                        : storefrontUseCase === 'shop'
+                          ? 'Demo shop'
+                          : 'Demo restaurant'}
                     </p>
                     <p className="text-[11px] text-gray-500">ZURI dashboard preview</p>
                   </div>
@@ -786,6 +876,7 @@ function BusinessOnboarding(): JSX.Element {
                       const isActive =
                         (label === 'Orders' && hi.title === 'Orders') ||
                         (label === 'Menu' && hi.title === 'Menu') ||
+                        (label === 'Catalog' && hi.title === 'Catalog') ||
                         (label === 'Tickets' && hi.title === 'Tickets') ||
                         (label === 'Analytics' && hi.title === 'Analytics') ||
                         (label === 'QR Code' && hi.title === 'QR Code') ||
@@ -821,7 +912,11 @@ function BusinessOnboarding(): JSX.Element {
                             {storefrontUseCase === 'ticketing' ? 'Order #T4B2' : 'Order #A24F'}
                           </p>
                           <p className="text-[11px] text-gray-500">
-                            {storefrontUseCase === 'ticketing' ? '2 tickets · ₦18,000' : '2 items · ₦4,200'}
+                            {storefrontUseCase === 'ticketing'
+                              ? '2 tickets · ₦18,000'
+                              : storefrontUseCase === 'shop'
+                                ? '2 products · ₦20,500'
+                                : '2 items · ₦4,200'}
                           </p>
                         </div>
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-800 font-medium">
@@ -829,10 +924,11 @@ function BusinessOnboarding(): JSX.Element {
                         </span>
                       </div>
 
-                      {/* Menu / tickets preview */}
+                      {/* Menu / catalog / tickets preview */}
                       <div
                         className={`rounded-lg border px-3 py-2 flex items-center justify-between ${
                           previewHighlights[highlightIndex].title === 'Menu' ||
+                          previewHighlights[highlightIndex].title === 'Catalog' ||
                           previewHighlights[highlightIndex].title === 'Tickets'
                             ? 'border-zuri-orange bg-zuri-orange/20'
                             : 'border-gray-200 bg-white'
@@ -840,14 +936,22 @@ function BusinessOnboarding(): JSX.Element {
                       >
                         <div>
                           <p className="font-semibold text-zuri-black text-xs">
-                            {storefrontUseCase === 'ticketing' ? 'General admission' : 'Grilled Chicken'}
+                            {storefrontUseCase === 'ticketing'
+                              ? 'General admission'
+                              : storefrontUseCase === 'shop'
+                                ? 'Signature tote'
+                                : 'Grilled Chicken'}
                           </p>
                           <p className="text-[11px] text-gray-500">
-                            {storefrontUseCase === 'ticketing' ? '₦5,000 · On sale' : '₦3,500 · Available'}
+                            {storefrontUseCase === 'ticketing'
+                              ? '₦5,000 · On sale'
+                              : storefrontUseCase === 'shop'
+                                ? '₦8,500 · Available'
+                                : '₦3,500 · Available'}
                           </p>
                         </div>
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">
-                          {storefrontUseCase === 'ticketing' ? 'Tickets' : 'Menu'}
+                          {catalogLabel}
                         </span>
                       </div>
 
@@ -939,12 +1043,18 @@ function BusinessOnboarding(): JSX.Element {
         {step === 4 && (
           <div className="animate-fadeIn">
             <h1 className="text-2xl md:text-3xl font-bold text-zuri-black mb-2">
-              {storefrontUseCase === 'ticketing' ? 'Set up your tickets' : 'Setup your menu'}
+              {storefrontUseCase === 'ticketing'
+                ? 'Set up your tickets'
+                : storefrontUseCase === 'shop'
+                  ? 'Set up your catalog'
+                  : 'Setup your menu'}
             </h1>
             <p className="text-gray-600 mb-8">
               {storefrontUseCase === 'ticketing'
                 ? 'Add ticket types and prices the same way you would menu items — you can refine them anytime in your dashboard.'
-                : "Let's set up and verify your information for seamless experience."}
+                : storefrontUseCase === 'shop'
+                  ? 'Add products and prices to your catalog — you can refine them anytime in your dashboard.'
+                  : "Let's set up and verify your information for seamless experience."}
             </p>
 
             <div className="rounded-xl border border-zuri-orange/30 bg-zuri-orange/5 px-4 py-3 mb-6">
@@ -965,12 +1075,16 @@ function BusinessOnboarding(): JSX.Element {
                   <p className="font-semibold text-zuri-black text-sm mb-2">
                     {storefrontUseCase === 'ticketing'
                       ? 'Upload poster or ticket artwork'
-                      : 'Upload your menu photo or PDF'}
+                      : storefrontUseCase === 'shop'
+                        ? 'Upload a catalog photo or PDF'
+                        : 'Upload your menu photo or PDF'}
                   </p>
                   <p className="text-sm text-gray-600 mb-3">
                     {storefrontUseCase === 'ticketing'
                       ? 'Free AI reads your poster or price list and creates editable ticket tiers with prices.'
-                      : 'Free AI reads your menu photo or PDF and creates editable categories, items, and prices.'}
+                      : storefrontUseCase === 'shop'
+                        ? 'Free AI reads your product list and creates editable categories, items, and prices.'
+                        : 'Free AI reads your menu photo or PDF and creates editable categories, items, and prices.'}
                   </p>
                   {menuDigitizeQuota ? (
                     <p className="text-xs text-gray-500 mb-2">
@@ -999,7 +1113,13 @@ function BusinessOnboarding(): JSX.Element {
                   />
                   {menuSetupLoading ? (
                     <p className="text-xs text-zuri-orange mt-2 font-semibold animate-pulse">
-                      AI is reading your {storefrontUseCase === 'ticketing' ? 'ticket list' : 'menu'}…
+                      AI is reading your{' '}
+                      {storefrontUseCase === 'ticketing'
+                        ? 'ticket list'
+                        : storefrontUseCase === 'shop'
+                          ? 'catalog'
+                          : 'menu'}
+                      …
                     </p>
                   ) : null}
                   {!canUploadMenuPictures ? (
@@ -1022,7 +1142,7 @@ function BusinessOnboarding(): JSX.Element {
 
                 <div className="rounded-xl border border-gray-200 p-4">
                   <p className="font-semibold text-zuri-black text-sm mb-2">
-                    {storefrontUseCase === 'ticketing' ? 'Import ticket types from CSV' : 'Import from spread sheet'}
+                    {storefrontUseCase === 'ticketing' ? 'Import ticket types from CSV' : `Import ${catalogNoun} from spreadsheet`}
                   </p>
                   <p className="text-sm text-gray-600 mb-3">Only available on Scale and enterprise.</p>
                   <input
@@ -1056,12 +1176,18 @@ function BusinessOnboarding(): JSX.Element {
                   <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                     <div>
                       <p className="font-semibold text-zuri-black text-sm">
-                        {storefrontUseCase === 'ticketing' ? 'Create sample tickets' : 'Create a sample menu'}
+                        {storefrontUseCase === 'ticketing'
+                          ? 'Create sample tickets'
+                          : storefrontUseCase === 'shop'
+                            ? 'Create a sample catalog'
+                            : 'Create a sample menu'}
                       </p>
                       <p className="text-sm text-gray-600 mt-1">
                         {storefrontUseCase === 'ticketing'
                           ? 'Adds admission tiers and an add-on so you can preview checkout right away.'
-                          : 'Generate a sample menu to streamline the setup process'}
+                          : storefrontUseCase === 'shop'
+                            ? 'Adds a few products so you can preview checkout right away.'
+                            : 'Generate a sample menu to streamline the setup process'}
                       </p>
                     </div>
                     <button
@@ -1074,12 +1200,18 @@ function BusinessOnboarding(): JSX.Element {
                         ? 'Working…'
                         : storefrontUseCase === 'ticketing'
                           ? 'Create sample tickets'
-                          : 'Create a sample menu'}
+                          : storefrontUseCase === 'shop'
+                            ? 'Create a sample catalog'
+                            : 'Create a sample menu'}
                     </button>
                   </div>
                   {menuChoice === 'sample' ? (
                     <p className="text-xs text-green-700 mt-3 font-semibold">
-                      {storefrontUseCase === 'ticketing' ? 'Sample tickets created.' : 'Sample menu created.'}
+                      {storefrontUseCase === 'ticketing'
+                        ? 'Sample tickets created.'
+                        : storefrontUseCase === 'shop'
+                          ? 'Sample catalog created.'
+                          : 'Sample menu created.'}
                     </p>
                   ) : null}
                 </div>
@@ -1106,7 +1238,9 @@ function BusinessOnboarding(): JSX.Element {
                 <div className="text-xs text-gray-500">
                   {storefrontUseCase === 'ticketing'
                     ? 'Ticket types can be edited anytime in your dashboard.'
-                    : 'Your menu can be edited anytime in your dashboard.'}
+                    : storefrontUseCase === 'shop'
+                      ? 'Your catalog can be edited anytime in your dashboard.'
+                      : 'Your menu can be edited anytime in your dashboard.'}
                 </div>
               </div>
             </div>
@@ -1132,7 +1266,7 @@ function BusinessOnboarding(): JSX.Element {
               <div className="rounded-xl border border-zuri-orange/25 bg-zuri-orange/5 p-4 mb-5">
                 <p className="text-sm font-semibold text-zuri-black">Current transaction fee</p>
                 <p className="text-xs text-gray-600 mt-1">
-                  {formatModeTransactionFee(storefrontUseCase === 'ticketing' ? 'ticketing' : 'menu')}
+                  {formatModeTransactionFee(storefrontUseCase || 'menu')}
                 </p>
               </div>
 

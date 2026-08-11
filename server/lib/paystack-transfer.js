@@ -4,6 +4,7 @@
  *
  * Env (optional): PAYSTACK_SECRET_KEY (required for transfers),
  * TRANSFER_MENU_FEE_PERCENT / TRANSFER_MENU_FEE_NAIRA,
+ * TRANSFER_SHOP_FEE_PERCENT / TRANSFER_SHOP_FEE_NAIRA,
  * TRANSFER_TICKETING_FEE_PERCENT / TRANSFER_TICKETING_FEE_NAIRA,
  * TRANSFER_MIN_NAIRA (min transfer after fees, default 50).
  */
@@ -90,22 +91,14 @@ async function getOrCreateRecipient(supabase, businessId) {
  * @returns { number } amount in kobo, or 0 if below minimum
  */
 /** Default platform fee when no TRANSFER_* env is set (matches customer-facing copy). */
+const { feeConfigForMode: sharedFeeConfigForMode } = require('./transactionFees');
+const { normalizeBusinessMode } = require('./businessMode');
+
 const DEFAULT_MENU_FEE_PERCENT = 1.5;
 const DEFAULT_MENU_FEE_NAIRA = 0;
-const DEFAULT_TICKETING_FEE_PERCENT = 4.0;
-const DEFAULT_TICKETING_FEE_NAIRA = 50;
 
 function feeConfigForMode(businessMode = 'menu') {
-  if (businessMode === 'ticketing') {
-    return {
-      percent: TICKETING_FEE_PERCENT != null ? TICKETING_FEE_PERCENT : DEFAULT_TICKETING_FEE_PERCENT,
-      flatNaira: TICKETING_FEE_NAIRA != null ? TICKETING_FEE_NAIRA : DEFAULT_TICKETING_FEE_NAIRA
-    };
-  }
-  return {
-    percent: MENU_FEE_PERCENT != null ? MENU_FEE_PERCENT : DEFAULT_MENU_FEE_PERCENT,
-    flatNaira: MENU_FEE_NAIRA != null ? MENU_FEE_NAIRA : DEFAULT_MENU_FEE_NAIRA
-  };
+  return sharedFeeConfigForMode(businessMode);
 }
 
 function computeTransferAmountKobo(
@@ -161,7 +154,7 @@ async function processOrderPayout(orderId, amountPaidNaira) {
       .select('business_mode')
       .eq('id', businessId)
       .single();
-    if (biz?.business_mode === 'ticketing') businessMode = 'ticketing';
+    if (biz?.business_mode) businessMode = normalizeBusinessMode(biz.business_mode);
   } catch (e) {
     console.error('processOrderPayout: failed to read business mode', e);
   }

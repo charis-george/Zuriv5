@@ -90,7 +90,7 @@ function BusinessLogin(): JSX.Element {
 
   const [acceptedTerms, setAcceptedTerms] = useState<boolean>(false)
 
-  const [registerBusinessMode, setRegisterBusinessMode] = useState<'menu' | 'ticketing'>('menu')
+  const [registerBusinessMode, setRegisterBusinessMode] = useState<'menu' | 'ticketing' | 'shop'>('menu')
 
   const [error, setError] = useState<string>('')
 
@@ -628,7 +628,7 @@ function BusinessLogin(): JSX.Element {
 
                       <p className="text-xs font-medium text-zuri-black mb-2">I am setting up ZURI for</p>
 
-                      <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="grid grid-cols-3 gap-2 text-xs">
 
                         <button
 
@@ -649,6 +649,28 @@ function BusinessLogin(): JSX.Element {
                         >
 
                           Menus
+
+                        </button>
+
+                        <button
+
+                          type="button"
+
+                          onClick={() => setRegisterBusinessMode('shop')}
+
+                          className={`rounded-md border px-2 py-2 font-semibold transition ${
+
+                            registerBusinessMode === 'shop'
+
+                              ? 'border-zuri-orange bg-zuri-orange/10 text-zuri-orange'
+
+                              : 'border-gray-200 text-zuri-black/70 hover:border-zuri-orange/40'
+
+                          }`}
+
+                        >
+
+                          Shops
 
                         </button>
 

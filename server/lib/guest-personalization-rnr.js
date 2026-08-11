@@ -144,12 +144,13 @@ function shouldRemit(loss, confidence) {
 }
 
 async function getBusinessCatalogMode(businessId) {
+  const { normalizeBusinessMode } = require('./businessMode');
   const { data } = await getDb()
     .from('businesses')
     .select('business_mode')
     .eq('id', businessId)
     .maybeSingle();
-  return data?.business_mode === 'ticketing' ? 'ticketing' : 'menu';
+  return normalizeBusinessMode(data?.business_mode);
 }
 
 async function loadVenueMenuItemIds(businessId) {

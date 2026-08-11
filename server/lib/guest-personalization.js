@@ -74,7 +74,8 @@ function tokenSet(text) {
 }
 
 function normalizeCatalogMode(value) {
-  return value === 'ticketing' ? 'ticketing' : 'menu';
+  const { normalizeBusinessMode } = require('./businessMode');
+  return normalizeBusinessMode(value);
 }
 
 async function getBusinessCatalogMode(businessId) {

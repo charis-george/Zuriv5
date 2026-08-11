@@ -143,7 +143,9 @@ function buildStorefrontPrompt({ prompt, businessName, businessMode, currentConf
     'Respect the brief closely: colors, mood, typography feel, layout density, and venue type.',
     businessMode === 'ticketing'
       ? 'This venue sells event tickets — favor bold hero areas, nightlife/event aesthetics when appropriate.'
-      : 'This venue sells food/menu items — favor appetizing, readable menu layouts.',
+      : businessMode === 'shop'
+        ? 'This venue sells products from a catalog — favor clean product browsing, retail clarity, and scannable grids.'
+        : 'This venue sells food/menu items — favor appetizing, readable menu layouts.',
     '',
     `Business name: ${businessName || 'Unknown'}`,
     `Owner brief: ${String(prompt || '').trim()}`,

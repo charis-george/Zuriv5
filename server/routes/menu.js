@@ -40,7 +40,8 @@ const { normalizeUuid } = require('../lib/normalizeUuid');
 const supabase = getDb();
 
 function normalizeCatalogMode(value) {
-  return value === 'ticketing' ? 'ticketing' : 'menu';
+  const { normalizeBusinessMode } = require('../lib/businessMode');
+  return normalizeBusinessMode(value);
 }
 
 /** API uses "uncategorized" for items with no category; DB stores null. */
