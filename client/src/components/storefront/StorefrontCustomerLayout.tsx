@@ -52,6 +52,91 @@ export function StorefrontCustomerLayout({
   const tag = cuisineTagStyle(config)
   const bannerUrl = typeof config.heroBannerUrl === 'string' ? config.heroBannerUrl.trim() : ''
   const hasBanner = bannerUrl.length > 0
+  const isShopWindow = config.menuTemplate === 'shop-window'
+
+  if (isShopWindow) {
+    return (
+      <div
+        className={embedded ? 'min-h-0 h-full flex flex-col' : 'min-h-screen flex flex-col'}
+        style={{ background: '#ffffff', color: theme.text, fontFamily: fonts.body }}
+      >
+        <header
+          className={`${embedded ? '' : 'sticky top-0 z-30'} border-b bg-white/95 backdrop-blur-sm`}
+          style={{ borderColor: '#ececec' }}
+        >
+          <div className="max-w-6xl mx-auto px-3 sm:px-5 py-3 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              {logoUrl ? (
+                <img
+                  src={logoUrl}
+                  alt=""
+                  className="h-10 w-10 shrink-0 object-cover rounded-lg border"
+                  style={{ borderColor: '#ececec' }}
+                />
+              ) : (
+                <div
+                  className="h-10 w-10 shrink-0 rounded-lg flex items-center justify-center text-white text-sm font-bold"
+                  style={{ background: config.brandColor || '#111' }}
+                >
+                  {title.slice(0, 1).toUpperCase()}
+                </div>
+              )}
+              <div className="min-w-0">
+                <h1
+                  className="font-semibold truncate text-[15px] sm:text-base"
+                  style={{ fontFamily: fonts.heading, color: '#111' }}
+                >
+                  {title}
+                </h1>
+                {details.tagline ? (
+                  <p className="text-xs truncate text-neutral-500">{details.tagline}</p>
+                ) : null}
+              </div>
+            </div>
+            <div className="shrink-0">{headerRight}</div>
+          </div>
+        </header>
+
+        {(hasBanner || details.cuisineTags?.length) && (
+          <div className="relative w-full overflow-hidden" style={{ maxHeight: hasBanner ? 180 : undefined }}>
+            {hasBanner ? (
+              <>
+                <img src={bannerUrl} alt="" className="h-[140px] sm:h-[180px] w-full object-cover" decoding="async" />
+                <div className="absolute inset-0 bg-black/25" aria-hidden />
+              </>
+            ) : null}
+            {details.cuisineTags?.length ? (
+              <div className={`px-4 py-3 flex flex-wrap gap-2 ${hasBanner ? 'absolute bottom-0 left-0 right-0' : ''}`}>
+                {details.cuisineTags.slice(0, 8).map((t) => (
+                  <span
+                    key={t}
+                    className="text-[11px] font-medium px-2.5 py-1 rounded-md bg-white/90 text-neutral-800 border border-black/5"
+                  >
+                    {t}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        )}
+
+        {showPreviewBadge ? (
+          <p className="px-4 pt-3 text-xs uppercase tracking-wider text-neutral-400">Live preview</p>
+        ) : null}
+
+        <main className="flex-1 max-w-6xl w-full mx-auto px-3 sm:px-5 py-5">{children}</main>
+
+        <footer className="border-t mt-auto" style={{ borderColor: '#ececec' }}>
+          <div className="max-w-6xl mx-auto px-3 sm:px-5 py-4 text-xs text-neutral-500 flex flex-wrap gap-x-4 gap-y-1">
+            {displayPhone ? <span>{displayPhone}</span> : null}
+            {ig ? <span>@{ig}</span> : null}
+            {wa ? <span>WhatsApp {wa}</span> : null}
+            <span className="ml-auto">Powered by ZURI</span>
+          </div>
+        </footer>
+      </div>
+    )
+  }
 
   return (
     <div
@@ -129,7 +214,7 @@ export function StorefrontCustomerLayout({
                     {displayPhone}
                   </p>
                 ) : null}
-                {(ig || wa) ? (
+                {ig || wa ? (
                   <p className="text-[10px] truncate mt-0.5 flex gap-2" style={{ color: theme.sub }}>
                     {ig ? <span>@{ig}</span> : null}
                     {wa ? <span>WhatsApp</span> : null}

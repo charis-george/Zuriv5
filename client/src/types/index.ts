@@ -40,6 +40,17 @@ export type BusinessMode = 'menu' | 'ticketing'
 /** Customer checkout + payout gateway */
 export type PaymentProvider = 'paystack' | 'monnify'
 
+/** Guest order / ticket email branding (server-normalized) */
+export type ReceiptEmailConfig = {
+  accentColor: string
+  subjectTemplate: string
+  headerTitle: string
+  greeting: string
+  footerText: string
+  showLogo: boolean
+  showZuriBadge: boolean
+}
+
 /** Venue moderation status */
 export type AccountStatus = 'active' | 'under_review' | 'suspended' | 'disabled'
 
@@ -58,6 +69,10 @@ export interface Business {
   paystackPublicKey?: string | null
   paymentProvider?: PaymentProvider
   logoUrl?: string | null
+  /** Short public path slug (zuriqo.com/{slug}). Null = use /order/{id}. */
+  publicSlug?: string | null
+  /** Guest receipt / ticket email branding */
+  receiptEmailConfig?: ReceiptEmailConfig | null
   storefrontConfig?: StorefrontConfig | null
   storefrontDetails?: StorefrontDetails | null
   /** Multiple branded storefronts (Growth+). Legacy columns mirror the default profile. */
@@ -198,6 +213,7 @@ export type StorefrontMenuTemplateId =
   | 'premium-dark'
   | 'minimal'
   | 'editorial'
+  | 'shop-window'
 export type StorefrontCardLayout = 'stacked' | 'horizontal'
 export type StorefrontCardImageShape = 'square' | 'rounded' | 'circle'
 export type StorefrontDividerStyle = 'none' | 'soft' | 'bold' | 'dotted'

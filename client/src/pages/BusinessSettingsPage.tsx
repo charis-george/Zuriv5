@@ -1,14 +1,25 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import axios from 'axios'
-import { Business } from '../types'
+import { Business, type ReceiptEmailConfig } from '../types'
 import { PaperPlaneLoader } from '../components/PaperPlaneLoader'
 import { apiUrl } from '../lib/apiBase'
 import { clearBusinessAuth, getBusinessToken } from '../lib/businessAuthStorage'
 import { formatUserFacingError } from '../lib/formatApiError'
 import { normalizeUuidParam } from '../lib/normalizeUuid'
+import { canonicalStorefrontUrl } from '../lib/storefrontProfiles'
 
 const BTN_PRESS = 'dashboard-btn'
+
+const DEFAULT_RECEIPT: ReceiptEmailConfig = {
+  accentColor: '#ffbd59',
+  subjectTemplate: '',
+  headerTitle: '',
+  greeting: '',
+  footerText: '',
+  showLogo: true,
+  showZuriBadge: true
+}
 
 function BusinessSettingsPage(): JSX.Element {
   const { businessId: rawBusinessId } = useParams<{ businessId: string }>()
@@ -34,6 +45,16 @@ function BusinessSettingsPage(): JSX.Element {
   const [agentError, setAgentError] = useState<string | null>(null)
   const [agentMessage, setAgentMessage] = useState<string | null>(null)
 
+  const [slugDraft, setSlugDraft] = useState('')
+  const [slugStatus, setSlugStatus] = useState<string | null>(null)
+  const [slugSaving, setSlugSaving] = useState(false)
+  const [slugError, setSlugError] = useState<string | null>(null)
+
+  const [emailCfg, setEmailCfg] = useState<ReceiptEmailConfig>(DEFAULT_RECEIPT)
+  const [emailSaving, setEmailSaving] = useState(false)
+  const [emailError, setEmailError] = useState<string | null>(null)
+  const [emailMessage, setEmailMessage] = useState<string | null>(null)
+
   useEffect(() => {
     if (!businessId) return
     const token = getBusinessToken()
@@ -56,6 +77,15 @@ function BusinessSettingsPage(): JSX.Element {
     ])
       .then(([bizRes, agentRes]) => {
         setBusiness(bizRes.data)
+        setSlugDraft(bizRes.data.publicSlug || '')
+        setEmailCfg({
+          ...DEFAULT_RECEIPT,
+          ...(bizRes.data.receiptEmailConfig || {}),
+          accentColor:
+            bizRes.data.receiptEmailConfig?.accentColor ||
+            bizRes.data.storefrontConfig?.brandColor ||
+            DEFAULT_RECEIPT.accentColor
+        })
         const agent = agentRes.data
         setAgentEnabled(Boolean(agent.paymentAgentEnabled ?? bizRes.data.paymentAgentEnabled))
         setAgentForwardingNumber(agent.agentForwardingNumber || bizRes.data.agentForwardingNumber || null)
@@ -139,6 +169,72 @@ function BusinessSettingsPage(): JSX.Element {
     }
   }
 
+  const checkSlugAvailability = async (): Promise<void> => {
+    setSlugError(null)
+    setSlugStatus(null)
+    try {
+      const { data } = await axios.get<{ available: boolean; slug: string | null; reason: string | null }>(
+        apiUrl(`/api/business/slug-available?slug=${encodeURIComponent(slugDraft)}`),
+        { headers: getAuthHeaders() }
+      )
+      if (data.available) setSlugStatus(`Available: zuriqo.com/${data.slug}`)
+      else setSlugStatus(data.reason === 'taken' ? 'That URL is taken.' : 'Invalid or reserved name.')
+    } catch {
+      setSlugError('Could not check availability.')
+    }
+  }
+
+  const savePublicSlug = async (): Promise<void> => {
+    if (!businessId) return
+    setSlugSaving(true)
+    setSlugError(null)
+    setSlugStatus(null)
+    try {
+      const { data } = await axios.patch(
+        apiUrl(`/api/business/${businessId}`),
+        { publicSlug: slugDraft },
+        { headers: getAuthHeaders() }
+      )
+      setBusiness((prev) => (prev ? { ...prev, publicSlug: data.publicSlug || null } : prev))
+      setSlugDraft(data.publicSlug || '')
+      setSlugStatus(`Saved: ${canonicalStorefrontUrl(businessId, data.publicSlug)}`)
+    } catch (err) {
+      setSlugError(
+        axios.isAxiosError(err)
+          ? formatUserFacingError(err.response?.data, 'Could not save storefront URL.')
+          : 'Could not save storefront URL.'
+      )
+    } finally {
+      setSlugSaving(false)
+    }
+  }
+
+  const saveEmailConfig = async (): Promise<void> => {
+    if (!businessId) return
+    setEmailSaving(true)
+    setEmailError(null)
+    setEmailMessage(null)
+    try {
+      const { data } = await axios.patch(
+        apiUrl(`/api/business/${businessId}`),
+        { receiptEmailConfig: emailCfg },
+        { headers: getAuthHeaders() }
+      )
+      const next = data.receiptEmailConfig || emailCfg
+      setEmailCfg({ ...DEFAULT_RECEIPT, ...next })
+      setBusiness((prev) => (prev ? { ...prev, receiptEmailConfig: next } : prev))
+      setEmailMessage('Guest email branding saved.')
+    } catch (err) {
+      setEmailError(
+        axios.isAxiosError(err)
+          ? formatUserFacingError(err.response?.data, 'Could not save email settings.')
+          : 'Could not save email settings.'
+      )
+    } finally {
+      setEmailSaving(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center">
@@ -195,6 +291,173 @@ function BusinessSettingsPage(): JSX.Element {
       </header>
 
       <div className="max-w-6xl mx-auto px-4 py-8 space-y-6">
+        <div>
+          <h2 className="text-sm font-semibold text-zuri-black">Storefront link</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Short guest URL. Existing UUID links keep working. New businesses get a slug automatically.
+          </p>
+        </div>
+
+        <section className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-3">
+          <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+            Public URL slug
+          </label>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <div className="flex-1 flex items-center rounded-xl border border-gray-200 overflow-hidden">
+              <span className="px-3 text-xs text-gray-400 bg-gray-50 border-r border-gray-200 whitespace-nowrap">
+                zuriqo.com/
+              </span>
+              <input
+                type="text"
+                value={slugDraft}
+                onChange={(e) => setSlugDraft(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-'))}
+                placeholder="your-business"
+                className="flex-1 px-3 py-2.5 text-sm text-zuri-black focus:outline-none"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => void checkSlugAvailability()}
+              className={`dashboard-btn px-4 py-2.5 rounded-xl text-sm font-semibold border border-gray-200 bg-white hover:bg-gray-50 ${BTN_PRESS}`}
+            >
+              Check
+            </button>
+            <button
+              type="button"
+              disabled={slugSaving || !slugDraft.trim()}
+              onClick={() => void savePublicSlug()}
+              className={`dashboard-btn px-4 py-2.5 rounded-xl text-sm font-semibold bg-zuri-black text-white hover:bg-gray-800 disabled:opacity-50 ${BTN_PRESS}`}
+            >
+              {slugSaving ? 'Saving…' : 'Save URL'}
+            </button>
+          </div>
+          <p className="text-xs text-gray-500">
+            Current:{' '}
+            <a
+              className="text-zuri-orange font-medium hover:underline"
+              href={canonicalStorefrontUrl(businessId, business.publicSlug)}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {canonicalStorefrontUrl(businessId, business.publicSlug)}
+            </a>
+          </p>
+          {slugStatus ? <p className="text-sm text-emerald-700">{slugStatus}</p> : null}
+          {slugError ? <p className="text-sm text-red-700">{slugError}</p> : null}
+        </section>
+
+        <div>
+          <h2 className="text-sm font-semibold text-zuri-black">Guest email</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Brand order and ticket emails buyers receive after payment. Use {'{business}'} and {'{ref}'} in the subject.
+          </p>
+        </div>
+
+        <section className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-4">
+          <div className="grid sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
+                Accent color
+              </label>
+              <input
+                type="color"
+                value={emailCfg.accentColor || '#ffbd59'}
+                onChange={(e) => setEmailCfg((c) => ({ ...c, accentColor: e.target.value }))}
+                className="h-10 w-full rounded-xl border border-gray-200 bg-white"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
+                Subject template
+              </label>
+              <input
+                type="text"
+                value={emailCfg.subjectTemplate}
+                onChange={(e) => setEmailCfg((c) => ({ ...c, subjectTemplate: e.target.value }))}
+                placeholder="Your ticket — {business}"
+                className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/30"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
+                Header title
+              </label>
+              <input
+                type="text"
+                value={emailCfg.headerTitle}
+                onChange={(e) => setEmailCfg((c) => ({ ...c, headerTitle: e.target.value }))}
+                placeholder="Your ticket"
+                className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/30"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
+                Greeting
+              </label>
+              <input
+                type="text"
+                value={emailCfg.greeting}
+                onChange={(e) => setEmailCfg((c) => ({ ...c, greeting: e.target.value }))}
+                placeholder="Thanks for your order!"
+                className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/30"
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
+                Footer text
+              </label>
+              <textarea
+                value={emailCfg.footerText}
+                onChange={(e) => setEmailCfg((c) => ({ ...c, footerText: e.target.value }))}
+                rows={2}
+                placeholder="See you soon!"
+                className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/30"
+              />
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-4 text-sm">
+            <label className="inline-flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={emailCfg.showLogo}
+                onChange={(e) => setEmailCfg((c) => ({ ...c, showLogo: e.target.checked }))}
+              />
+              Show business logo
+            </label>
+            <label className="inline-flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={emailCfg.showZuriBadge}
+                onChange={(e) => setEmailCfg((c) => ({ ...c, showZuriBadge: e.target.checked }))}
+              />
+              Show ZURI badge
+            </label>
+          </div>
+          <div
+            className="rounded-xl border p-4 text-sm"
+            style={{ borderColor: `${emailCfg.accentColor}55`, background: '#fffaf2' }}
+          >
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-2">Preview</p>
+            <p className="font-semibold" style={{ color: emailCfg.accentColor }}>
+              {emailCfg.headerTitle || 'Your ticket'}
+            </p>
+            <p className="text-gray-600 mt-1">{emailCfg.greeting || 'Hi there,'}</p>
+            <p className="text-xs text-gray-500 mt-3">{emailCfg.footerText || `Thanks for choosing ${business.name}.`}</p>
+          </div>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+            <button
+              type="button"
+              disabled={emailSaving}
+              onClick={() => void saveEmailConfig()}
+              className={`dashboard-btn px-5 py-2.5 rounded-xl text-sm font-semibold bg-zuri-orange text-white hover:bg-zuri-orange-dark disabled:opacity-50 ${BTN_PRESS}`}
+            >
+              {emailSaving ? 'Saving…' : 'Save email branding'}
+            </button>
+            {emailError ? <p className="text-sm text-red-700">{emailError}</p> : null}
+            {emailMessage && !emailError ? <p className="text-sm text-emerald-700">{emailMessage}</p> : null}
+          </div>
+        </section>
+
         <div>
           <h2 className="text-sm font-semibold text-zuri-black">Payments</h2>
           <p className="text-xs text-gray-500 mt-0.5">

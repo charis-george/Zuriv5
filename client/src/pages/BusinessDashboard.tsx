@@ -19,7 +19,7 @@ import { formatUserFacingError } from '../lib/formatApiError'
 import { normalizeUuidParam } from '../lib/normalizeUuid'
 import { isAiInsightsTier, isGuestAiMenuTier, isGrowthPlusPlan, isOpsAiTier, isScaleGuestMenuTagPlan } from '../lib/planAccess'
 import { mergeStorefrontConfig, DEFAULT_AI_GUEST } from '../lib/storefrontTheme'
-import { normalizeStorefrontProfiles, storefrontShareUrl } from '../lib/storefrontProfiles'
+import { normalizeStorefrontProfiles, storefrontShareUrl, canonicalStorefrontPath } from '../lib/storefrontProfiles'
 import { eventShareUrl } from '../lib/storefrontEventPages'
 import { computeNetAfterFeeNaira, computeTransactionFeeNaira, formatModeTransactionFee } from '../lib/transactionFees'
 import { MenuCatalogPresets } from '../components/menu/MenuCatalogPresets'
@@ -3561,7 +3561,7 @@ function BusinessDashboard(): JSX.Element {
                         const eventLink = isTicketing ? profile.details.eventPages?.find((e) => e.enabled !== false) : null
                         const href = eventLink
                           ? eventShareUrl(businessId, eventLink.slug)
-                          : storefrontShareUrl(businessId, profile)
+                          : storefrontShareUrl(businessId, profile, { publicSlug: business?.publicSlug })
                         const label = isTicketing && eventLink
                           ? `${profile.name} tickets`
                           : profile.name
@@ -3580,7 +3580,7 @@ function BusinessDashboard(): JSX.Element {
                     </div>
                   ) : businessId ? (
                     <a
-                      href={`/order/${encodeURIComponent(businessId)}`}
+                      href={canonicalStorefrontPath(businessId, business?.publicSlug)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="bg-white border border-gray-200 text-zuri-black px-3 py-2 rounded-xl text-xs font-semibold hover:bg-gray-50 transition shrink-0 dashboard-btn inline-flex items-center justify-center leading-normal"

@@ -443,6 +443,15 @@ app.get('/event/:businessId/:eventSlug', async (req, res, next) => {
   if (!served) next();
 });
 
+// Short storefront URLs: /{publicSlug} (must stay after known app routes above)
+app.get('/:publicSlug', async (req, res, next) => {
+  const slug = String(req.params.publicSlug || '').trim();
+  const { isReservedPublicSlug, normalizePublicSlug } = require('./lib/publicSlug');
+  if (!normalizePublicSlug(slug) || isReservedPublicSlug(slug)) return next();
+  const served = await serveStorefrontHtml(req, res);
+  if (!served) next();
+});
+
 // Serve React app for all other routes (avoid hard crash if dist was not built)
 app.get('*', (req, res) => {
   const indexPath = path.join(__dirname, '../client/dist/index.html');

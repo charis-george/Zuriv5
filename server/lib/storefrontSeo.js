@@ -75,6 +75,7 @@ function normalizeBusinessRecord(raw) {
     name: raw.name,
     logo_url: raw.logo_url ?? raw.logoUrl ?? null,
     business_mode: raw.business_mode ?? raw.businessMode ?? 'menu',
+    public_slug: raw.public_slug ?? raw.publicSlug ?? null,
     storefront_config: raw.storefront_config ?? raw.storefrontConfig ?? {},
     storefront_details: raw.storefront_details ?? raw.storefrontDetails ?? {},
     storefront_profiles: raw.storefront_profiles ?? raw.storefrontProfiles ?? null
@@ -153,9 +154,13 @@ function buildStorefrontSeoMeta(business, businessId, storefrontSlug) {
   const isTicketing = business.business_mode === 'ticketing';
   const slug = String(activeProfile?.slug || '').trim();
   const isDefaultSlug = !slug || slug === 'main';
-  const canonicalPath = isDefaultSlug
-    ? `/order/${encodeURIComponent(businessId)}`
-    : `/order/${encodeURIComponent(businessId)}/${encodeURIComponent(slug)}`;
+  const publicSlug = String(business.public_slug || business.publicSlug || '').trim();
+  const canonicalPath =
+    publicSlug && isDefaultSlug
+      ? `/${encodeURIComponent(publicSlug)}`
+      : isDefaultSlug
+        ? `/order/${encodeURIComponent(businessId)}`
+        : `/order/${encodeURIComponent(businessId)}/${encodeURIComponent(slug)}`;
   const canonicalUrl = `${getSiteUrl()}${canonicalPath}`;
   const image =
     absoluteAssetUrl(storefrontConfig.heroBannerUrl) ||
@@ -253,11 +258,11 @@ async function loadStorefrontSeoMetaFromDb(businessId, eventSlug, storefrontSlug
 
   ({ data: business, error } = await supabase
     .from('businesses')
-    .select('id, name, logo_url, business_mode, storefront_config, storefront_details, storefront_profiles')
+    .select('id, name, logo_url, business_mode, storefront_config, storefront_details, storefront_profiles, public_slug')
     .eq('id', normalized)
     .maybeSingle());
 
-  if (error && /storefront_profiles|business_mode/i.test(error.message || '')) {
+  if (error && /storefront_profiles|business_mode|public_slug/i.test(error.message || '')) {
     ({ data: business, error } = await supabase
       .from('businesses')
       .select('id, name, logo_url, storefront_config, storefront_details')
@@ -373,9 +378,29 @@ async function renderStorefrontHtml(businessId, eventSlug, storefrontSlug) {
 const STOREFRONT_HTML_CACHE_CONTROL = 'public, max-age=60, s-maxage=60, stale-while-revalidate=120';
 
 async function serveStorefrontHtml(req, res) {
-  const businessId = normalizeUuid(req.params?.businessId) || String(req.params?.businessId || '').trim();
+  let businessId = normalizeUuid(req.params?.businessId) || String(req.params?.businessId || '').trim();
   const eventSlug = String(req.params?.eventSlug || req.query?.eventSlug || req.query?.event || '').trim();
   const storefrontSlug = String(req.params?.storefrontSlug || req.query?.storefrontSlug || req.query?.storefront || '').trim();
+  const publicSlug = String(req.params?.publicSlug || req.query?.publicSlug || '').trim();
+
+  if (!businessId && publicSlug) {
+    try {
+      const { normalizePublicSlug } = require('./publicSlug');
+      const normalized = normalizePublicSlug(publicSlug);
+      if (normalized) {
+        const supabase = getDb();
+        const { data } = await supabase
+          .from('businesses')
+          .select('id')
+          .ilike('public_slug', normalized)
+          .maybeSingle();
+        if (data?.id) businessId = data.id;
+      }
+    } catch (err) {
+      console.warn('[ZURI] public slug SEO resolve failed:', err?.message || err);
+    }
+  }
+
   if (!businessId) {
     res.status(400).type('text').send('Missing business id');
     return true;

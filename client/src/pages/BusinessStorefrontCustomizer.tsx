@@ -368,7 +368,7 @@ function BusinessStorefrontCustomizer(): JSX.Element {
   const previewPageUrl = previewIsEventPage && businessId && previewEvent
     ? eventShareUrl(businessId, previewEvent.slug)
     : businessId && selectedProfile
-      ? storefrontShareUrl(businessId, selectedProfile)
+      ? storefrontShareUrl(businessId, selectedProfile, { publicSlug: business?.publicSlug })
       : businessId
         ? `${typeof window !== 'undefined' ? window.location.origin : 'https://zuriqo.com'}/order/${encodeURIComponent(businessId)}`
         : 'https://zuriqo.com/order/…'
@@ -480,7 +480,10 @@ function BusinessStorefrontCustomizer(): JSX.Element {
                     />
                   </div>
                   <p className="text-[10px] text-gray-500 break-all">
-                    URL slug: /order/…/{selectedProfile.slug}
+                    URL:{' '}
+                    {business?.publicSlug && selectedProfile?.isDefault
+                      ? `/${business.publicSlug}`
+                      : `/order/…/${selectedProfile.slug}`}
                   </p>
                 </div>
               ) : null}

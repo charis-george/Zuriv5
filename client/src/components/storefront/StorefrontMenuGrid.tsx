@@ -148,6 +148,9 @@ function CategoryHeading({
 }
 
 function gridClass(config: StorefrontConfig): string {
+  if (config.menuTemplate === 'shop-window') {
+    return 'grid w-full grid-cols-2 sm:grid-cols-3'
+  }
   if (config.gridStyle === 'row_list') return 'grid grid-cols-1 w-full'
   if (config.gridStyle === 'wide_cards') return 'grid grid-cols-1 md:grid-cols-2 w-full'
   /** Explicit `grid-cols-1` below `sm` — without it, mobile layout is undefined and columns look broken */

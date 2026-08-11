@@ -21,6 +21,12 @@ const { ensurePaystackSubaccount } = require('../lib/paystack-subaccount');
 const { getManagePaymentUrlForBusiness } = require('../lib/paystack-subscription');
 const { normalizeAccountStatus } = require('../lib/businessStatus');
 const { invalidateBusinessReads } = require('../lib/publicReadCache');
+const {
+  allocateUniquePublicSlug,
+  isPublicSlugAvailable,
+  normalizePublicSlug
+} = require('../lib/publicSlug');
+const { normalizeReceiptEmailConfig } = require('../lib/receiptEmailConfig');
 
 const supabase = new Proxy(
   {},
@@ -125,6 +131,27 @@ router.post('/register', async (req, res) => {
       return res.status(500).json({ error: 'Failed to register business' });
     }
 
+    let publicSlug = null;
+    try {
+      publicSlug = await allocateUniquePublicSlug(supabase, name, { excludeBusinessId: businessId });
+      const { error: slugErr } = await supabase
+        .from('businesses')
+        .update({ public_slug: publicSlug })
+        .eq('id', businessId);
+      if (slugErr) {
+        console.warn('[ZURI] Could not assign public_slug on register', {
+          businessId,
+          cause: slugErr.message || String(slugErr)
+        });
+        publicSlug = null;
+      }
+    } catch (slugAssignErr) {
+      console.warn('[ZURI] public_slug assign skipped', {
+        businessId,
+        cause: slugAssignErr?.message || String(slugAssignErr)
+      });
+    }
+
     queueBusinessWelcomeEmail({ email: data.email, name: data.name });
 
     res.json({
@@ -132,6 +159,7 @@ router.post('/register', async (req, res) => {
       name: data.name,
       email: data.email,
       businessMode: data.business_mode || 'menu',
+      publicSlug,
       message: 'Business registered successfully'
     });
   } catch (error) {
@@ -281,6 +309,55 @@ router.post('/reset-password', async (req, res) => {
   }
 });
 
+// Public slug availability (owners pass Bearer to exclude themselves when renaming)
+router.get('/slug-available', async (req, res) => {
+  try {
+    const raw = String(req.query.slug || '').trim();
+    const authHeader = req.headers.authorization;
+    const bearerToken =
+      authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    const authPayload = verifyBusinessToken(bearerToken);
+    const excludeBusinessId = authPayload?.sub || undefined;
+    const result = await isPublicSlugAvailable(supabase, raw, { excludeBusinessId });
+    res.json(result);
+  } catch (err) {
+    console.error('slug-available error:', err);
+    res.status(500).json({ available: false, slug: null, reason: 'error' });
+  }
+});
+
+// Resolve business id by public slug (guest storefront)
+router.get('/by-slug/:slug', async (req, res) => {
+  try {
+    const normalized = normalizePublicSlug(req.params.slug);
+    if (!normalized) return res.status(404).json({ error: 'Storefront not found' });
+    const { data, error } = await supabase
+      .from('businesses')
+      .select('id, name, public_slug, logo_url, business_mode, account_status')
+      .ilike('public_slug', normalized)
+      .maybeSingle();
+    if (error) {
+      if (/public_slug/i.test(error.message || '')) {
+        return res.status(404).json({ error: 'Storefront not found' });
+      }
+      console.error('by-slug error:', error);
+      return res.status(500).json({ error: 'Failed to resolve storefront' });
+    }
+    if (!data?.id) return res.status(404).json({ error: 'Storefront not found' });
+    res.json({
+      id: data.id,
+      name: data.name,
+      publicSlug: data.public_slug,
+      logoUrl: data.logo_url || null,
+      businessMode: data.business_mode || 'menu',
+      accountStatus: normalizeAccountStatus(data.account_status)
+    });
+  } catch (err) {
+    console.error('by-slug error:', err);
+    res.status(500).json({ error: 'Failed to resolve storefront' });
+  }
+});
+
 // Get business by ID
 router.get('/:id', async (req, res) => {
   try {
@@ -288,19 +365,37 @@ router.get('/:id', async (req, res) => {
 
     const { data: business, error } = await supabase
       .from('businesses')
-      .select('id, name, email, phone, address, contact_name, account_status, bank_verified_at, created_at, plan, subscription_status, subscription_interval, subscription_current_period_end, subscription_cancelled_at, paystack_subscription_code, paystack_public_key, payment_provider, bank_code, bank_name, account_number, account_name, logo_url, storefront_config, storefront_details, storefront_profiles, business_mode, storefront_ai_generations, menu_digitize_uses, menu_digitize_tokens_total, business_group_id, kyc_doc_requested_at, moderation_notes, payment_agent_enabled, agent_forwarding_number, match_window_minutes, agent_staff_msisdn, agent_allowed_msisdns, paystack_terminal_id')
+      .select('id, name, email, phone, address, contact_name, account_status, bank_verified_at, created_at, plan, subscription_status, subscription_interval, subscription_current_period_end, subscription_cancelled_at, paystack_subscription_code, paystack_public_key, payment_provider, bank_code, bank_name, account_number, account_name, logo_url, storefront_config, storefront_details, storefront_profiles, business_mode, storefront_ai_generations, menu_digitize_uses, menu_digitize_tokens_total, business_group_id, kyc_doc_requested_at, moderation_notes, payment_agent_enabled, agent_forwarding_number, match_window_minutes, agent_staff_msisdn, agent_allowed_msisdns, paystack_terminal_id, public_slug, receipt_email_config')
       .eq('id', id)
       .single();
 
     if (error || !business) {
+      // Fallback if new columns are not migrated yet
+      if (error && /public_slug|receipt_email_config/i.test(error.message || '')) {
+        const { data: legacy, error: legacyErr } = await supabase
+          .from('businesses')
+          .select('id, name, email, phone, address, contact_name, account_status, bank_verified_at, created_at, plan, subscription_status, subscription_interval, subscription_current_period_end, subscription_cancelled_at, paystack_subscription_code, paystack_public_key, payment_provider, bank_code, bank_name, account_number, account_name, logo_url, storefront_config, storefront_details, storefront_profiles, business_mode, storefront_ai_generations, menu_digitize_uses, menu_digitize_tokens_total, business_group_id, kyc_doc_requested_at, moderation_notes, payment_agent_enabled, agent_forwarding_number, match_window_minutes, agent_staff_msisdn, agent_allowed_msisdns, paystack_terminal_id')
+          .eq('id', id)
+          .single();
+        if (legacyErr || !legacy) return res.status(404).json({ error: 'Business not found' });
+        return res.json(await buildBusinessPayload(req, legacy));
+      }
       return res.status(404).json({ error: 'Business not found' });
     }
 
+    return res.json(await buildBusinessPayload(req, business));
+  } catch (error) {
+    console.error('Get business error:', error);
+    res.status(500).json({ error: 'Failed to load business' });
+  }
+});
+
+async function buildBusinessPayload(req, business) {
     const authHeader = req.headers.authorization;
     const bearerToken =
       authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
     const authPayload = verifyBusinessToken(bearerToken);
-    const isOwner = authPayload && authPayload.sub === id;
+    const isOwner = authPayload && authPayload.sub === business.id;
 
     const paystackPublicKey = process.env.PAYSTACK_PUBLIC_KEY || business.paystack_public_key || null;
     const effectivePlan = effectivePlanFromRow(business);
@@ -323,6 +418,11 @@ router.get('/:id', async (req, res) => {
       }
     }
 
+    const brandFallback =
+      business.storefront_config && typeof business.storefront_config === 'object'
+        ? business.storefront_config.brandColor
+        : '#ffbd59';
+
     const payload = {
       id: business.id,
       name: business.name,
@@ -343,7 +443,9 @@ router.get('/:id', async (req, res) => {
       businessGroupId: business.business_group_id || null,
       accountStatus: normalizeAccountStatus(business.account_status),
       bankVerifiedAt: business.bank_verified_at || null,
-      kycDocRequestedAt: business.kyc_doc_requested_at || null
+      kycDocRequestedAt: business.kyc_doc_requested_at || null,
+      publicSlug: business.public_slug || null,
+      receiptEmailConfig: normalizeReceiptEmailConfig(business.receipt_email_config, brandFallback)
     };
     if (isOwner) {
       payload.email = business.email || null;
@@ -363,7 +465,7 @@ router.get('/:id', async (req, res) => {
       payload.paystackTerminalId = business.paystack_terminal_id || null;
       if (payload.renewsAutomatically) {
         try {
-          const manage = await getManagePaymentUrlForBusiness(id);
+          const manage = await getManagePaymentUrlForBusiness(business.id);
           if (manage.ok) payload.managePaymentUrl = manage.link;
         } catch {
           /* non-blocking */
@@ -377,12 +479,8 @@ router.get('/:id', async (req, res) => {
         accountName: business.account_name || null
       };
     }
-    res.json(payload);
-  } catch (error) {
-    console.error('Get business error:', error);
-    res.status(500).json({ error: 'Database error' });
-  }
-});
+    return payload;
+}
 
 // Update business (bank details, logo) — requires business auth
 router.patch('/:id', requireBusinessAuth, async (req, res) => {
@@ -391,13 +489,36 @@ router.patch('/:id', requireBusinessAuth, async (req, res) => {
     if (id !== req.businessId) {
       return res.status(403).json({ error: 'You can only update your own business' });
     }
-    const { bank_code, bank_name, account_number, account_name, logo_url, password, name, contactName, businessMode, businessGroupId, paymentProvider } = req.body;
+    const { bank_code, bank_name, account_number, account_name, logo_url, password, name, contactName, businessMode, businessGroupId, paymentProvider, publicSlug, receiptEmailConfig } = req.body;
     const updates = {};
     if (name !== undefined) {
       const trimmed = typeof name === 'string' ? name.trim() : '';
       if (!trimmed) return res.status(400).json({ error: 'Business name cannot be empty' });
       if (trimmed.length > 80) return res.status(400).json({ error: 'Business name is too long' });
       updates.name = trimmed;
+    }
+    if (publicSlug !== undefined) {
+      const normalized = normalizePublicSlug(publicSlug);
+      if (!normalized) {
+        return res.status(400).json({ error: 'That storefront URL is invalid or reserved. Try another name.' });
+      }
+      const avail = await isPublicSlugAvailable(supabase, normalized, { excludeBusinessId: id });
+      if (!avail.available) {
+        return res.status(409).json({ error: 'That storefront URL is already taken.', reason: avail.reason });
+      }
+      updates.public_slug = normalized;
+    }
+    if (receiptEmailConfig !== undefined) {
+      const { data: rowForBrand } = await supabase
+        .from('businesses')
+        .select('storefront_config')
+        .eq('id', id)
+        .maybeSingle();
+      const brandFallback =
+        rowForBrand?.storefront_config && typeof rowForBrand.storefront_config === 'object'
+          ? rowForBrand.storefront_config.brandColor
+          : '#ffbd59';
+      updates.receipt_email_config = normalizeReceiptEmailConfig(receiptEmailConfig, brandFallback);
     }
     if (contactName !== undefined) {
       updates.contact_name = contactName ? String(contactName).trim().slice(0, 80) : null;
@@ -483,7 +604,7 @@ router.patch('/:id', requireBusinessAuth, async (req, res) => {
       .from('businesses')
       .update(updates)
       .eq('id', id)
-      .select('id, name, contact_name, bank_name, bank_code, account_number, account_name, bank_verified_at, logo_url, business_mode, business_group_id, payment_provider, paystack_subaccount_code')
+      .select('id, name, contact_name, bank_name, bank_code, account_number, account_name, bank_verified_at, logo_url, business_mode, business_group_id, payment_provider, paystack_subaccount_code, public_slug, receipt_email_config')
       .single();
     if (error) return res.status(500).json({ error: 'Update failed' });
 
@@ -517,7 +638,9 @@ router.patch('/:id', requireBusinessAuth, async (req, res) => {
       bankVerifiedAt: data.bank_verified_at || null,
       logoUrl: data.logo_url || null,
       businessMode: data.business_mode || 'menu',
-      businessGroupId: data.business_group_id || null
+      businessGroupId: data.business_group_id || null,
+      publicSlug: data.public_slug || null,
+      receiptEmailConfig: normalizeReceiptEmailConfig(data.receipt_email_config, '#ffbd59')
     });
   } catch (error) {
     console.error('Update business error:', error);

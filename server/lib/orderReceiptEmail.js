@@ -3,13 +3,8 @@ const {
   ensureTicketReceiptQrsForOrder,
   generateTicketReceiptQrImagePng
 } = require('./ticketReceiptQr');
-const {
-  sendResendEmail,
-  isResendConfigured,
-  isInvalidIdempotentConflict,
-  isResendDevFromAddress,
-  getResendFrom
-} = require('./resendMail');
+const { sendResendEmail, isResendConfigured, isInvalidIdempotentConflict, isResendDevFromAddress, getResendFrom } = require('./resendMail');
+const { normalizeReceiptEmailConfig, applySubjectTemplate } = require('./receiptEmailConfig');
 
 // Long enough for multi-ticket PNG generation + Resend (45s timeout) without lock steal.
 // Shared with sweep — must stay in sync so sweep does not re-enqueue while a send is still valid.
@@ -345,18 +340,37 @@ async function loadOrderReceiptData(orderId) {
 
   const { data: biz, error: bizErr } = await supabase
     .from('businesses')
-    .select('id,name,email,business_mode')
+    .select('id,name,email,business_mode,logo_url,receipt_email_config,storefront_config')
     .eq('id', order.business_id)
     .single();
   // Never soft-continue without business — ticketing mode would be unknown and we
   // could mark a ticket order "sent" without QR attachments.
   if (bizErr || !biz) {
+    if (bizErr && /receipt_email_config|logo_url|storefront_config/i.test(bizErr.message || '')) {
+      const { data: legacyBiz, error: legacyBizErr } = await supabase
+        .from('businesses')
+        .select('id,name,email,business_mode')
+        .eq('id', order.business_id)
+        .single();
+      if (legacyBizErr || !legacyBiz) {
+        return {
+          error: 'business_load_error',
+          cause: legacyBizErr?.message || bizErr?.message || 'business row missing for receipt load'
+        };
+      }
+      return loadOrderReceiptDataContinue(order, legacyBiz, orderId);
+    }
     return {
       error: 'business_load_error',
       cause: bizErr?.message || 'business row missing for receipt load'
     };
   }
 
+  return loadOrderReceiptDataContinue(order, biz, orderId);
+}
+
+async function loadOrderReceiptDataContinue(order, biz, orderId) {
+  const supabase = getSupabase();
   const { data: lines, error: liErr } = await supabase
     .from('order_items')
     .select('menu_item_id,quantity,price,special_notes')
@@ -678,9 +692,29 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
   }
 
   const businessName = biz?.name || 'ZURI business';
-  const subject = isTicketing
-    ? `Your ZURI ticket — ${businessName}`
-    : `ZURI receipt — Ref ${stableRef}`;
+  const brandFallback =
+    biz?.storefront_config && typeof biz.storefront_config === 'object'
+      ? biz.storefront_config.brandColor
+      : '#ffbd59';
+  const emailCfg = normalizeReceiptEmailConfig(biz?.receipt_email_config, brandFallback);
+  const accent = emailCfg.accentColor || '#ffbd59';
+  const subject = applySubjectTemplate(emailCfg.subjectTemplate, {
+    businessName,
+    ref: stableRef,
+    isTicketing
+  });
+  const headerTitle =
+    emailCfg.headerTitle ||
+    (isTicketing ? 'Your ticket' : 'Payment receipt');
+  const greetingLine = emailCfg.greeting
+    ? emailCfg.greeting
+    : order.customer_name
+      ? `Hi ${order.customer_name},`
+      : '';
+  const footerLine =
+    emailCfg.footerText ||
+    `Thanks for choosing ${businessName}.`;
+  const logoUrl = emailCfg.showLogo && biz?.logo_url ? String(biz.logo_url).trim() : '';
   const ticketQrTextBlock = ticketQrs.length
     ? [
         '',
@@ -704,7 +738,9 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
     : [];
 
   const text = [
-    `Receipt (Ref: ${stableRef})`,
+    greetingLine,
+    greetingLine ? '' : null,
+    `${headerTitle} (Ref: ${stableRef})`,
     `Business: ${businessName}`,
     '',
     `Amount paid: ${money(order.total_amount)}`,
@@ -718,15 +754,19 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
     summarizeItems(receiptItems),
     '',
     `Paid at: ${stablePaidAt}`,
-    ...ticketQrTextBlock
-  ].join('\n');
+    ...ticketQrTextBlock,
+    '',
+    footerLine
+  ]
+    .filter((line) => line !== null)
+    .join('\n');
 
   const ticketQrCardsHtml = ticketQrs
     .map((ticket) => {
       const attachment = ticketQrAttachments.find((att) => att.content_id === `ticket-qr-${ticket.ticketNumber}`);
       const label = ticketCount > 1 ? `Ticket ${ticket.ticketNumber} of ${ticketCount}` : 'Ticket check-in QR';
       return `
-                <div style="border:1px solid #f0e6d8;border-radius:16px;padding:18px;background:#fffaf2;${ticketCount > 1 ? 'margin-bottom:14px;' : ''}">
+                <div style="border:1px solid ${escapeHtml(accent)}33;border-radius:16px;padding:18px;background:#fffaf2;${ticketCount > 1 ? 'margin-bottom:14px;' : ''}">
                   <p style="margin:0 0 8px 0;color:#1a1a1a;font-weight:700;">${escapeHtml(label)}</p>
                   <p style="margin:0 0 14px 0;color:#555;font-size:13px;line-height:1.5;">
                     ${
@@ -742,12 +782,12 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
                       alt="${escapeHtml(label)}"
                       width="220"
                       height="220"
-                      style="display:inline-block;width:220px;height:220px;border-radius:18px;border:1px solid #f0e6d8;background:#ffffff;padding:10px;"
+                      style="display:inline-block;width:220px;height:220px;border-radius:18px;border:1px solid ${escapeHtml(accent)}33;background:#ffffff;padding:10px;"
                     />
                   </div>
                   <p style="margin:14px 0 0 0;color:#666;font-size:12px;line-height:1.5;">
                     Verification link:<br/>
-                    <a href="${escapeHtml(ticket.verificationUrl)}" style="color:#b96f00;text-decoration:none;">${escapeHtml(ticket.verificationUrl)}</a>
+                    <a href="${escapeHtml(ticket.verificationUrl)}" style="color:${escapeHtml(accent)};text-decoration:none;">${escapeHtml(ticket.verificationUrl)}</a>
                   </p>
                 </div>`;
     })
@@ -762,6 +802,16 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
             </tr>`
     : '';
 
+  const badgeHtml = emailCfg.showZuriBadge
+    ? `<div style="display:inline-block;padding:8px 14px;border-radius:999px;background:${escapeHtml(accent)}22;color:#1a1a1a;font-size:12px;font-weight:700;letter-spacing:0.04em;">ZURI</div>`
+    : '';
+  const logoHtml = logoUrl
+    ? `<img src="${escapeHtml(logoUrl)}" alt="${escapeHtml(businessName)}" width="48" height="48" style="display:block;width:48px;height:48px;border-radius:12px;object-fit:cover;border:1px solid #eee;" />`
+    : '';
+  const greetingHtml = greetingLine
+    ? `<p style="margin:0 0 10px 0;color:#444;font-size:14px;line-height:1.5;">${escapeHtml(greetingLine)}</p>`
+    : '';
+
   const html = `
 <!doctype html>
 <html>
@@ -773,12 +823,18 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
           <table role="presentation" width="100%" style="max-width:560px;background:#ffffff;border-radius:16px;border:1px solid #f0e6d8;overflow:hidden;">
             <tr>
               <td style="padding:22px 22px 10px 22px;">
-                <div style="display:inline-block;padding:8px 14px;border-radius:999px;background:#fff7eb;color:#1a1a1a;font-size:12px;font-weight:700;letter-spacing:0.04em;">ZURI</div>
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                  <tr>
+                    <td style="vertical-align:middle;">${logoHtml || badgeHtml}</td>
+                    <td style="vertical-align:middle;text-align:right;">${logoHtml && badgeHtml ? badgeHtml : ''}</td>
+                  </tr>
+                </table>
               </td>
             </tr>
             <tr>
               <td style="padding:0 22px 18px 22px;">
-                <h1 style="margin:0 0 6px 0;font-size:18px;line-height:1.3;color:#1a1a1a;">${isTicketing ? 'Your ticket' : 'Payment receipt'}</h1>
+                ${greetingHtml}
+                <h1 style="margin:0 0 6px 0;font-size:18px;line-height:1.3;color:#1a1a1a;">${escapeHtml(headerTitle)}</h1>
                 <p style="margin:0;color:#555;font-size:13px;">Ref: <strong>${escapeHtml(stableRef)}</strong></p>
               </td>
             </tr>
@@ -787,7 +843,7 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
                   <tr>
                     <td style="padding:10px 0;color:#1a1a1a;font-weight:700;">Amount paid</td>
-                    <td style="padding:10px 0;color:#1a1a1a;font-weight:700;text-align:right;white-space:nowrap;">${escapeHtml(money(order.total_amount))}</td>
+                    <td style="padding:10px 0;color:${escapeHtml(accent)};font-weight:700;text-align:right;white-space:nowrap;">${escapeHtml(money(order.total_amount))}</td>
                   </tr>
                 </table>
               </td>
@@ -813,6 +869,7 @@ async function sendOrderReceiptOnce({ orderId, paidAt, reference }) {
               <td style="padding:14px 22px 22px 22px;border-top:1px solid #f5f0e8;">
                 <p style="margin:0;color:#666;font-size:12px;">Business: ${escapeHtml(businessName)}</p>
                 <p style="margin:6px 0 0 0;color:#666;font-size:12px;">Paid at: ${escapeHtml(stablePaidAt)}</p>
+                <p style="margin:12px 0 0 0;color:#888;font-size:12px;line-height:1.5;">${escapeHtml(footerLine)}</p>
               </td>
             </tr>
           </table>

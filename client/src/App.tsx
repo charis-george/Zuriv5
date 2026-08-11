@@ -74,6 +74,7 @@ function AppRoutes(): JSX.Element {
         <Route path="/business/dashboard/:businessId/customize" element={<BusinessStorefrontCustomizer />} />
         <Route path="/business/dashboard/:businessId/payment" element={<BusinessPaymentPage />} />
         <Route path="/business/dashboard/:businessId/settings" element={<BusinessSettingsPage />} />
+        <Route path="/:publicSlug" element={<OrderPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </Suspense>

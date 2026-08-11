@@ -70,13 +70,19 @@ function OrderPage(): JSX.Element {
   const {
     businessId: rawBusinessId,
     eventSlug: routeEventSlug,
-    storefrontSlug: routeStorefrontSlug
-  } = useParams<{ businessId: string; eventSlug?: string; storefrontSlug?: string }>()
+    storefrontSlug: routeStorefrontSlug,
+    publicSlug: routePublicSlug
+  } = useParams<{
+    businessId?: string
+    eventSlug?: string
+    storefrontSlug?: string
+    publicSlug?: string
+  }>()
   const [searchParams] = useSearchParams()
   const inviteOrderId = (searchParams.get('inviteOrder') || '').trim()
-  const businessId = normalizeUuidParam(rawBusinessId)
-  const activeEventSlug = (routeEventSlug || searchParams.get('event') || '').trim()
-  const activeStorefrontSlug = (routeStorefrontSlug || searchParams.get('storefront') || '').trim()
+  const uuidFromRoute = normalizeUuidParam(rawBusinessId)
+  const [resolvedBusinessId, setResolvedBusinessId] = useState<string | null>(uuidFromRoute)
+  const [slugResolveError, setSlugResolveError] = useState<string | null>(null)
   const [business, setBusiness] = useState<Business | null>(null)
   const [menu, setMenu] = useState<MenuCategory[]>([])
   const [cart, setCart] = useState<CartItem[]>([])
@@ -85,6 +91,49 @@ function OrderPage(): JSX.Element {
   const [orderDetails, setOrderDetails] = useState<Order | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
   const [error, setError] = useState<string | null>(null)
+  const businessId = resolvedBusinessId
+  const activeEventSlug = (routeEventSlug || searchParams.get('event') || '').trim()
+  const activeStorefrontSlug = (routeStorefrontSlug || searchParams.get('storefront') || '').trim()
+
+  useEffect(() => {
+    if (uuidFromRoute) {
+      setResolvedBusinessId(uuidFromRoute)
+      setSlugResolveError(null)
+      return
+    }
+    const slug = String(routePublicSlug || '').trim()
+    if (!slug) {
+      setResolvedBusinessId(null)
+      setSlugResolveError('Missing storefront')
+      setLoading(false)
+      return
+    }
+    let cancelled = false
+    setLoading(true)
+    axios
+      .get<{ id: string }>(`/api/business/by-slug/${encodeURIComponent(slug)}`)
+      .then((res) => {
+        if (cancelled) return
+        if (res.data?.id) {
+          setResolvedBusinessId(res.data.id)
+          setSlugResolveError(null)
+        } else {
+          setResolvedBusinessId(null)
+          setSlugResolveError('Storefront not found')
+          setLoading(false)
+        }
+      })
+      .catch(() => {
+        if (cancelled) return
+        setResolvedBusinessId(null)
+        setSlugResolveError('Storefront not found')
+        setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [uuidFromRoute, routePublicSlug])
+
   const [saveCard, setSaveCard] = useState<boolean>(true)
   const [savedCards, setSavedCards] = useState<SavedCard[]>([])
   const [selectedSavedCardId, setSelectedSavedCardId] = useState<string | null>(null)
@@ -234,7 +283,9 @@ function OrderPage(): JSX.Element {
   const seoPath = activeEvent && businessId
     ? `/event/${businessId}/${activeEvent.slug}`
     : businessId && activeStorefrontProfile
-      ? storefrontSeoPath(businessId, activeStorefrontProfile)
+      ? storefrontSeoPath(businessId, activeStorefrontProfile, {
+          publicSlug: routePublicSlug || business?.publicSlug
+        })
       : businessId
         ? `/order/${businessId}`
         : '/order'
@@ -690,6 +741,18 @@ function OrderPage(): JSX.Element {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center">
         <PaperPlaneLoader size="lg" />
+      </div>
+    )
+  }
+
+  if (slugResolveError) {
+    return (
+      <div className="min-h-screen bg-[#f5f5f5] flex items-center justify-center px-4">
+        <div className="bg-white rounded-xl border border-gray-200 p-8 max-w-md w-full text-center">
+          <h1 className="text-xl font-bold text-zuri-black mb-4">Storefront not found</h1>
+          <p className="text-gray-600 text-sm mb-6">{slugResolveError}</p>
+          <a href="/" className="text-zuri-orange font-semibold text-sm hover:underline">Back to home</a>
+        </div>
       </div>
     )
   }

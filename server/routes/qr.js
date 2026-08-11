@@ -316,11 +316,11 @@ router.get('/business/:businessId', async (req, res) => {
     let error;
     ({ data: business, error } = await db()
       .from('businesses')
-      .select('id, name, phone, address, logo_url, plan, storefront_config, storefront_details, storefront_profiles, business_mode, account_status, payment_provider')
+      .select('id, name, phone, address, logo_url, plan, storefront_config, storefront_details, storefront_profiles, business_mode, account_status, payment_provider, public_slug')
       .eq('id', businessId)
       .maybeSingle());
 
-    if (error && /storefront_profiles|business_mode|account_status|payment_provider/i.test(error.message || '')) {
+    if (error && /storefront_profiles|business_mode|account_status|payment_provider|public_slug/i.test(error.message || '')) {
       ({ data: business, error } = await db()
         .from('businesses')
         .select('id, name, phone, address, logo_url, plan, storefront_config, storefront_details, business_mode')
@@ -386,6 +386,7 @@ router.get('/business/:businessId', async (req, res) => {
       phone: business.phone,
       address: business.address,
       logoUrl: business.logo_url || null,
+      publicSlug: business.public_slug || null,
       storefrontConfig,
       storefrontDetails,
       storefrontProfiles: profiles,

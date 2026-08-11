@@ -149,16 +149,40 @@ export function findEventAcrossProfiles(
   return findStorefrontForEvent(profiles, eventSlug)?.event ?? null
 }
 
-export function storefrontShareUrl(businessId: string, profile: StorefrontProfile): string {
+export function storefrontShareUrl(
+  businessId: string,
+  profile: StorefrontProfile,
+  opts?: { publicSlug?: string | null }
+): string {
   const origin = typeof window !== 'undefined' ? window.location.origin : 'https://zuriqo.com'
-  return `${origin}${storefrontSeoPath(businessId, profile)}`
+  return `${origin}${storefrontSeoPath(businessId, profile, opts)}`
 }
 
-export function storefrontSeoPath(businessId: string, profile: StorefrontProfile): string {
+export function storefrontSeoPath(
+  businessId: string,
+  profile: StorefrontProfile,
+  opts?: { publicSlug?: string | null }
+): string {
+  const publicSlug = String(opts?.publicSlug || '').trim()
+  if (publicSlug && profile.isDefault) {
+    return `/${encodeURIComponent(publicSlug)}`
+  }
   if (profile.isDefault && profile.slug === 'main') {
     return `/order/${encodeURIComponent(businessId)}`
   }
   return `/order/${encodeURIComponent(businessId)}/${encodeURIComponent(profile.slug)}`
+}
+
+/** Canonical guest link for the default storefront. */
+export function canonicalStorefrontPath(businessId: string, publicSlug?: string | null): string {
+  const slug = String(publicSlug || '').trim()
+  if (slug) return `/${encodeURIComponent(slug)}`
+  return `/order/${encodeURIComponent(businessId)}`
+}
+
+export function canonicalStorefrontUrl(businessId: string, publicSlug?: string | null): string {
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://zuriqo.com'
+  return `${origin}${canonicalStorefrontPath(businessId, publicSlug)}`
 }
 
 export function applyStorefrontProfileToBusiness(business: Business, profile: StorefrontProfile): Business {
