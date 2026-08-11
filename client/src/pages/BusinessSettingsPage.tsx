@@ -294,13 +294,13 @@ function BusinessSettingsPage(): JSX.Element {
         <div>
           <h2 className="text-sm font-semibold text-zuri-black">Storefront link</h2>
           <p className="text-xs text-gray-500 mt-0.5">
-            Short guest URL. Existing UUID links keep working. New businesses get a slug automatically.
+            Choose a short link guests can open, like zuriqo.com/your-business. Links you already shared still work.
           </p>
         </div>
 
         <section className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-3">
           <label className="block text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-            Public URL slug
+            Your storefront link
           </label>
           <div className="flex flex-col sm:flex-row gap-2">
             <div className="flex-1 flex items-center rounded-xl border border-gray-200 overflow-hidden">
@@ -349,7 +349,8 @@ function BusinessSettingsPage(): JSX.Element {
         <div>
           <h2 className="text-sm font-semibold text-zuri-black">Guest email</h2>
           <p className="text-xs text-gray-500 mt-0.5">
-            Brand order and ticket emails buyers receive after payment. Use {'{business}'} and {'{ref}'} in the subject.
+            Brand order and ticket emails buyers receive after payment. In the subject, type {'{business}'} for your
+            name or {'{ref}'} for the order reference.
           </p>
         </div>
 
@@ -481,8 +482,8 @@ function BusinessSettingsPage(): JSX.Element {
                 </span>
               </div>
               <p className="text-xs text-gray-600 mt-1 leading-relaxed max-w-xl">
-                Forward Moniepoint or OPay SMS to Zuri. Strong matches mark the order paid;
-                unclear ones land in a one-tap queue on Orders.
+                Forward Moniepoint or OPay payment SMS to Zuri. Clear matches mark the order paid; unclear ones appear
+                in Orders for a quick confirm.
               </p>
             </div>
             <button
@@ -523,7 +524,7 @@ function BusinessSettingsPage(): JSX.Element {
               )}
               {!agentEnabled && agentForwardingNumber ? (
                 <p className="text-xs text-gray-500 mt-1">
-                  Turn Assist on, then save your allowlist to start matching.
+                  Turn Assist on, then save your trusted phone numbers to start matching.
                 </p>
               ) : null}
             </div>
@@ -557,7 +558,7 @@ function BusinessSettingsPage(): JSX.Element {
                   className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-zuri-black placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-zuri-orange/30 focus:border-zuri-orange"
                 />
                 <p className="text-[11px] text-gray-500 mt-1.5">
-                  Gets confirmations and ambiguous-match alerts.
+                  Gets payment confirmations and “needs review” alerts.
                 </p>
               </div>
 
@@ -584,8 +585,8 @@ function BusinessSettingsPage(): JSX.Element {
                     Paystack Terminal (POS)
                   </p>
                   <p className="text-xs text-gray-600 mt-1 leading-relaxed">
-                    Link your Paystack Terminal to push unpaid Zuri orders to the device. When the guest pays on the
-                    terminal, Paystack notifies Zuri and the order is marked paid — no SMS parsing needed.
+                    Link your Paystack Terminal to send unpaid Zuri orders to the device. When the guest pays on the
+                    terminal, the order is marked paid automatically.
                   </p>
                 </div>
                 <div>
@@ -596,7 +597,7 @@ function BusinessSettingsPage(): JSX.Element {
                     type="text"
                     value={terminalIdDraft}
                     onChange={(e) => setTerminalIdDraft(e.target.value)}
-                    placeholder="From Paystack Dashboard → Terminals"
+                    placeholder="Terminal ID from your Paystack account"
                     className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-zuri-black placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-zuri-orange/30 focus:border-zuri-orange"
                   />
                 </div>

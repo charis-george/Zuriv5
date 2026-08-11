@@ -104,7 +104,7 @@ router.get('/business/:businessId', requireBusinessAuth, async (req, res) => {
 
     if (error) {
       console.error('Get reservations error:', error)
-      return res.status(500).json({ error: 'Database error' })
+      return res.status(500).json({ error: 'Something went wrong. Please try again.' })
     }
 
     res.json(data || [])

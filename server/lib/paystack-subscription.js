@@ -151,7 +151,7 @@ async function activateBusinessSubscription({
     if (/column|schema|does not exist/i.test(msg)) {
       return {
         ok: false,
-        message: 'Subscription database is not ready. Run migration 021_recurring_subscriptions.sql and try again.'
+        message: 'Subscriptions aren’t ready yet. Please try again later or contact Zuri support.'
       };
     }
     return { ok: false, message: 'Could not save subscription. Please contact support.' };

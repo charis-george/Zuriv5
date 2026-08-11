@@ -145,7 +145,7 @@ router.post('/upload-image', requireBusinessAuth, upload.single('image'), async 
       console.error('Supabase storage upload error:', uploadError);
       if (uploadError.message && uploadError.message.toLowerCase().includes('bucket not found')) {
         return res.status(500).json({
-          error: `Create a public bucket named "${BUCKET}" in Supabase Dashboard → Storage, then try again.`
+          error: 'We couldn’t upload that image right now. Please try again, or contact Zuri support if it keeps failing.'
         });
       }
       return res.status(500).json({ error: uploadError.message || 'Failed to upload image' });
@@ -289,7 +289,7 @@ router.get('/business/:businessId', async (req, res) => {
 
     if (categoriesError) {
       console.error('Categories error:', summarizeUpstreamError(categoriesError));
-      return res.status(500).json({ error: 'Database error' });
+      return res.status(500).json({ error: 'Something went wrong. Please try again.' });
     }
 
     // Get all menu items for this business
@@ -301,7 +301,7 @@ router.get('/business/:businessId', async (req, res) => {
 
     if (itemsError) {
       console.error('Items error:', summarizeUpstreamError(itemsError));
-      return res.status(500).json({ error: 'Database error' });
+      return res.status(500).json({ error: 'Something went wrong. Please try again.' });
     }
 
     const filteredCategories = (categories || []).filter(
@@ -382,7 +382,7 @@ router.get('/business/:businessId', async (req, res) => {
     res.json(payload);
   } catch (error) {
     console.error('Get menu error:', error);
-    res.status(500).json({ error: 'Database error' });
+    res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 });
 
@@ -551,7 +551,7 @@ router.get('/categories/:businessId', async (req, res) => {
 
     if (error) {
       console.error('Get categories error:', summarizeUpstreamError(error));
-      return res.status(500).json({ error: 'Database error' });
+      return res.status(500).json({ error: 'Something went wrong. Please try again.' });
     }
 
     const formattedCategories = categories
@@ -569,7 +569,7 @@ router.get('/categories/:businessId', async (req, res) => {
     res.json(formattedCategories);
   } catch (error) {
     console.error('Get categories error:', summarizeUpstreamError(error));
-    res.status(500).json({ error: 'Database error' });
+    res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 });
 

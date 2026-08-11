@@ -30,7 +30,7 @@ export function isScaleGuestMenuTagPlan(plan: string | undefined | null): boolea
 }
 
 export function planLabelForDisplay(plan: PlanId | string | undefined): string {
-  if (plan === 'zuri_plus') return 'Zuri Plus (legacy)'
-  if (plan === 'pro') return 'Scale (legacy slug)'
+  if (plan === 'zuri_plus') return 'Zuri Plus'
+  if (plan === 'pro') return 'Scale'
   return String(plan || '')
 }

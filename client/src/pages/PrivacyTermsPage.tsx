@@ -94,7 +94,7 @@ function PrivacyTermsPage(): JSX.Element {
             <h2 className="text-lg font-semibold text-zuri-black mb-2">4. How we share personal data</h2>
             <p>
               We may share data with: <strong>payment processors</strong> (to complete transactions);{' '}
-              <strong>hosting and infrastructure providers</strong> (e.g. Supabase); <strong>the business</strong> you order
+              <strong>hosting and infrastructure providers</strong>; <strong>the business</strong> you order
               from or whose storefront you use; and <strong>legal authorities</strong> when required. We do not sell personal
               data.
             </p>

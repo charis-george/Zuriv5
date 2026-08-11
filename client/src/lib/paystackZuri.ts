@@ -287,7 +287,7 @@ export async function startZuriPayment(
 ): Promise<void> {
   const ref = String(data.reference || '').trim()
   if (!ref) {
-    opts?.onError?.('Could not start payment (missing reference)')
+    opts?.onError?.('Could not start payment. Please try again.')
     return
   }
 

@@ -66,7 +66,7 @@ export async function startMonnifyPayment(
 
   if (!orderId) {
 
-    opts?.onError?.('Could not start payment (missing order reference)')
+    opts?.onError?.('Could not start payment. Please try again.')
 
     return
 
@@ -88,7 +88,7 @@ export async function startMonnifyPayment(
 
   if (!data.checkoutUrl) {
 
-    opts?.onError?.('Monnify checkout URL missing. Check server Monnify credentials and redeploy.')
+    opts?.onError?.('Checkout couldn’t start. Please try again in a moment.')
 
     return
 

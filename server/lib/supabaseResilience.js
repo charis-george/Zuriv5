@@ -179,7 +179,7 @@ function assertCircuitAllowsRequest() {
 function circuitErrorResponse() {
   const status = getCircuitStatus();
   return {
-    error: 'Database temporarily unavailable. Please retry shortly.',
+    error: 'Service temporarily unavailable. Please try again shortly.',
     code: 'SUPABASE_CIRCUIT_OPEN',
     retryable: true,
     retry_after_ms: status.retryAfterMs || OPEN_MS,

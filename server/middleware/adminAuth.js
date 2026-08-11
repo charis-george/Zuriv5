@@ -6,7 +6,7 @@
 function requireAdminAuth(req, res, next) {
   const expected = process.env.ZURI_ADMIN_API_KEY;
   if (!expected || !String(expected).trim()) {
-    return res.status(503).json({ error: 'Admin API is not configured on this server' });
+    return res.status(503).json({ error: 'Admin tools aren’t available right now.' });
   }
   const header = req.headers['x-zuri-admin-key'] || req.headers.authorization;
   const key = header && String(header).startsWith('Bearer ')

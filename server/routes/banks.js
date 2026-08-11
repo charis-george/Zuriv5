@@ -56,13 +56,13 @@ router.get('/', async (req, res) => {
   try {
     if (provider === 'monnify') {
       if (!isMonnifyConfigured()) {
-        return res.status(503).json({ error: 'Monnify bank list is not configured on this server' });
+        return res.status(503).json({ error: 'Bank list isn’t available right now. Please try again later.' });
       }
       const banks = await getMonnifyBanks();
       return res.json(banks);
     }
     if (!PAYSTACK_SECRET) {
-      return res.status(503).json({ error: 'Paystack bank list is not configured on this server' });
+      return res.status(503).json({ error: 'Bank list isn’t available right now. Please try again later.' });
     }
     const banks = await listPaystackBanks();
     return res.json(banks);
@@ -93,13 +93,13 @@ router.get('/resolve', async (req, res) => {
   try {
     if (provider === 'monnify') {
       if (!isMonnifyConfigured()) {
-        return res.status(503).json({ error: 'Monnify account validation is not configured on this server' });
+        return res.status(503).json({ error: 'Account verification isn’t available right now. Please try again later.' });
       }
       const result = await validateBankAccount(accountNumber, bankCode);
       return res.json({ account_name: result.account_name });
     }
     if (!PAYSTACK_SECRET) {
-      return res.status(503).json({ error: 'Paystack account validation is not configured on this server' });
+      return res.status(503).json({ error: 'Account verification isn’t available right now. Please try again later.' });
     }
     const result = await resolvePaystackAccount(accountNumber, bankCode);
     return res.json(result);

@@ -177,7 +177,7 @@ router.post('/room/on', requireBusinessAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('Tap room/on error:', err);
-    return res.status(500).json({ error: 'Could not start Tap. Apply migration 030 if tables are missing.' });
+    return res.status(500).json({ error: 'Zuri Tap can’t start right now. Please try again shortly or contact support.' });
   }
 });
 

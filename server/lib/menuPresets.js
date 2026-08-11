@@ -161,38 +161,41 @@ function formatPresetRow(row, isActive) {
 }
 
 function presetsUnavailablePayload() {
+  const userHint =
+    'Catalog presets are temporarily unavailable. Please try again later or contact Zuri support.';
   if (presetsTableCheckHint === 'schema_cache') {
+    console.error('[menuPresets] schema cache stale — reload PostgREST schema and restart API');
     return {
       presets: [],
       activePresetId: null,
       presetsEnabled: false,
-      presetsHint:
-        'Supabase schema cache is stale. In SQL Editor run: NOTIFY pgrst, \'reload schema\'; then restart the API.'
+      presetsHint: userHint
     };
   }
   if (presetsTableCheckHint === 'permission_denied') {
+    console.error('[menuPresets] permission denied — check service role key / RLS');
     return {
       presets: [],
       activePresetId: null,
       presetsEnabled: false,
-      presetsHint:
-        'Server cannot read menu_presets. Use SUPABASE_SERVICE_ROLE_KEY (not anon) on the API, or apply migration 017_menu_presets_rls.sql.'
+      presetsHint: userHint
     };
   }
   if (presetsTableCheckHint === 'migration_missing') {
+    console.error('[menuPresets] migration missing — apply menu_catalog_presets migration');
     return {
       presets: [],
       activePresetId: null,
       presetsEnabled: false,
-      presetsHint: 'Apply migration 016_menu_catalog_presets.sql on the same Supabase project as your API env vars.'
+      presetsHint: userHint
     };
   }
+  console.error('[menuPresets] presets unavailable', { hint: presetsTableCheckHint });
   return {
     presets: [],
     activePresetId: null,
     presetsEnabled: false,
-    presetsHint:
-      'Could not reach menu_presets. Confirm migration 016 on this project, reload schema (NOTIFY pgrst), and restart the API.'
+    presetsHint: userHint
   };
 }
 
@@ -237,7 +240,7 @@ async function createPreset(businessId, name, catalogMode) {
   const gate = await requireGrowthPlus(businessId);
   if (gate.error) return { error: gate.error, status: 403 };
   if (!(await checkPresetsTable())) {
-    return { error: 'Menu presets are not available until database migration 016 is applied.', status: 503 };
+    return { error: 'Catalog presets are temporarily unavailable. Please try again later or contact Zuri support.', status: 503 };
   }
 
   const mode = normalizeCatalogMode(catalogMode);

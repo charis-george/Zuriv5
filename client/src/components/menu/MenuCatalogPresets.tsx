@@ -112,7 +112,7 @@ export function MenuCatalogPresets({
         <p className="font-semibold text-amber-950">Catalog presets unavailable</p>
         <p>
           {presetsHint ||
-            'The API could not read menu_presets. If you already ran migration 016, reload the Supabase schema cache and restart the API.'}
+            'Catalog presets aren’t available right now. Please try again shortly, or contact Zuri support if this continues.'}
         </p>
         {error && <p className="text-red-700">{error}</p>}
         <button

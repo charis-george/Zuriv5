@@ -144,7 +144,7 @@ if (!SUPABASE_ENV_OK) {
       return next();
     }
     res.status(503).json({
-      error: 'Server misconfigured: Supabase env missing',
+      error: 'Service temporarily unavailable. Please try again later.',
       missing: ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY)']
     });
   });
@@ -263,12 +263,9 @@ function safeRequireRoute(label, modulePath) {
     const router = express.Router();
     router.use((_req, res) => {
       res.status(503).json({
-        error: `Route temporarily unavailable: ${label}`,
+        error: 'This feature is temporarily unavailable. Please try again later.',
         detail: message,
-        hint:
-          /Missing Supabase env/i.test(message)
-            ? 'Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY on the server, then redeploy/restart.'
-            : 'Check Railway/deploy logs for the full stack trace, fix the error, and restart the API.'
+        hint: 'Please try again shortly. If it continues, contact Zuri support.'
       });
     });
     return router;
@@ -461,7 +458,7 @@ app.get('*', (req, res) => {
       res
         .status(503)
         .type('text')
-        .send('Frontend not built (client/dist missing). See Railway build logs and nixpacks.toml.');
+        .send('Zuri is temporarily unavailable. Please try again shortly.');
     }
   });
 });

@@ -33,7 +33,7 @@ const FAQ_BILLING: FaqItem[] = [
   },
   {
     q: 'How do payout transaction fees work?',
-    a: `For ticketing we apply ${formatModeTransactionFee('ticketing')}; for shops ${formatModeTransactionFee('shop')}; for menus ${formatModeTransactionFee('menu')}, unless your account has a custom fee schedule.`
+    a: `For ticketing we apply ${formatModeTransactionFee('ticketing')}; for shops ${formatModeTransactionFee('shop')}; for menus ${formatModeTransactionFee('menu')}.`
   }
 ]
 

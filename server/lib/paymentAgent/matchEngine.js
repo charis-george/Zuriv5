@@ -326,7 +326,7 @@ async function resolveBusinessForInbound({ toNumber, fromNumber }) {
   if (fromAllowlisted.length > 1) {
     return {
       ok: false,
-      error: 'Ambiguous business routing — source number allowlisted on multiple businesses',
+      error: 'This phone number is trusted on more than one business. Contact Zuri support.',
       code: 'ambiguous_business'
     };
   }
@@ -334,7 +334,7 @@ async function resolveBusinessForInbound({ toNumber, fromNumber }) {
   // Source not on any allowlist for this forwarding number
   return {
     ok: false,
-    error: 'Source number not on allowlist',
+    error: 'This phone number is not on the trusted list for Assist.',
     code: 'unauthorized_from',
     business: byForwarding[0]
   };

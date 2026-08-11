@@ -3189,7 +3189,7 @@ function BusinessDashboard(): JSX.Element {
                     <div className="rounded-xl border border-gray-200 bg-white/90 p-4 space-y-3">
                       <p className="text-sm font-semibold text-zuri-black">Venue group (cross-location matching)</p>
                       <p className="text-xs text-gray-600 leading-relaxed">
-                        Use the same group id for sister venues so guests who opt in can see dishes they loved at your other locations.
+                        Use the same venue group for sister locations so guests who opt in can see dishes they loved elsewhere.
                       </p>
                       <div className="flex flex-col sm:flex-row gap-2">
                         <input

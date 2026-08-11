@@ -40,7 +40,9 @@ export function formatApiErrorBody(data: unknown): string {
 }
 
 function looksTechnical(message: string): boolean {
-  return /(cors|railway|vercel|vite_api_url|stack|trace|upstream|internal|deploy|redeploy|backend|api route|method not allowed|err_network|network error)/i.test(message)
+  return /(cors|railway|vercel|vite_api_url|stack|trace|upstream|internal|deploy|redeploy|backend|api route|method not allowed|err_network|network error|supabase|migration\s*\d+|schema cache|notify pgrst|service_role|env missing|nixpacks|\.sql\b|database error|not configured on this server)/i.test(
+    message
+  )
 }
 
 /** Convert any thrown API problem into friendly copy for end users. */

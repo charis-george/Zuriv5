@@ -502,7 +502,7 @@ router.get('/business/:businessId', requireBusinessAuth, async (req, res) => {
 
     if (error) {
       console.error('Get orders error:', error);
-      return res.status(500).json({ error: 'Database error' });
+      return res.status(500).json({ error: 'Something went wrong. Please try again.' });
     }
 
     const customerIds = [...new Set((orders || []).map(o => o.zuri_customer_id).filter(Boolean))];
@@ -520,7 +520,7 @@ router.get('/business/:businessId', requireBusinessAuth, async (req, res) => {
       );
       if (itemsErr) {
         console.error('Get order items batch error:', itemsErr?.message || itemsErr);
-        return res.status(500).json({ error: 'Database error' });
+        return res.status(500).json({ error: 'Something went wrong. Please try again.' });
       }
       allOrderItems = batchedItems || [];
     }
@@ -571,7 +571,7 @@ router.get('/business/:businessId', requireBusinessAuth, async (req, res) => {
     res.json(ordersWithItems);
   } catch (error) {
     console.error('Get orders error:', error);
-    res.status(500).json({ error: 'Database error' });
+    res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 });
 
@@ -636,7 +636,7 @@ router.get('/:id', async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('Get order error:', error);
-    res.status(500).json({ error: 'Database error' });
+    res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 });
 

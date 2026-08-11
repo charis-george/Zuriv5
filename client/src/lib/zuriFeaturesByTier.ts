@@ -24,7 +24,7 @@ export const ZURI_FEATURES_BY_TIER: TierFeatureBlock[] = [
       'Menu categories & items (text-only; no item photos)',
       'Free AI menu upload from photo or PDF (limited uses)',
       'Orders, statuses, reservations inbox, post-payment reviews',
-      'Payments via Paystack when you add keys',
+      'Online payments when you connect Paystack',
       'No Analytics tab, no Zuri Tap, no guest-side AI menu'
     ]
   },

@@ -1032,8 +1032,8 @@ function BusinessOnboarding(): JSX.Element {
                   ))}
                 </div>
                 <p className="text-[11px] text-gray-500 mt-4 leading-relaxed">
-                  <strong>Zuri Plus (legacy)</strong> rows include the same headline capabilities as Scale; ask support if you
-                  want to move to the current Scale plan.
+                  If your account still shows Zuri Plus, you get the same core features as Scale. Contact support if
+                  you&apos;d like to switch to the Scale plan name.
                 </p>
               </div>
           </div>

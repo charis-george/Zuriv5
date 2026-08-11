@@ -80,7 +80,7 @@ router.post('/sms/inbound', async (req, res) => {
           alert_timestamp: new Date(date).toISOString(),
           match_status: 'unmatchable',
           flag_reason: 'unauthorized',
-          parse_errors: 'Source MSISDN not on allowlist'
+          parse_errors: 'Sender phone is not on the trusted list'
         });
         emitAgentAlert(req, resolved.business.id, {
           alertId: null,
@@ -343,7 +343,7 @@ router.post('/enable', requireBusinessAuth, async (req, res) => {
       if (!nextAllow.length && !nextTerminal) {
         return res.status(400).json({
           error:
-            'Add at least one allowlisted phone for SMS matching, or link a Paystack Terminal ID'
+            'Add at least one trusted phone for SMS matching, or link a Paystack Terminal ID'
         });
       }
 
@@ -420,7 +420,7 @@ router.get('/settings', requireBusinessAuth, async (req, res) => {
 router.get('/terminals', requireBusinessAuth, async (req, res) => {
   try {
     if (!isTerminalConfigured()) {
-      return res.status(503).json({ error: 'Paystack is not configured on this server' });
+      return res.status(503).json({ error: 'Payments aren’t available right now. Please try again later.' });
     }
     const result = await listTerminals();
     if (!result.ok) {

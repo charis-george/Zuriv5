@@ -115,7 +115,7 @@ export function EventLandingBuilder({
             </p>
           </div>
           <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-1">URL slug</label>
+            <label className="block text-xs font-semibold text-gray-500 mb-1">Link ending</label>
             <div className="flex items-center gap-2">
               <span className="text-[10px] text-gray-400 shrink-0">/event/…/</span>
               <input

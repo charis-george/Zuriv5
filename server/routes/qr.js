@@ -403,7 +403,7 @@ router.get('/business/:businessId', async (req, res) => {
     res.json(payload);
   } catch (error) {
     console.error('Get business info error:', error);
-    res.status(500).json({ error: 'Database error' });
+    res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 });
 

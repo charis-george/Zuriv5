@@ -326,14 +326,9 @@ function BusinessPaymentPage(): JSX.Element {
                       }
                       const data = ax.response?.data
                       const msg = formatUserFacingError(data, '')
-                      const hint =
-                        typeof data?.sandboxHint === 'string' && data.sandboxHint.trim()
-                          ? ` ${data.sandboxHint.trim()}`
-                          : ''
                       setBankResolveError(
-                        (msg ||
-                          `We could not match this account via ${paymentProvider === 'monnify' ? 'Monnify' : 'Paystack'}. Double-check the bank and your NUBAN (usually 10 digits), then try Verify again. If your details are correct, try again later or ask your bank.`) +
-                          hint
+                        msg ||
+                          `We could not match this account via ${paymentProvider === 'monnify' ? 'Monnify' : 'Paystack'}. Double-check the bank and your NUBAN (usually 10 digits), then try Verify again. If your details are correct, try again later or ask your bank.`
                       )
                     } finally {
                       setBankResolving(false)

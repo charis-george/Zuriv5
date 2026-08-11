@@ -215,7 +215,7 @@ router.post('/login', async (req, res) => {
     res.json({ ...businessData, businessMode: business_mode || 'menu', token });
   } catch (error) {
     console.error('Login error:', error);
-    res.status(500).json({ error: 'Database error' });
+    res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 });
 
@@ -609,7 +609,7 @@ router.patch('/:id', requireBusinessAuth, async (req, res) => {
       if (v === 'monnify') {
         const { isMonnifyConfigured } = require('../lib/monnify');
         if (!isMonnifyConfigured()) {
-          return res.status(503).json({ error: 'Monnify is not configured on this server yet. Contact Zuri support or choose Paystack.' });
+          return res.status(503).json({ error: 'Monnify payouts aren’t available right now. Contact Zuri support or choose Paystack.' });
         }
       }
       updates.payment_provider = v;
@@ -660,7 +660,7 @@ router.patch('/:id', requireBusinessAuth, async (req, res) => {
     });
   } catch (error) {
     console.error('Update business error:', error);
-    res.status(500).json({ error: 'Database error' });
+    res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 });
 
@@ -695,7 +695,7 @@ router.patch('/:id/change-password', requireBusinessAuth, async (req, res) => {
     res.json({ success: true, message: 'Password updated successfully' });
   } catch (error) {
     console.error('Change password error:', error);
-    res.status(500).json({ error: 'Database error' });
+    res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 });
 

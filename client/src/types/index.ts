@@ -292,9 +292,9 @@ export const PLAN_LABELS: Record<PlanId, string> = {
   starter: 'Starter',
   growth: 'Growth',
   scale: 'Scale',
-  /** Legacy slug; migrated to Scale in DB — label as Scale for operators. */
+  /** Older plan id; treat as Scale for display. */
   pro: 'Scale',
-  zuri_plus: 'Zuri Plus (legacy)',
+  zuri_plus: 'Zuri Plus',
   enterprise: 'Enterprise',
   basic: 'Basic',
   advanced: 'Advanced'
