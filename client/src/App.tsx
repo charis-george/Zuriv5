@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect } from 'react'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { DialogProvider } from './components/DialogProvider'
 import { PaperPlaneLoader } from './components/PaperPlaneLoader'
+import { BusinessSessionGuard } from './components/business/BusinessSessionGuard'
 
 // Lazy load pages for code splitting
 const Home = lazy(() => import('./pages/Home'))
@@ -34,7 +35,6 @@ const PrivacyTermsPage = lazy(() => import('./pages/PrivacyTermsPage'))
 const ReservationPage = lazy(() => import('./pages/ReservationPage'))
 const NotFoundPage = lazy(() => import('./pages/NotFoundPage'))
 
-// Loading component
 const LoadingFallback = (): JSX.Element => (
   <div className="flex items-center justify-center min-h-screen bg-black">
     <PaperPlaneLoader size="md" />
@@ -43,41 +43,44 @@ const LoadingFallback = (): JSX.Element => (
 
 function AppRoutes(): JSX.Element {
   return (
-    <Suspense fallback={<LoadingFallback />}>
-      <Routes>
-        <Route path="/" element={<Home />} />
-        <Route path="/pricing" element={<PricingPage />} />
-        <Route path="/privacy" element={<PrivacyTermsPage />} />
-        <Route path="/order/:businessId" element={<OrderPage />} />
-        <Route path="/order/:businessId/:storefrontSlug" element={<OrderPage />} />
-        <Route path="/event/:businessId/:eventSlug" element={<OrderPage />} />
-        <Route path="/payment-done" element={<PaymentDone />} />
-        <Route path="/upgrade-done" element={<UpgradeDone />} />
-        <Route path="/subscribe/:plan" element={<SubscriptionSummary />} />
-        <Route path="/scan" element={<QRScanner />} />
-        <Route path="/scan/connect" element={<ScannerConnectPage />} />
-        <Route path="/demo" element={<DemoPage />} />
-        <Route path="/waitlist" element={<WaitlistPage />} />
-        <Route path="/reserve/:businessId" element={<ReservationPage />} />
-        <Route path="/zuri-tap" element={<ZuriTapPage />} />
-        <Route path="/tap/pay/:token" element={<TapPayPage />} />
-        <Route path="/tap/login" element={<TapLoginPage />} />
-        <Route path="/tap/forgot-password" element={<TapForgotPassword />} />
-        <Route path="/tap/reset-password" element={<TapResetPassword />} />
-        <Route path="/tap/register" element={<TapRegisterPage />} />
-        <Route path="/tap" element={<TapWaitPage />} />
-        <Route path="/business/login" element={<BusinessLogin />} />
-        <Route path="/business/forgot-password" element={<BusinessForgotPassword />} />
-        <Route path="/business/reset-password" element={<BusinessResetPassword />} />
-        <Route path="/business/onboarding/:businessId" element={<BusinessOnboarding />} />
-        <Route path="/business/dashboard/:businessId" element={<BusinessDashboard />} />
-        <Route path="/business/dashboard/:businessId/customize" element={<BusinessStorefrontCustomizer />} />
-        <Route path="/business/dashboard/:businessId/payment" element={<BusinessPaymentPage />} />
-        <Route path="/business/dashboard/:businessId/settings" element={<BusinessSettingsPage />} />
-        <Route path="/:publicSlug" element={<OrderPage />} />
-        <Route path="*" element={<NotFoundPage />} />
-      </Routes>
-    </Suspense>
+    <>
+      <BusinessSessionGuard />
+      <Suspense fallback={<LoadingFallback />}>
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/pricing" element={<PricingPage />} />
+          <Route path="/privacy" element={<PrivacyTermsPage />} />
+          <Route path="/order/:businessId" element={<OrderPage />} />
+          <Route path="/order/:businessId/:storefrontSlug" element={<OrderPage />} />
+          <Route path="/event/:businessId/:eventSlug" element={<OrderPage />} />
+          <Route path="/payment-done" element={<PaymentDone />} />
+          <Route path="/upgrade-done" element={<UpgradeDone />} />
+          <Route path="/subscribe/:plan" element={<SubscriptionSummary />} />
+          <Route path="/scan" element={<QRScanner />} />
+          <Route path="/scan/connect" element={<ScannerConnectPage />} />
+          <Route path="/demo" element={<DemoPage />} />
+          <Route path="/waitlist" element={<WaitlistPage />} />
+          <Route path="/reserve/:businessId" element={<ReservationPage />} />
+          <Route path="/zuri-tap" element={<ZuriTapPage />} />
+          <Route path="/tap/pay/:token" element={<TapPayPage />} />
+          <Route path="/tap/login" element={<TapLoginPage />} />
+          <Route path="/tap/forgot-password" element={<TapForgotPassword />} />
+          <Route path="/tap/reset-password" element={<TapResetPassword />} />
+          <Route path="/tap/register" element={<TapRegisterPage />} />
+          <Route path="/tap" element={<TapWaitPage />} />
+          <Route path="/business/login" element={<BusinessLogin />} />
+          <Route path="/business/forgot-password" element={<BusinessForgotPassword />} />
+          <Route path="/business/reset-password" element={<BusinessResetPassword />} />
+          <Route path="/business/onboarding/:businessId" element={<BusinessOnboarding />} />
+          <Route path="/business/dashboard/:businessId" element={<BusinessDashboard />} />
+          <Route path="/business/dashboard/:businessId/customize" element={<BusinessStorefrontCustomizer />} />
+          <Route path="/business/dashboard/:businessId/payment" element={<BusinessPaymentPage />} />
+          <Route path="/business/dashboard/:businessId/settings" element={<BusinessSettingsPage />} />
+          <Route path="/:publicSlug" element={<OrderPage />} />
+          <Route path="*" element={<NotFoundPage />} />
+        </Routes>
+      </Suspense>
+    </>
   )
 }
 
@@ -100,4 +103,3 @@ function App(): JSX.Element {
 }
 
 export default App
-

@@ -28,7 +28,6 @@ import type { StorefrontFontPairingId } from '../types'
 import { getBusinessToken } from '../lib/businessAuthStorage'
 import { formatUserFacingError } from '../lib/formatApiError'
 import { normalizeUuidParam } from '../lib/normalizeUuid'
-import { CustomDropdown } from '../components/CustomDropdown'
 import { isGrowthPlusPlan, isScaleGuestMenuTagPlan } from '../lib/planAccess'
 
 const PREVIEW_MENU: StorefrontMenuGridCategory[] = [
@@ -36,15 +35,15 @@ const PREVIEW_MENU: StorefrontMenuGridCategory[] = [
     id: 'p1',
     name: 'Popular picks',
     items: [
-      { id: 'a', name: 'Jollof & grilled chicken', description: 'Smoky rice with house marinade.', price: 4500, available: true },
-      { id: 'b', name: 'Afro grain bowl', description: 'Greens, grains, and pepper sauce.', price: 5200, available: true }
+      { id: 'a', name: 'Grilled chicken plate', description: 'House marinade with seasonal sides.', price: 4500, available: true },
+      { id: 'b', name: 'Garden grain bowl', description: 'Greens, grains, and house dressing.', price: 5200, available: true }
     ]
   },
   {
     id: 'p2',
     name: 'Sides & extras',
     items: [
-      { id: 'c', name: 'Plantain wedges', description: 'Crispy sweet plantain.', price: 1200, available: true },
+      { id: 'c', name: 'Crispy wedges', description: 'Golden, lightly seasoned.', price: 1200, available: true },
       { id: 'd', name: 'Chef’s salad', description: 'Ask staff for today’s mix.', price: 2500, available: true }
     ]
   }
@@ -92,8 +91,8 @@ const PREVIEW_TICKETS: StorefrontMenuGridCategory[] = [
 ]
 
 const PREVIEW_CART_MENU = [
-  { id: 'a', name: 'Jollof & grilled chicken', price: 4500, quantity: 1, available: true },
-  { id: 'c', name: 'Plantain wedges', price: 1200, quantity: 2, available: true }
+  { id: 'a', name: 'Grilled chicken plate', price: 4500, quantity: 1, available: true },
+  { id: 'c', name: 'Crispy wedges', price: 1200, quantity: 2, available: true }
 ]
 
 const PREVIEW_CART_TICKETS = [
@@ -130,7 +129,7 @@ function BusinessStorefrontCustomizer(): JSX.Element {
   const bannerInputRef = useRef<HTMLInputElement>(null)
   const [bannerUploading, setBannerUploading] = useState(false)
   const [bannerError, setBannerError] = useState<string | null>(null)
-  const [previewMenuLang, setPreviewMenuLang] = useState<GuestMenuLang>('en')
+  const previewMenuLang: GuestMenuLang = 'en'
   const [previewGuestDietary, setPreviewGuestDietary] = useState<{
     vegetarian?: boolean
     meatLover?: boolean
@@ -531,7 +530,7 @@ function BusinessStorefrontCustomizer(): JSX.Element {
             <textarea
               value={aiPromptInput}
               onChange={(e) => setAiPromptInput(e.target.value)}
-              placeholder={'Example: Dark nightclub aesthetic with gold accents, bold typography, wide ticket cards, minimal copy. Inspired by premium Lagos event pages.'}
+              placeholder={'Example: Dark nightclub aesthetic with gold accents, bold typography, wide ticket cards, minimal copy. Inspired by premium event pages.'}
               className="w-full h-28 px-3 py-2 border border-gray-200 rounded-lg text-xs bg-white"
             />
             <input
@@ -1209,8 +1208,7 @@ function BusinessStorefrontCustomizer(): JSX.Element {
                   <div className={`grid gap-6 ${isPhone ? 'grid-cols-1' : 'lg:grid-cols-3 gap-8'}`}>
                     <div className={isPhone ? '' : 'lg:col-span-2'}>
                       {!isTicketing &&
-                      (previewAg.translationsEnabled !== false ||
-                        previewAg.dietaryPromptEnabled !== false ||
+                      (previewAg.dietaryPromptEnabled !== false ||
                         previewAg.localPaymentHints) ? (
                         <div
                           className="mb-6 rounded-2xl border p-4 sm:p-5"
@@ -1220,33 +1218,6 @@ function BusinessStorefrontCustomizer(): JSX.Element {
                             Personalise this menu
                           </p>
                           <div className="flex flex-col sm:flex-row sm:items-end gap-4">
-                            {previewAg.translationsEnabled !== false ? (
-                              <div className="flex-1 min-w-[10rem]">
-                                <label className="block text-[11px] font-medium mb-1.5" style={{ color: previewTheme.sub }}>
-                                  Language
-                                </label>
-                                <CustomDropdown
-                                  size="sm"
-                                  options={[
-                                    { value: 'en', label: 'English' },
-                                    { value: 'ha', label: 'Hausa' },
-                                    { value: 'yo', label: 'Yorùbá' },
-                                    { value: 'ig', label: 'Igbo' }
-                                  ]}
-                                  value={previewMenuLang}
-                                  onChange={(v) => setPreviewMenuLang(v as GuestMenuLang)}
-                                  placeholder="Language"
-                                  triggerStyle={{
-                                    background: previewTheme.page,
-                                    color: previewTheme.text,
-                                    borderColor: previewTheme.border
-                                  }}
-                                  brandColor={mergedPreviewConfig.brandColor}
-                                  panelStyle={{ background: previewTheme.panel, borderColor: previewTheme.border }}
-                                  optionTextColor={previewTheme.text}
-                                />
-                              </div>
-                            ) : null}
                             {previewAg.dietaryPromptEnabled !== false ? (
                               <div className="flex-1">
                                 <p className="text-[11px] font-medium mb-1.5" style={{ color: previewTheme.sub }}>

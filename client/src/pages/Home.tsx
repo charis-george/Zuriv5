@@ -28,10 +28,10 @@ function Home(): JSX.Element {
   usePageSeo({
     title: isPricingPage
       ? 'ZURI Pricing | AI Menus, Ordering & Ticketing for Venues'
-      : 'ZURI | AI-Personalised Menus, Ordering & Ticketing for African Venues',
+      : 'ZURI | AI-Personalised Menus, Ordering & Ticketing for Venues',
     description: isPricingPage
-      ? 'Compare ZURI plans for AI-assisted menus and storefronts, personalised ordering, events ticketing, Zuri Tap, and Naira payouts for hospitality across Africa.'
-      : 'ZURI is the AI-personalised menu, ordering, and ticketing platform for restaurants, hotels, and events in Africa — less guest friction, faster service, payouts to your bank.',
+      ? 'Compare ZURI plans for AI-assisted menus and storefronts, personalised ordering, events ticketing, Zuri Tap, and Naira payouts for hospitality venues.'
+      : 'ZURI is the AI-personalised menu, ordering, and ticketing platform for restaurants, hotels, and events — less guest friction, faster service, payouts to your bank.',
     path: isPricingPage ? '/pricing' : '/',
     jsonLd: [
       organizationJsonLd,
@@ -44,7 +44,7 @@ function Home(): JSX.Element {
         operatingSystem: 'Web',
         url: 'https://zuriqo.com/',
         image: 'https://zuriqo.com/ZURI.png',
-        description: 'AI-personalised menus and storefronts, QR and Tap ordering, events ticketing, payments, and live AI operations for hospitality businesses in Africa.',
+        description: 'AI-personalised menus and storefronts, QR and Tap ordering, events ticketing, payments, and live AI operations for hospitality businesses.',
         publisher: {
           '@type': 'Organization',
           name: 'ZURI',
@@ -449,10 +449,10 @@ function Home(): JSX.Element {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.055 13H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               </div>
-              <h3 className="text-lg font-medium tracking-tight mb-3">Built for Africa&apos;s front-of-house reality</h3>
+              <h3 className="text-lg font-medium tracking-tight mb-3">Built for busy front-of-house reality</h3>
               <p className="text-gray-400 text-sm leading-relaxed font-normal">
-                Peak-hour noise, shared tables, events with thousands of guests — ZURI is designed for the pace of African
-                cities while keeping reconciliation simple for finance teams.
+                Peak-hour noise, shared tables, events with thousands of guests — ZURI is designed for the pace of modern
+                venues while keeping reconciliation simple for finance teams.
               </p>
             </div>
           </div>
@@ -460,7 +460,7 @@ function Home(): JSX.Element {
             <div>
               <h3 className="text-base md:text-lg font-medium text-zuri-black tracking-tight mb-1">Plans that scale with your AI ambition</h3>
               <p className="text-gray-600 text-sm leading-relaxed font-normal">
-                From free menus to analytics and Zuri Assist — upgrade to Scale when you want full ops AI and a guest menu tuned for African languages and local taste.
+                From free menus with ZuriQO and guest personalization, to analytics on Growth — upgrade to Scale when you want unlimited AI credits plus live ops Assist.
               </p>
             </div>
             <Link to="/pricing" className="shrink-0 inline-flex items-center gap-2 text-sm font-medium rounded-full border border-gray-300 text-zuri-black px-6 py-2.5 hover:border-zuri-orange hover:text-zuri-orange transition-colors">
@@ -631,6 +631,10 @@ function Home(): JSX.Element {
                 </li>
                 <li className="flex items-start">
                   <span className="text-zuri-yellow mr-2">✓</span>
+                  Guest AI menu + ZuriQO — 8 AI credits / day
+                </li>
+                <li className="flex items-start">
+                  <span className="text-zuri-yellow mr-2">✓</span>
                   Orders &amp; payments to your bank
                 </li>
                 <li className="flex items-start text-gray-400">
@@ -670,6 +674,10 @@ function Home(): JSX.Element {
                 <li className="flex items-start">
                   <span className="text-green-500 mr-2">✓</span>
                   Menu item photos &amp; business logo
+                </li>
+                <li className="flex items-start">
+                  <span className="text-green-500 mr-2">✓</span>
+                  Guest AI menu + ZuriQO — 25 AI credits / day
                 </li>
                 <li className="flex items-start">
                   <span className="text-green-500 mr-2">✓</span>
@@ -727,7 +735,7 @@ function Home(): JSX.Element {
                 </li>
                 <li className="flex items-start">
                   <span className="text-blue-500 mr-2">✓</span>
-                  Zuri Assist on the guest menu — trending, upsells, taste sort, Hausa · Yorùbá · Igbo
+                  ZuriQO AI — 60 credits / day + guest menu personalization
                 </li>
                 <li className="flex items-start">
                   <span className="text-blue-500 mr-2">✓</span>
@@ -763,7 +771,11 @@ function Home(): JSX.Element {
               <ul className="space-y-3 text-sm text-gray-300 flex-1">
                 <li className="flex items-start">
                   <span className="text-purple-300 mr-2">✓</span>
-                  Everything in Growth — including guest AI menu controls
+                  Unlimited ZuriQO + unlimited storefront AI regenerations
+                </li>
+                <li className="flex items-start">
+                  <span className="text-purple-300 mr-2">✓</span>
+                  Everything in Growth — analytics, Tap, guest AI
                 </li>
                 <li className="flex items-start">
                   <span className="text-purple-300 mr-2">✓</span>
@@ -776,10 +788,6 @@ function Home(): JSX.Element {
                 <li className="flex items-start">
                   <span className="text-purple-300 mr-2">✓</span>
                   Live ops — daily briefing, rush signals, slow hours, low-stock flags
-                </li>
-                <li className="flex items-start">
-                  <span className="text-purple-300 mr-2">✓</span>
-                  AI storefront regenerations without Growth caps
                 </li>
               </ul>
               <div className="mt-4 flex justify-center">
@@ -853,7 +861,7 @@ function Home(): JSX.Element {
               <h3 className="text-base font-medium text-zuri-black mb-2 tracking-tight">What is ZURI?</h3>
               <p className="text-gray-600 text-sm leading-relaxed font-normal">
                 ZURI is an AI-personalised menu, ordering, and ticketing platform for hospitality and events. Guests open your
-                link to order food or buy tickets; you operate from one dashboard with payouts to your Nigerian bank.
+                link to order food or buy tickets; you operate from one dashboard with payouts to your bank.
               </p>
             </div>
             <div
@@ -871,7 +879,7 @@ function Home(): JSX.Element {
             >
               <h3 className="text-base font-medium text-zuri-black mb-2 tracking-tight">How do I get paid?</h3>
               <p className="text-gray-600 text-sm leading-relaxed font-normal">
-                Add your Nigerian bank account in your dashboard. We verify the account name and pay out to you—no Paystack or gateway setup required.
+                Add your bank account in your dashboard. We verify the account name and pay out to you—no Paystack or gateway setup required.
               </p>
             </div>
             <div
@@ -906,7 +914,7 @@ function Home(): JSX.Element {
             Ready when you are.
           </h2>
           <p className="text-gray-400 text-base sm:text-lg font-normal leading-relaxed mb-10 md:mb-12 max-w-md mx-auto">
-            Join venues using ZURI to personalise menus, launch ticketing, and move service lines faster across Africa.
+            Join venues using ZURI to personalise menus, launch ticketing, and move service lines faster.
           </p>
           <Link
             to="/business/login"

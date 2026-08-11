@@ -150,7 +150,7 @@ function OrderPage(): JSX.Element {
   const [checkoutSnapshot, setCheckoutSnapshot] = useState<Array<{ name: string; qty: number; lineTotal: number }>>([])
   const [guestInsights, setGuestInsights] = useState<GuestPersonalizationInsights>({ ...EMPTY_GUEST_INSIGHTS })
   const [crossVenueOptIn, setCrossVenueOptInState] = useState<boolean>(() => getCrossVenueOptIn())
-  const [menuLang, setMenuLang] = useState<GuestMenuLang>('en')
+  const menuLang: GuestMenuLang = 'en'
   const [guestDietary, setGuestDietary] = useState<GuestDietaryPrefs>({})
   const [expandedTicketId, setExpandedTicketId] = useState<string | null>(null)
   const [reorderHintIds, setReorderHintIds] = useState<string[]>([])
@@ -1723,8 +1723,7 @@ function OrderPage(): JSX.Element {
       <div className="grid w-full min-w-0 lg:grid-cols-3 gap-6 sm:gap-8">
         <div className="min-w-0 lg:col-span-2">
           {!isTicketing &&
-          (ag.translationsEnabled !== false ||
-            ag.dietaryPromptEnabled !== false ||
+          (ag.dietaryPromptEnabled !== false ||
             ag.personalisedRecs !== false ||
             ag.localPaymentHints) ? (
             <div
@@ -1735,29 +1734,6 @@ function OrderPage(): JSX.Element {
                 Personalise this menu
               </p>
               <div className="flex flex-col sm:flex-row sm:items-end gap-4">
-                {ag.translationsEnabled !== false ? (
-                  <div className="flex-1 min-w-[10rem]">
-                    <label className="block text-[11px] font-medium mb-1.5" style={{ color: theme.sub }}>
-                      Language
-                    </label>
-                    <CustomDropdown
-                      size="sm"
-                      options={[
-                        { value: 'en', label: 'English' },
-                        { value: 'ha', label: 'Hausa' },
-                        { value: 'yo', label: 'Yorùbá' },
-                        { value: 'ig', label: 'Igbo' }
-                      ]}
-                      value={menuLang}
-                      onChange={(v) => setMenuLang(v as GuestMenuLang)}
-                      placeholder="Language"
-                      triggerStyle={{ background: theme.page, color: theme.text, borderColor: theme.border }}
-                      brandColor={brand}
-                      panelStyle={{ background: theme.panel, borderColor: theme.border }}
-                      optionTextColor={theme.text}
-                    />
-                  </div>
-                ) : null}
                 {ag.dietaryPromptEnabled !== false ? (
                   <div className="flex-1">
                     <p className="text-[11px] font-medium mb-1.5" style={{ color: theme.sub }}>

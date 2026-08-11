@@ -20,7 +20,7 @@ function WaitlistPage(): JSX.Element {
   usePageSeo({
     title: 'Join the ZURI Waitlist | Early Access for Venues',
     description:
-      'Join the ZURI waitlist for early access to AI-personalised menus, QR ordering, events ticketing, and Naira payouts built for hospitality across Africa.',
+      'Join the ZURI waitlist for early access to AI-personalised menus, QR ordering, events ticketing, and Naira payouts built for hospitality venues.',
     path: '/waitlist',
     jsonLd: [
       organizationJsonLd,

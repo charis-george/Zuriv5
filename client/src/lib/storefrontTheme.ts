@@ -6,7 +6,7 @@ export const DEFAULT_AI_GUEST: AiGuestStorefrontConfig = {
   intelligentUpsell: true,
   personalisedRecs: true,
   tasteSortEnabled: true,
-  translationsEnabled: true,
+  translationsEnabled: false,
   dietaryPromptEnabled: true,
   localPaymentHints: true,
   sharedTableHints: false

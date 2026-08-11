@@ -93,7 +93,14 @@ async function ensureDefaultPresets(businessId, catalogMode) {
     .single();
 
   if (error) {
-    console.error('ensureDefaultPresets', error);
+    // 23514 = shop mode not allowed yet on DB; avoid log spam on every dashboard poll.
+    if (error.code === '23514') {
+      console.warn(
+        'ensureDefaultPresets: shop/ticketing mode blocked by DB check — apply migration 035_business_mode_shop_constraints_fix.sql'
+      );
+    } else {
+      console.error('ensureDefaultPresets', error);
+    }
     return null;
   }
 

@@ -980,8 +980,8 @@ router.patch('/:id/ai-menu-settings', requireBusinessAuth, async (req, res) => {
     }
 
     const plan = await getBusinessPlan(id);
-    if (!isGrowthPlus(plan || 'free')) {
-      return res.status(403).json({ error: 'Upgrade to Growth to use AI guest menu controls.' });
+    if (!plan) {
+      return res.status(403).json({ error: 'Could not verify your plan.' });
     }
 
     const { data: row, error: fetchErr } = await supabase

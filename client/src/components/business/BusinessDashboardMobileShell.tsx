@@ -3,12 +3,12 @@ import { useNavigate } from 'react-router-dom'
 import type { Business } from '../../types'
 import { PLAN_LABELS } from '../../types'
 import { clearBusinessAuth } from '../../lib/businessAuthStorage'
-import { isAiInsightsTier } from '../../lib/planAccess'
 import { useMobileShellViewport } from '../../hooks/useMobileShellViewport'
 import { catalogLabelForMode } from '../../lib/businessMode'
 import { MobileBottomSheet } from './MobileBottomSheet'
+import { ZuriQoSummonButton } from './ZuriQoAiChatBar'
 
-type TabType = 'orders' | 'analytics' | 'menu' | 'qr' | 'payment' | 'ai'
+type TabType = 'orders' | 'analytics' | 'menu' | 'qr' | 'payment'
 
 type MobileNavKey = 'orders' | 'menu' | 'qr' | 'scan' | 'more'
 
@@ -19,6 +19,8 @@ type BusinessDashboardMobileShellProps = {
   setActiveTab: (tab: TabType) => void
   notificationsCount: number
   onNotificationsClick: () => void
+  onZuriQoClick?: () => void
+  zuriQoActive?: boolean
   onProfileClick: () => void
   children: ReactNode
   onChangePassword: () => void
@@ -100,6 +102,8 @@ export function BusinessDashboardMobileShell({
   setActiveTab,
   notificationsCount,
   onNotificationsClick,
+  onZuriQoClick,
+  zuriQoActive = false,
   onProfileClick,
   children,
   onChangePassword,
@@ -113,10 +117,9 @@ export function BusinessDashboardMobileShell({
   useMobileShellViewport(mainRef)
 
   const showAnalytics = business?.plan && business.plan !== 'free' && business.plan !== 'starter'
-  const showAi = isAiInsightsTier(business?.plan)
 
   const navActive = (key: MobileNavKey): boolean => {
-    if (key === 'more') return moreOpen || activeTab === 'analytics' || activeTab === 'ai' || activeTab === 'payment'
+    if (key === 'more') return moreOpen || activeTab === 'analytics' || activeTab === 'payment'
     if (key === 'orders') return activeTab === 'orders' && !moreOpen
     if (key === 'menu') return activeTab === 'menu' && !moreOpen
     if (key === 'qr') return activeTab === 'qr' && !moreOpen
@@ -148,9 +151,7 @@ export function BusinessDashboardMobileShell({
           ? catalogLabelForMode(business?.businessMode)
           : activeTab === 'qr'
             ? 'QR Code'
-            : activeTab === 'ai'
-              ? 'Zuri Assist'
-              : 'Dashboard'
+            : 'Dashboard'
 
   return (
     <div className="mobile-dashboard-shell font-normal">
@@ -182,6 +183,13 @@ export function BusinessDashboardMobileShell({
               <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-zuri-orange/10 text-zuri-orange border border-zuri-orange/20 max-w-[4.5rem] truncate">
                 {PLAN_LABELS[business.plan]}
               </span>
+            ) : null}
+            {onZuriQoClick ? (
+              <ZuriQoSummonButton
+                active={zuriQoActive}
+                onClick={onZuriQoClick}
+                className="h-10 w-10"
+              />
             ) : null}
             <button
               type="button"
@@ -253,9 +261,16 @@ export function BusinessDashboardMobileShell({
               Analytics
             </button>
           ) : null}
-          {showAi ? (
-            <button type="button" onClick={() => pickTab('ai')} className={`dashboard-btn w-full rounded-xl px-4 py-3 text-left text-sm font-semibold text-zuri-black hover:bg-gray-50 ${BTN_PRESS}`}>
-              Zuri Assist
+          {onZuriQoClick ? (
+            <button
+              type="button"
+              onClick={() => {
+                setMoreOpen(false)
+                onZuriQoClick()
+              }}
+              className={`dashboard-btn w-full rounded-xl px-4 py-3 text-left text-sm font-semibold text-zuri-black hover:bg-gray-50 ${BTN_PRESS}`}
+            >
+              ZuriQO AI
             </button>
           ) : null}
           <button

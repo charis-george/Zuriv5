@@ -19,19 +19,16 @@ const PROTEINS = [
 ];
 const COURSES = ['starter', 'appetizer', 'main', 'side', 'dessert', 'drink', 'soup', 'salad'];
 const CUISINES = [
-  'nigerian',
-  'yoruba',
-  'igbo',
-  'hausa',
   'continental',
   'chinese',
   'indian',
   'italian',
+  'mexican',
+  'thai',
   'bbq',
   'grill',
-  'suya',
-  'jollof',
-  'pepper soup'
+  'mediterranean',
+  'fusion'
 ];
 const ALLERGENS = ['nuts', 'peanut', 'dairy', 'milk', 'cheese', 'gluten', 'shellfish', 'soy'];
 
@@ -53,10 +50,9 @@ function extractIngredients(name, description) {
   }
 
   const pairs = [
-    'palm oil',
-    'plantain',
+    'olive oil',
     'rice',
-    'yam',
+    'potato',
     'pepper',
     'tomato',
     'onion',
@@ -65,7 +61,7 @@ function extractIngredients(name, description) {
     'coconut',
     'avocado',
     'lettuce',
-    'plantain chips'
+    'pasta'
   ];
   for (const p of pairs) {
     if (blob.includes(p)) found.add(p);

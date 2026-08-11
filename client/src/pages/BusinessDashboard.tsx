@@ -28,6 +28,7 @@ import { StorefrontProfilePicker } from '../components/storefront/StorefrontProf
 import { useDialog } from '../components/DialogProvider'
 import { BusinessDashboardMobileShell } from '../components/business/BusinessDashboardMobileShell'
 import { MobileBottomSheet } from '../components/business/MobileBottomSheet'
+import { ZuriQoAiChatBar, ZuriQoSummonButton } from '../components/business/ZuriQoAiChatBar'
 import {
   formatOrderStatusLabel,
   getOrderStatusColor,
@@ -41,7 +42,7 @@ import { isPushSupported, showLocalOrderNotification, subscribeBusinessPush } fr
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
-type TabType = 'orders' | 'analytics' | 'menu' | 'qr' | 'payment' | 'ai'
+type TabType = 'orders' | 'analytics' | 'menu' | 'qr' | 'payment'
 type OrderStatus = 'pending' | 'preparing' | 'ready' | 'completed' | 'cancelled'
 type OrdersTimePreset = 'all' | 'today' | 'week' | 'month' | 'year' | 'custom'
 
@@ -110,9 +111,6 @@ function createEmptyItemForm() {
     minPerOrder: '',
     pricingType: 'paid' as string,
     perks: [] as string[],
-    nameTransHa: '',
-    nameTransYo: '',
-    nameTransIg: '',
     canonicalDishId: '',
     ingredients: ''
   }
@@ -285,6 +283,7 @@ function BusinessDashboard(): JSX.Element {
   const [profileOpen, setProfileOpen] = useState(false)
   const [logoMenuOpen, setLogoMenuOpen] = useState(false)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const [zuriQoOpen, setZuriQoOpen] = useState(true)
   const [ordersTimePreset, setOrdersTimePreset] = useState<OrdersTimePreset>('all')
   const [ordersCustomFrom, setOrdersCustomFrom] = useState('')
   const [ordersCustomTo, setOrdersCustomTo] = useState('')
@@ -432,8 +431,6 @@ function BusinessDashboard(): JSX.Element {
         if (res.data.plan && res.data.plan !== 'free' && res.data.plan !== 'starter') fetchAnalytics()
         else setLoading(false)
         if (res.data.plan === 'free' || res.data.plan === 'starter') setActiveTab(t => (t === 'analytics' ? 'orders' : t))
-        const proOrAbove = isAiInsightsTier(res.data.plan)
-        if (!proOrAbove) setActiveTab(t => (t === 'ai' ? 'orders' : t))
       })
       .catch(err => { console.error(err); setLoading(false) })
 
@@ -704,15 +701,6 @@ function BusinessDashboard(): JSX.Element {
   }, [businessId, business?.plan])
 
   useEffect(() => {
-    if (activeTab !== 'ai' || !businessId) return
-    const proOrAbove = isAiInsightsTier(business?.plan)
-    if (!proOrAbove) return
-    axios.get<CustomerIntelligence>(`/api/analytics/customer-intelligence/${businessId}?days=30`, { headers: getAuthHeaders() })
-      .then(res => setCustomerIntelligence(res.data))
-      .catch(() => setCustomerIntelligence(null))
-  }, [activeTab, businessId, business?.plan])
-
-  useEffect(() => {
     if (activeTab !== 'analytics' || !businessId) return
     const proOrAbove = isAiInsightsTier(business?.plan)
     if (!proOrAbove) return
@@ -971,44 +959,6 @@ function BusinessDashboard(): JSX.Element {
     }
   }
 
-  const saveItemMenuTranslations = async (itemId: string): Promise<void> => {
-    if (!businessId || !isGuestAiMenuTier(business?.plan) || isTicketing) return
-    const row: Partial<Record<'ha' | 'yo' | 'ig', string>> = {}
-    const ha = itemForm.nameTransHa.trim()
-    const yo = itemForm.nameTransYo.trim()
-    const ig = itemForm.nameTransIg.trim()
-    if (ha) row.ha = ha
-    if (yo) row.yo = yo
-    if (ig) row.ig = ig
-    try {
-      const { data } = await axios.patch<{ storefrontDetails?: Business['storefrontDetails'] }>(
-        apiUrl(`/api/business/${businessId}/ai-menu-settings`),
-        { menuTranslations: { [itemId]: row } },
-        { headers: getAuthHeaders() }
-      )
-      if (data?.storefrontDetails) {
-        setBusiness((prev) =>
-          prev
-            ? {
-                ...prev,
-                storefrontDetails: {
-                  ...(prev.storefrontDetails || { name: '', tagline: '', cuisineTags: [] }),
-                  ...data.storefrontDetails
-                }
-              }
-            : null
-        )
-      }
-    } catch (err) {
-      console.error(err)
-      alert(
-        axios.isAxiosError(err)
-          ? formatUserFacingError(err.response?.data, 'Item saved, but guest-language names failed to save.')
-          : 'Item saved, but guest-language names failed to save.'
-      )
-    }
-  }
-
   const fetchMenu = useCallback((): void => {
     if (!businessId) return
     const presetQ = editingPresetId ? `?presetId=${encodeURIComponent(editingPresetId)}` : ''
@@ -1164,8 +1114,7 @@ function BusinessDashboard(): JSX.Element {
         ...itemData,
         categoryId: itemForm.categoryId && itemForm.categoryId !== 'uncategorized' ? itemForm.categoryId : null
       }, { headers: getAuthHeaders() })
-        .then(async () => {
-          await saveItemMenuTranslations(editingItem.id)
+        .then(() => {
           fetchMenu()
           setShowItemForm(false)
           setEditingItem(null)
@@ -1177,9 +1126,7 @@ function BusinessDashboard(): JSX.Element {
         })
     } else {
       axios.post('/api/menu/item', itemData, { headers: getAuthHeaders() })
-        .then(async (res) => {
-          const newId = (res.data as { id?: string }).id
-          if (newId) await saveItemMenuTranslations(newId)
+        .then(() => {
           fetchMenu()
           setShowItemForm(false)
           resetForm()
@@ -1263,7 +1210,6 @@ function BusinessDashboard(): JSX.Element {
         break
       }
     }
-    const mt = business?.storefrontDetails?.menuTranslations?.[item.id]
     setItemForm({
       name: item.name,
       description: item.description || '',
@@ -1280,9 +1226,6 @@ function BusinessDashboard(): JSX.Element {
       minPerOrder: item.minPerOrder != null ? String(item.minPerOrder) : '',
       pricingType: item.pricingType || 'paid',
       perks: Array.isArray(item.perks) ? item.perks : [],
-      nameTransHa: mt?.ha ?? '',
-      nameTransYo: mt?.yo ?? '',
-      nameTransIg: mt?.ig ?? '',
       canonicalDishId: item.canonicalDishId ?? '',
       ingredients: Array.isArray(item.ingredients) ? item.ingredients.join(', ') : ''
     })
@@ -1701,12 +1644,22 @@ function BusinessDashboard(): JSX.Element {
                   {PLAN_LABELS[business.plan]} plan
                 </span>
               )}
+              <ZuriQoSummonButton
+                active={zuriQoOpen}
+                onClick={() => {
+                  setProfileOpen(false)
+                  setLogoMenuOpen(false)
+                  setNotificationsOpen(false)
+                  setZuriQoOpen((v) => !v)
+                }}
+              />
               <div className="relative" ref={notificationsMenuRef}>
                 <button
                   type="button"
                   onClick={() => {
                     setProfileOpen(false)
                     setLogoMenuOpen(false)
+                    setZuriQoOpen(false)
                     setNotificationsOpen((open) => !open)
                   }}
                   className={`relative flex items-center justify-center w-10 h-10 rounded-full bg-white border border-gray-200 hover:bg-gray-50 transition focus:outline-none focus:ring-2 focus:ring-zuri-orange/50 ${BTN_PRESS}`}
@@ -2637,18 +2590,6 @@ function BusinessDashboard(): JSX.Element {
             >
               QR Code
             </button>
-            {isAiInsightsTier(business?.plan) && (
-              <button
-                onClick={() => setActiveTab('ai')}
-                className={`flex-1 min-w-0 px-4 py-3 text-sm font-semibold transition ${BTN_PRESS} ${
-                  activeTab === 'ai'
-                    ? 'text-zuri-orange border-b-2 border-zuri-orange bg-zuri-orange/10'
-                    : 'text-gray-600 hover:text-zuri-black'
-                }`}
-              >
-                Zuri Assist
-              </button>
-            )}
           </div>
           )}
 
@@ -3139,22 +3080,25 @@ function BusinessDashboard(): JSX.Element {
                 )}
 
                 {isGuestAiMenuTier(business?.plan) && !isTicketing && (
-                  <div className="rounded-2xl border border-zuri-orange/25 bg-gradient-to-br from-zuri-orange/[0.07] to-white p-6 md:p-8 space-y-5">
+                  <div
+                    className={`rounded-2xl border border-zuri-orange/25 bg-gradient-to-br from-zuri-orange/[0.07] to-white space-y-5 ${
+                      isPhone ? 'p-4' : 'p-6 md:p-8'
+                    }`}
+                  >
                     <div>
                       <p className="text-xs font-semibold text-zuri-orange uppercase tracking-widest mb-1">AI guest menu</p>
-                      <h3 className="text-xl font-bold text-zuri-black">What guests see on your link</h3>
+                      <h3 className={`font-bold text-zuri-black ${isPhone ? 'text-lg' : 'text-xl'}`}>What guests see on your link</h3>
                       <p className="text-sm text-gray-600 mt-1">
-                        Trending plates, Hausa · Yoruba · Igbo names (when you add them), taste-based sorting, upsell hints, and dietary chips — tuned for African dining rooms.
+                        Trending items, taste-based sorting, upsell hints, and dietary preference chips — so guests find what they want faster.
                       </p>
                     </div>
-                    <div className="grid sm:grid-cols-2 gap-3 text-sm">
+                    <div className={`grid gap-3 text-sm ${isPhone ? 'grid-cols-1' : 'sm:grid-cols-2'}`}>
                       {(
                         [
                           ['trendingOnMenu', 'Trending items', 'Badges from live sales.'],
                           ['intelligentUpsell', 'Intelligent upsell', '“Pairs well” prompts on hot combos.'],
                           ['personalisedRecs', 'AI recommendations', 'Zuri picks row on the menu.'],
                           ['tasteSortEnabled', 'Taste sorting', 'Reorder list when guests pick dietary prefs.'],
-                          ['translationsEnabled', 'Translations', 'Show Hausa / Yoruba / Igbo when configured.'],
                           ['dietaryPromptEnabled', 'Dietary prefs', 'Vegetarian, meat-forward, no-dairy chips.'],
                           ['localPaymentHints', 'Local payment hints', 'MoMo & bank-transfer nudges at checkout.'],
                           ['sharedTableHints', 'Shared table hints', 'Split-bill / shared-table copy.']
@@ -3162,7 +3106,9 @@ function BusinessDashboard(): JSX.Element {
                       ).map(([key, label, hint]) => (
                         <label
                           key={key}
-                          className="flex items-start gap-3 rounded-xl border border-gray-200 bg-white/90 px-3 py-3 cursor-pointer hover:border-zuri-orange/40 transition"
+                          className={`flex items-start gap-3 rounded-xl border border-gray-200 bg-white/90 cursor-pointer hover:border-zuri-orange/40 transition ${
+                            isPhone ? 'px-3 py-3.5 min-h-[3.25rem]' : 'px-3 py-3'
+                          }`}
                         >
                           <input
                             type="checkbox"
@@ -3248,9 +3194,9 @@ function BusinessDashboard(): JSX.Element {
                       </p>
                     </div>
                     <div className="bg-white rounded-xl p-5 border border-gray-200 md:col-span-2 lg:col-span-1">
-                      <h4 className="text-sm font-bold text-zuri-black mb-2">African languages & prefs</h4>
+                      <h4 className="text-sm font-bold text-zuri-black mb-2">Dietary prefs</h4>
                       <p className="text-xs text-gray-500">
-                        Publish Hausa, Yoruba, and Igbo dish names from the Menu tab (per item translations). Guests can filter with vegetarian / meat / no-dairy preferences stored on-device for faster picks.
+                        Guests can filter with vegetarian / meat / no-dairy preferences stored on-device for faster picks.
                       </p>
                     </div>
                   </div>
@@ -3951,7 +3897,7 @@ function BusinessDashboard(): JSX.Element {
                             onChange={(e) => setItemForm({ ...itemForm, name: e.target.value })}
                             required
                             className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-zuri-yellow"
-                            placeholder={isTicketing ? 'e.g., Early bird admission' : 'e.g., Grilled Chicken'}
+                            placeholder={isTicketing ? 'Ticket name' : 'Item name'}
                             maxLength={75}
                           />
                           {isTicketing && (
@@ -4004,49 +3950,6 @@ function BusinessDashboard(): JSX.Element {
                           )}
                         </div>
                         {!isTicketing && isGuestAiMenuTier(business?.plan) ? (
-                          <div className="rounded-xl border border-gray-200 bg-gray-50/90 p-4 space-y-3">
-                            <p className="text-sm font-bold text-zuri-black">Guest menu names (Hausa · Yorùbá · Igbo)</p>
-                            <p className="text-xs text-gray-600 leading-relaxed">
-                              Shown when guests pick a language on your public menu. Leave blank to use the English name only.
-                            </p>
-                            <div className="grid sm:grid-cols-3 gap-3">
-                              <div>
-                                <label className="block text-xs font-semibold text-gray-500 mb-1">Hausa</label>
-                                <input
-                                  type="text"
-                                  maxLength={120}
-                                  value={itemForm.nameTransHa}
-                                  onChange={(e) => setItemForm({ ...itemForm, nameTransHa: e.target.value })}
-                                  className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-zuri-yellow"
-                                  placeholder="Optional"
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-xs font-semibold text-gray-500 mb-1">Yorùbá</label>
-                                <input
-                                  type="text"
-                                  maxLength={120}
-                                  value={itemForm.nameTransYo}
-                                  onChange={(e) => setItemForm({ ...itemForm, nameTransYo: e.target.value })}
-                                  className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-zuri-yellow"
-                                  placeholder="Optional"
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-xs font-semibold text-gray-500 mb-1">Igbo</label>
-                                <input
-                                  type="text"
-                                  maxLength={120}
-                                  value={itemForm.nameTransIg}
-                                  onChange={(e) => setItemForm({ ...itemForm, nameTransIg: e.target.value })}
-                                  className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-zuri-yellow"
-                                  placeholder="Optional"
-                                />
-                              </div>
-                            </div>
-                          </div>
-                        ) : null}
-                        {!isTicketing && isGuestAiMenuTier(business?.plan) ? (
                           <div className="rounded-xl border border-violet-200/80 bg-violet-50/40 p-4 space-y-3">
                             <div className="flex flex-wrap items-start justify-between gap-3">
                               <div>
@@ -4075,7 +3978,7 @@ function BusinessDashboard(): JSX.Element {
                                   value={itemForm.canonicalDishId}
                                   onChange={(e) => setItemForm({ ...itemForm, canonicalDishId: e.target.value })}
                                   className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-zuri-yellow"
-                                  placeholder="e.g. jollof-rice-lg"
+                                  placeholder="Optional internal id"
                                 />
                               </div>
                               <div>
@@ -4085,7 +3988,7 @@ function BusinessDashboard(): JSX.Element {
                                   value={itemForm.ingredients}
                                   onChange={(e) => setItemForm({ ...itemForm, ingredients: e.target.value })}
                                   className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-zuri-yellow"
-                                  placeholder="rice, tomato, pepper, chicken"
+                                  placeholder="List ingredients, separated by commas"
                                 />
                               </div>
                             </div>
@@ -4737,274 +4640,6 @@ function BusinessDashboard(): JSX.Element {
               </div>
             )}
 
-            {/* Zuri Assist dashboard (Scale and above) */}
-            {activeTab === 'ai' && isAiInsightsTier(business?.plan) && (
-              isPhone ? (
-                <div className="mobile-ai-shell">
-                  <div className="flex items-center justify-between gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowAiChats((v) => !v)}
-                      className={`dashboard-btn inline-flex items-center gap-2 rounded-full border border-zuri-orange/25 bg-zuri-orange/5 px-3 py-1.5 text-xs font-semibold text-zuri-black ${BTN_PRESS}`}
-                      aria-expanded={showAiChats}
-                    >
-                      <span className="h-5 w-5 rounded-full bg-zuri-black text-white grid place-items-center text-[10px]">AI</span>
-                      Past chats{aiChats.length ? ` (${aiChats.length})` : ''}
-                    </button>
-                  </div>
-
-                  {showAiChats && (
-                    <div className="rounded-xl border border-zuri-orange/20 bg-white p-3">
-                      {aiChats.length === 0 ? (
-                        <p className="text-sm text-zuri-black/60">No past chats yet.</p>
-                      ) : (
-                        <div className="max-h-40 overflow-y-auto space-y-2">
-                          {aiChats.map((c) => {
-                            const summary = c.type === 'custom' ? (c.query || 'Custom question') : c.type.replace(/_/g, ' ')
-                            return (
-                              <button
-                                key={c.id}
-                                type="button"
-                                onClick={() => {
-                                  setShowAiChats(false)
-                                  setActiveAiChatId(c.id)
-                                  setAiInsightLoading(false)
-                                  setAiInsight(c.insight)
-                                }}
-                                className={`dashboard-btn w-full text-left rounded-lg border px-3 py-2 text-sm ${c.id === activeAiChatId ? 'border-zuri-orange/50 bg-zuri-orange/10' : 'border-gray-200 bg-white'}`}
-                              >
-                                <span className="font-semibold text-zuri-black block truncate">{summary}</span>
-                                <span className="text-[11px] text-gray-500">{formatAiChatStamp(c.createdAt)}</span>
-                              </button>
-                            )
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  <div>
-                    <p className="text-sm text-zuri-black/70">Hi {business?.name || 'there'}</p>
-                    <h2 className="text-lg font-bold text-zuri-black mt-0.5">Ask Zuri Assist</h2>
-                  </div>
-
-                  <div className="space-y-2">
-                    {[
-                      { type: 'revenue_insights', label: 'Revenue insights', desc: 'Best sellers & bundles' },
-                      { type: 'sales_forecasting', label: 'Sales forecast', desc: 'Demand & peak hours' },
-                      { type: 'promotions_suggestions', label: 'Promotions', desc: 'Offers for slow days' }
-                    ].map(({ type, label, desc }) => (
-                      <button
-                        key={type}
-                        type="button"
-                        disabled={aiInsightLoading}
-                        onClick={() => requestAiInsight(type as AiInsightType)}
-                        className={`dashboard-btn w-full text-left rounded-xl border border-zuri-orange/20 bg-white px-3 py-2.5 disabled:opacity-60 ${BTN_PRESS}`}
-                      >
-                        <span className="font-semibold text-zuri-black text-sm block">{label}</span>
-                        <span className="text-xs text-zuri-black/55">{desc}</span>
-                      </button>
-                    ))}
-                  </div>
-
-                  {aiInsight !== null && (
-                    <div className="mobile-ai-insight">
-                      <h3 className="font-semibold text-zuri-black text-sm mb-2">{aiInsightLoading ? 'Thinking…' : 'Insight'}</h3>
-                      <div className="prose prose-sm max-w-none prose-p:my-1.5 prose-strong:text-zuri-black">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {aiInsightLoading ? '' : aiInsightTypingDone ? aiInsight || '' : safeMarkdownDuringTyping(aiInsightTyped)}
-                        </ReactMarkdown>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="mobile-ai-composer">
-                    <input
-                      value={aiCustomQuery}
-                      onChange={(e) => setAiCustomQuery(e.target.value)}
-                      placeholder="Ask anything…"
-                      className="mobile-dashboard-input flex-1 bg-transparent text-base text-zuri-black placeholder:text-zuri-black/45 focus:outline-none min-w-0"
-                    />
-                    <button
-                      type="button"
-                      disabled={aiInsightLoading || !aiCustomQuery.trim()}
-                      onClick={() => requestAiInsight('custom', { query: aiCustomQuery.trim() })}
-                      className={`dashboard-btn h-9 w-9 shrink-0 rounded-full bg-zuri-orange text-white text-sm font-bold disabled:opacity-50 ${BTN_PRESS}`}
-                      aria-label="Ask AI"
-                    >
-                      →
-                    </button>
-                  </div>
-                </div>
-              ) : (
-              <div className="max-w-5xl mx-auto">
-                <div className="rounded-3xl border border-zuri-orange/20 bg-white/75 backdrop-blur-sm px-5 py-6 sm:px-10 sm:py-8 shadow-[0_10px_30px_rgba(255,189,89,0.08)]">
-                  <div className="flex items-center justify-between mb-8">
-                    <div className="inline-flex items-center gap-2 rounded-full border border-zuri-orange/20 bg-zuri-orange/5 px-3 py-1 text-xs text-zuri-black/80">
-                      <span className="h-5 w-5 rounded-full bg-zuri-black text-white grid place-items-center text-[10px]">AI</span>
-                      <button
-                        type="button"
-                        onClick={() => setShowAiChats((v) => !v)}
-                        className="cursor-pointer font-semibold hover:text-zuri-black transition"
-                        aria-expanded={showAiChats}
-                      >
-                        Past chats{aiChats.length ? ` (${aiChats.length})` : ''}
-                      </button>
-                    </div>
-                    <div className="h-8 w-8 rounded-full bg-zuri-orange/20 border border-zuri-orange/35 grid place-items-center text-zuri-black text-xs font-semibold">
-                      {business?.name?.charAt(0)?.toUpperCase() || 'U'}
-                    </div>
-                  </div>
-
-                  {showAiChats && (
-                    <div className="mb-8 rounded-2xl border border-zuri-orange/20 bg-white/60 p-4">
-                      <div className="flex items-center justify-between mb-3">
-                        <h3 className="font-semibold text-zuri-black text-sm">Past chats</h3>
-                        <button
-                          type="button"
-                          onClick={() => setShowAiChats(false)}
-                          className="text-xs text-zuri-black/60 hover:text-zuri-black transition"
-                        >
-                          Hide
-                        </button>
-                      </div>
-
-                      {aiChats.length === 0 ? (
-                        <p className="text-sm text-zuri-black/60">No past chats yet. Ask a question to get started.</p>
-                      ) : (
-                        <div className="max-h-56 overflow-auto space-y-2 pr-1">
-                          {aiChats.map((c) => {
-                            const summary =
-                              c.type === 'custom'
-                                ? (c.query || 'Custom question')
-                                : c.type.replace(/_/g, ' ')
-                            const stamp = formatAiChatStamp(c.createdAt)
-
-                            return (
-                              <button
-                                key={c.id}
-                                type="button"
-                                onClick={() => {
-                                  setShowAiChats(false)
-                                  setActiveAiChatId(c.id)
-                                  setAiInsightLoading(false)
-                                  setAiInsight(c.insight)
-                                }}
-                                className={[
-                                  'w-full text-left rounded-xl border px-3 py-2 transition',
-                                  c.id === activeAiChatId ? 'border-zuri-orange/50 bg-zuri-orange/10' : 'border-zuri-orange/20 bg-white/80 hover:bg-zuri-orange/5'
-                                ].join(' ')}
-                              >
-                                <div className="flex items-start justify-between gap-3">
-                                  <div className="min-w-0">
-                                    <div className="font-semibold text-zuri-black text-sm truncate">
-                                      {summary}
-                                    </div>
-                                    <div className="text-xs text-zuri-black/60 truncate w-full">
-                                      {c.type === 'custom' ? 'Custom query' : 'Quick prompt'}
-                                    </div>
-                                  </div>
-                                  <div className="text-[11px] text-zuri-black/40 whitespace-nowrap">
-                                    {stamp}
-                                  </div>
-                                </div>
-                              </button>
-                            )
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="text-center mb-8">
-                    <p className="text-zuri-black/75 text-xl sm:text-2xl">Hi {business?.name || 'there'}</p>
-                    <h2 className="text-zuri-black text-3xl sm:text-4xl font-semibold leading-tight mt-1">What would you like to know?</h2>
-                    <p className="text-zuri-black/55 text-sm mt-2">Use one of the most common prompts below or ask your own question.</p>
-                  </div>
-
-                  {/* Customer Intelligence metrics (Scale+) */}
-                  {customerIntelligence && customerIntelligence.uniqueCustomers > 0 && (
-                    <div className="rounded-2xl border border-zuri-orange/20 bg-zuri-orange/5 p-4 mb-6">
-                      <h3 className="font-semibold text-zuri-black mb-3">Customer intelligence snapshot</h3>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
-                        <div>
-                          <p className="text-zuri-black/60">Unique customers</p>
-                          <p className="font-semibold text-zuri-black">{customerIntelligence.uniqueCustomers}</p>
-                        </div>
-                        <div>
-                          <p className="text-zuri-black/60">Repeat rate</p>
-                          <p className="font-semibold text-zuri-black">{customerIntelligence.repeatRatePct.toFixed(1)}%</p>
-                        </div>
-                        <div>
-                          <p className="text-zuri-black/60">Avg order value</p>
-                          <p className="font-semibold text-zuri-black">₦{customerIntelligence.avgSpendPerOrder.toFixed(2)}</p>
-                        </div>
-                        <div>
-                          <p className="text-zuri-black/60">Return in 10 days</p>
-                          <p className="font-semibold text-zuri-black">{customerIntelligence.returnWithin10DaysPct.toFixed(1)}%</p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
-                    {[
-                      { type: 'revenue_insights', label: 'Revenue insights', desc: 'Best sellers and bundle ideas' },
-                      { type: 'sales_forecasting', label: 'Sales forecast', desc: 'Demand and peak-hour signals' },
-                      { type: 'promotions_suggestions', label: 'Promotion ideas', desc: 'Offers for slow days' }
-                    ].map(({ type, label, desc }) => (
-                      <button
-                        key={type}
-                        disabled={aiInsightLoading}
-                        onClick={() => requestAiInsight(type as AiInsightType)}
-                        className="text-left rounded-xl border border-zuri-orange/20 bg-white/80 px-4 py-3 hover:bg-zuri-orange/5 transition disabled:opacity-70"
-                      >
-                        <span className="font-semibold text-zuri-black block">{label}</span>
-                        <span className="text-xs text-zuri-black/60">{desc}</span>
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="flex items-center gap-2 rounded-full border border-zuri-orange/25 bg-white/85 px-3 py-2">
-                    <span className="h-6 w-6 rounded-full bg-zuri-orange/15 text-zuri-orange grid place-items-center text-[10px] font-semibold">AI</span>
-                    <input
-                      value={aiCustomQuery}
-                      onChange={(e) => setAiCustomQuery(e.target.value)}
-                      placeholder="Ask whatever you want"
-                      className={`flex-1 bg-transparent text-zuri-black placeholder:text-zuri-black/45 focus:outline-none min-w-0 ${isPhone ? 'mobile-dashboard-input text-base' : 'text-sm'}`}
-                    />
-                    <button
-                      type="button"
-                      disabled={aiInsightLoading || !aiCustomQuery.trim()}
-                      onClick={() => requestAiInsight('custom', { query: aiCustomQuery.trim() })}
-                      className="h-7 w-7 rounded-full bg-zuri-orange/20 text-zuri-black grid place-items-center hover:bg-zuri-orange/35 transition disabled:opacity-50"
-                      aria-label="Ask AI"
-                    >
-                      {`->`}
-                    </button>
-                  </div>
-
-                  {aiInsight !== null && (
-                    <div className="rounded-2xl border border-zuri-orange/20 bg-zuri-orange/5 p-5 mt-5">
-                      <h3 className="font-semibold text-zuri-black mb-2">{aiInsightLoading ? 'Thinking...' : 'Insight'}</h3>
-                      <div className="prose prose-sm max-w-none prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-1 prose-strong:text-zuri-black prose-headings:text-zuri-black prose-a:text-zuri-orange prose-code:text-zuri-black prose-pre:bg-white/60">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {aiInsightLoading
-                            ? ''
-                            : aiInsightTypingDone
-                              ? aiInsight || ''
-                              : safeMarkdownDuringTyping(aiInsightTyped)}
-                        </ReactMarkdown>
-                        {!aiInsightLoading && !aiInsightTypingDone && (
-                          <span className="inline-block w-[0.6ch] text-zuri-black/60">|</span>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-              )
-            )}
           </div>
         </div>
       </div>
@@ -5104,6 +4739,25 @@ function BusinessDashboard(): JSX.Element {
     </MobileBottomSheet>
   ) : null
 
+  const zuriQoBar = businessId ? (
+    <ZuriQoAiChatBar
+      open={zuriQoOpen}
+      onClose={() => setZuriQoOpen(false)}
+      businessId={businessId}
+      isPhone={isPhone}
+      canUseAi={true}
+      businessMode={business?.businessMode}
+      onCatalogPublished={() => {
+        fetchMenu()
+        if (activeTab !== 'menu') setActiveTab('menu')
+      }}
+      onUpgradeClick={() => {
+        setZuriQoOpen(false)
+        if (businessId) navigate(`/business/dashboard/${businessId}/payment`)
+      }}
+    />
+  ) : null
+
   if (isPhone) {
     return (
       <>
@@ -5116,11 +4770,20 @@ function BusinessDashboard(): JSX.Element {
           onNotificationsClick={() => {
             setProfileOpen(false)
             setLogoMenuOpen(false)
+            setZuriQoOpen(false)
             setNotificationsOpen(true)
           }}
+          onZuriQoClick={() => {
+            setProfileOpen(false)
+            setLogoMenuOpen(false)
+            setNotificationsOpen(false)
+            setZuriQoOpen((v) => !v)
+          }}
+          zuriQoActive={zuriQoOpen}
           onProfileClick={() => {
             setNotificationsOpen(false)
             setLogoMenuOpen(false)
+            setZuriQoOpen(false)
             setProfileOpen(true)
           }}
           onChangePassword={() => {
@@ -5138,6 +4801,7 @@ function BusinessDashboard(): JSX.Element {
         {mobileNotificationsSheet}
         {mobileProfileSheet}
         {confirmModal}
+        {zuriQoBar}
       </>
     )
   }
@@ -5148,6 +4812,7 @@ function BusinessDashboard(): JSX.Element {
         {dashboardBody}
       </div>
       {confirmModal}
+      {zuriQoBar}
     </>
   )
 }

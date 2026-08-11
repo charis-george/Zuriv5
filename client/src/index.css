@@ -101,6 +101,8 @@ html.mobile-dashboard-active body {
   max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
+  padding-bottom: var(--zuriqo-mobile-pad, 0px);
+  transition: padding-bottom 0.2s ease;
 }
 
 .mobile-dashboard-chip-row {

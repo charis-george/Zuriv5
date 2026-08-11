@@ -138,7 +138,7 @@ function visionMediaType(mimetype) {
 
 function buildStorefrontPrompt({ prompt, businessName, businessMode, currentConfig, currentDetails }) {
   return [
-    'You are a senior brand and UI designer for ZURI, a hospitality storefront platform in Africa.',
+    'You are a senior brand and UI designer for ZURI, a hospitality storefront platform.',
     'Given the owner\'s design brief (and optional reference images), output a JSON object that restyles their public storefront.',
     'Respect the brief closely: colors, mood, typography feel, layout density, and venue type.',
     businessMode === 'ticketing'

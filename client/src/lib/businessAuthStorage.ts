@@ -6,98 +6,88 @@ const BUSINESS_ID_KEY = 'zuri_business_id'
 let inMemoryToken: string | null = null
 let inMemoryId: string | null = null
 
-function getStorageSafe(kind: 'local' | 'session'): Storage | null {
+function getSessionStorage(): Storage | null {
   try {
-    return kind === 'local' ? window.localStorage : window.sessionStorage
+    return window.sessionStorage
   } catch {
     return null
   }
 }
 
-function readCookie(key: string): string | null {
-  if (typeof document === 'undefined') return null
-  const prefix = `${key}=`
-  const parts = document.cookie ? document.cookie.split(';') : []
-  for (const part of parts) {
-    const trimmed = part.trim()
-    if (trimmed.startsWith(prefix)) return decodeURIComponent(trimmed.slice(prefix.length))
+function getLocalStorage(): Storage | null {
+  try {
+    return window.localStorage
+  } catch {
+    return null
   }
-  return null
 }
 
-function writeCookie(key: string, value: string): boolean {
-  if (typeof document === 'undefined') return false
+/** Remove legacy persistent copies so closing the tab always requires a fresh login. */
+function purgePersistentAuthCopies(): void {
   try {
-    const secure = typeof window !== 'undefined' && window.location.protocol === 'https:' ? '; Secure' : ''
-    document.cookie = `${key}=${encodeURIComponent(value)}; Path=/; SameSite=Lax${secure}; Max-Age=2592000`
-    return readCookie(key) === value
+    getLocalStorage()?.removeItem(BUSINESS_TOKEN_KEY)
+    getLocalStorage()?.removeItem(BUSINESS_ID_KEY)
+  } catch {
+    /* ignore */
+  }
+  if (typeof document === 'undefined') return
+  try {
+    document.cookie = `${BUSINESS_TOKEN_KEY}=; Path=/; Max-Age=0; SameSite=Lax`
+    document.cookie = `${BUSINESS_ID_KEY}=; Path=/; Max-Age=0; SameSite=Lax`
+  } catch {
+    /* ignore */
+  }
+}
+
+function readSession(key: string): string | null {
+  try {
+    return getSessionStorage()?.getItem(key) || null
+  } catch {
+    return null
+  }
+}
+
+function writeSession(key: string, value: string): boolean {
+  try {
+    const session = getSessionStorage()
+    if (!session) return false
+    session.setItem(key, value)
+    return session.getItem(key) === value
   } catch {
     return false
   }
 }
 
-function clearCookie(key: string): void {
-  if (typeof document === 'undefined') return
-  document.cookie = `${key}=; Path=/; Max-Age=0; SameSite=Lax`
-}
-
-function readFromStorages(key: string): string | null {
-  const local = getStorageSafe('local')
-  const session = getStorageSafe('session')
-  return local?.getItem(key) || session?.getItem(key) || readCookie(key) || null
-}
-
-function writeToStorages(key: string, value: string): boolean {
-  const local = getStorageSafe('local')
-  if (local) {
-    try {
-      local.setItem(key, value)
-      return true
-    } catch {
-      /* Safari private mode or quota */
-    }
-  }
-  const session = getStorageSafe('session')
-  if (session) {
-    try {
-      session.setItem(key, value)
-      return true
-    } catch {
-      /* ignore */
-    }
-  }
-  if (writeCookie(key, value)) return true
-  if (key === BUSINESS_TOKEN_KEY) return inMemoryToken === value
-  if (key === BUSINESS_ID_KEY) return inMemoryId === value
-  return false
-}
-
 export function getBusinessToken(): string | null {
   if (typeof window === 'undefined') return null
-  return readFromStorages(BUSINESS_TOKEN_KEY) || inMemoryToken
+  purgePersistentAuthCopies()
+  return readSession(BUSINESS_TOKEN_KEY) || inMemoryToken
 }
 
 export function getBusinessId(): string | null {
   if (typeof window === 'undefined') return null
-  const raw = readFromStorages(BUSINESS_ID_KEY) || inMemoryId
+  purgePersistentAuthCopies()
+  const raw = readSession(BUSINESS_ID_KEY) || inMemoryId
   if (!raw) return null
   return normalizeUuid(raw)
 }
 
 export function setBusinessToken(token: string): boolean {
   if (typeof window === 'undefined') return false
+  purgePersistentAuthCopies()
   inMemoryToken = token
-  return writeToStorages(BUSINESS_TOKEN_KEY, token)
+  return writeSession(BUSINESS_TOKEN_KEY, token) || inMemoryToken === token
 }
 
 export function setBusinessId(businessId: string): boolean {
   if (typeof window === 'undefined') return false
+  purgePersistentAuthCopies()
   const cleaned = normalizeUuid(businessId) || businessId
   inMemoryId = cleaned
-  return writeToStorages(BUSINESS_ID_KEY, cleaned)
+  return writeSession(BUSINESS_ID_KEY, cleaned) || inMemoryId === cleaned
 }
 
-/** Persist token and business id (Safari-safe: local → session → cookie → memory). */
+/** Tab-scoped session only (sessionStorage + memory). Survives refresh; dies when the tab closes. */
 export function setBusinessSession(token: string, businessId: string): boolean {
   const tokenOk = setBusinessToken(token)
   const idOk = setBusinessId(businessId)
@@ -108,14 +98,28 @@ export function clearBusinessAuth(): void {
   if (typeof window === 'undefined') return
   inMemoryToken = null
   inMemoryId = null
-  getStorageSafe('local')?.removeItem(BUSINESS_TOKEN_KEY)
-  getStorageSafe('local')?.removeItem(BUSINESS_ID_KEY)
-  getStorageSafe('session')?.removeItem(BUSINESS_TOKEN_KEY)
-  getStorageSafe('session')?.removeItem(BUSINESS_ID_KEY)
-  clearCookie(BUSINESS_TOKEN_KEY)
-  clearCookie(BUSINESS_ID_KEY)
+  try {
+    getSessionStorage()?.removeItem(BUSINESS_TOKEN_KEY)
+    getSessionStorage()?.removeItem(BUSINESS_ID_KEY)
+  } catch {
+    /* ignore */
+  }
+  purgePersistentAuthCopies()
 }
 
 export function isBusinessLoggedIn(): boolean {
   return Boolean(getBusinessToken() && getBusinessId())
+}
+
+/** True while the user is inside the authenticated business workspace. */
+export function isBusinessWorkspacePath(pathname: string): boolean {
+  const p = String(pathname || '')
+  return (
+    p.startsWith('/business/dashboard/') ||
+    p.startsWith('/business/onboarding/') ||
+    p.startsWith('/subscribe/') ||
+    p === '/upgrade-done' ||
+    p === '/scan' ||
+    p.startsWith('/scan/')
+  )
 }

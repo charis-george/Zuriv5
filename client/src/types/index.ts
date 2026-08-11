@@ -10,8 +10,8 @@ export type PlanId =
   | 'basic'
   | 'advanced'
 
-/** Languages supported for guest menu copy (expand over time). */
-export type GuestMenuLang = 'en' | 'ha' | 'yo' | 'ig'
+/** Guest menu display language (product uses English). */
+export type GuestMenuLang = 'en'
 
 export type AiGuestStorefrontConfig = {
   /** Surface trending dishes on the guest menu (from recent sales). */
@@ -22,11 +22,11 @@ export type AiGuestStorefrontConfig = {
   personalisedRecs?: boolean
   /** Re-rank items using guest dietary prefs (session). */
   tasteSortEnabled?: boolean
-  /** Use Hausa / Yoruba / Igbo strings from menu translations when present. */
+  /** @deprecated Removed from product UI. */
   translationsEnabled?: boolean
   /** Show optional dietary preference chips for guests. */
   dietaryPromptEnabled?: boolean
-  /** MoMo / bank-transfer nudges for African cash-heavy venues. */
+  /** MoMo / bank-transfer nudges at checkout. */
   localPaymentHints?: boolean
   /** Nudge split-bill or shared-table behaviour. */
   sharedTableHints?: boolean
@@ -271,8 +271,8 @@ export type StorefrontDetails = {
   whatsappNumber?: string
   /** Branded event micropages (ticketing venues) — scoped per storefront profile. */
   eventPages?: StorefrontEventPage[]
-  /** Optional per–menu-item translations for African languages (by item id). */
-  menuTranslations?: Record<string, Partial<Record<'ha' | 'yo' | 'ig', string>>>
+  /** @deprecated Optional legacy name map; unused in UI. */
+  menuTranslations?: Record<string, Partial<Record<string, string>>>
 }
 
 /** A branded storefront link under one ZURI business account. */

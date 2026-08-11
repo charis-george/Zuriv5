@@ -81,12 +81,12 @@ function canAccessAnalytics(plan) {
   return plan !== PLANS.FREE && plan !== PLANS.STARTER;
 }
 
-/** Guest-facing Zuri Assist (trending, translations, dietary) — Growth+ (same gate as analytics). */
-function canAccessGuestAiStorefront(plan) {
-  return canAccessAnalytics(plan);
+/** Guest-facing AI menu personalization — available on all plans (usage-capped elsewhere where needed). */
+function canAccessGuestAiStorefront(_plan) {
+  return true;
 }
 
-/** When plan is below Growth, force these so merged client defaults do not re-enable AI. */
+/** When guest AI is forcibly off (reserved for emergency kill-switch / future flags). */
 const GUEST_AI_STOREFRONT_DISABLED = Object.freeze({
   trendingOnMenu: false,
   intelligentUpsell: false,
@@ -135,7 +135,7 @@ function canAddBusinessLogo(plan) {
   return plan !== PLANS.FREE;
 }
 
-/** Dashboard AI assistant + premium insights (Scale+; legacy Pro / Zuri AI). */
+/** Dashboard AI insights / Assist tab (Scale+; legacy Pro / Zuri AI). ZuriQO chat is separate (all plans + credits). */
 function canAccessAIFeatures(plan) {
   return (
     plan === PLANS.SCALE ||
@@ -145,14 +145,13 @@ function canAccessAIFeatures(plan) {
   );
 }
 
-function canUseStorefrontAIGeneration(plan) {
-  return (
-    plan === PLANS.GROWTH ||
-    plan === PLANS.SCALE ||
-    plan === PLANS.PRO ||
-    plan === PLANS.ZURI_PLUS ||
-    plan === PLANS.ENTERPRISE
-  );
+/** ZuriQO floating chat — all plans; enforce daily credits in aiUsageLimits. */
+function canAccessZuriQo(_plan) {
+  return true;
+}
+
+function canUseStorefrontAIGeneration(_plan) {
+  return true;
 }
 
 /** Premium charts + market intel (Scale+; legacy tiers). */
@@ -190,6 +189,7 @@ module.exports = {
   canUseMenuDigitize,
   canAddBusinessLogo,
   canAccessAIFeatures,
+  canAccessZuriQo,
   canUseStorefrontAIGeneration,
   canAccessProFeatures,
   canAccessOpsAi,

@@ -65,7 +65,7 @@ export function HomeKeyFeatures(): JSX.Element {
             Show, don&apos;t stall.
           </h2>
           <p className="mx-auto mt-4 max-w-md text-sm text-gray-600 sm:text-base">
-            The same flows your guests use — in your colours, for African venues.
+            The same flows your guests use — in your colours.
           </p>
         </div>
 

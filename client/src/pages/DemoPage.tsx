@@ -11,7 +11,7 @@ const CONTACT_EMAIL = 'info@zuriqo.com'
 function DemoPage(): JSX.Element {
   usePageSeo({
     title: 'Book a ZURI Demo | QR Ordering for Food Businesses',
-    description: 'Book a ZURI demo to see QR ordering, digital menus, payments, reservations, storefront customization, and AI guest menu tools built for African venues.',
+    description: 'Book a ZURI demo to see QR ordering, digital menus, payments, reservations, storefront customization, and AI guest menu tools built for hospitality venues.',
     path: '/demo',
     jsonLd: [
       organizationJsonLd,

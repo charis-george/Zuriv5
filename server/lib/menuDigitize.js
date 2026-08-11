@@ -140,7 +140,7 @@ function buildDigitizePrompt(catalogMode) {
     '}',
     '',
     'Rules:',
-    '- Prices must be numbers in Nigerian Naira (no currency symbols). Example: ₦2,500 → 2500.',
+    '- Prices must be currency amounts as numbers (no currency symbols). Example: ₦2,500 → 2500.',
     '- If a price is missing or unreadable, use 0.',
     '- Group items under the same headings as the source document.',
     '- Do not invent items that are not on the menu.',

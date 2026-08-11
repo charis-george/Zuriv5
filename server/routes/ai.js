@@ -9,9 +9,15 @@ const { selectInChunks } = require('../lib/supabaseInChunks');
 const {
   getBusinessPlan,
   canAccessAIFeatures,
+  canAccessZuriQo,
   canUseStorefrontAIGeneration,
   canAccessOpsAi
 } = require('../lib/plans');
+const {
+  getDailyAiQuota,
+  consumeDailyAiCredit,
+  assertStorefrontAiAllowed
+} = require('../lib/aiUsageLimits');
 
 const supabase = getDb();
 
@@ -469,7 +475,12 @@ router.post('/menu/description', requireBusinessAuth, async (req, res) => {
     const ok = await assertOwnBusinessAndPlan(req, res, businessId);
     if (!ok) return;
     if (!canUseStorefrontAIGeneration(ok.plan)) {
-      return res.status(403).json({ error: 'Upgrade to Growth to unlock AI menu assist.' });
+      return res.status(403).json({ error: 'AI menu assist is temporarily unavailable.' });
+    }
+
+    const credit = await consumeDailyAiCredit(businessId, ok.plan, 'AI');
+    if (!credit.ok) {
+      return res.status(credit.status || 429).json({ error: credit.error, quota: credit.quota });
     }
 
     if (!itemName || typeof itemName !== 'string' || !itemName.trim()) {
@@ -700,7 +711,7 @@ router.post('/storefront-generate', requireBusinessAuth, handleStorefrontAiUploa
 
     const plan = await getBusinessPlan(businessId);
     if (!canUseStorefrontAIGeneration(plan)) {
-      return res.status(403).json({ error: 'Upgrade to Growth or above to use AI storefront generation.' });
+      return res.status(403).json({ error: 'AI storefront generation is temporarily unavailable.' });
     }
 
     const { data: business, error: bErr } = await supabase
@@ -712,12 +723,9 @@ router.post('/storefront-generate', requireBusinessAuth, handleStorefrontAiUploa
       return res.status(404).json({ error: 'Business not found' });
     }
 
-    const used = Number(business.storefront_ai_generations || 0);
-    const isGrowth = plan === 'growth';
-    if (isGrowth && used >= 1) {
-      return res.status(403).json({
-        error: 'You have used your one AI generation on Growth. Upgrade to Scale to generate again.'
-      });
+    const gate = await assertStorefrontAiAllowed(businessId, plan);
+    if (!gate.ok) {
+      return res.status(gate.status || 403).json({ error: gate.error, quota: gate.quota });
     }
 
     const baseConfig = { ...(business.storefront_config || {}), ...(currentConfig || {}) };
@@ -791,6 +799,93 @@ router.post('/storefront-generate', requireBusinessAuth, handleStorefrontAiUploa
   } catch (e) {
     console.error('[ZURI] ai.storefront-generate error:', e);
     return res.status(500).json({ error: 'Failed to generate storefront' });
+  }
+});
+
+/**
+ * GET /api/ai/quota — daily AI credits + storefront generation remaining.
+ */
+router.get('/quota', requireBusinessAuth, async (req, res) => {
+  try {
+    const businessId = req.businessId;
+    const plan = await getBusinessPlan(businessId);
+    const daily = await getDailyAiQuota(businessId, plan);
+    const storefront = await assertStorefrontAiAllowed(businessId, plan);
+    return res.json({
+      plan,
+      daily,
+      storefront: storefront.quota,
+      zuriQoAvailable: canAccessZuriQo(plan),
+      insightsAvailable: canAccessAIFeatures(plan)
+    });
+  } catch (err) {
+    console.error('[ZURI] ai.quota error:', err);
+    return res.status(500).json({ error: 'Could not load AI quota' });
+  }
+});
+
+/**
+ * POST /api/ai/chat
+ * ZuriQO floating bar — tiered query / draft / confirm-action / agentic.
+ */
+router.post('/chat', requireBusinessAuth, async (req, res) => {
+  try {
+    const { businessId, message, preferredTier, history } = req.body || {};
+    if (!businessId || typeof businessId !== 'string') {
+      return res.status(400).json({ error: 'businessId is required' });
+    }
+    if (businessId !== req.businessId) {
+      return res.status(403).json({ error: 'You can only chat for your own business' });
+    }
+    if (!message || typeof message !== 'string' || !message.trim()) {
+      return res.status(400).json({ error: 'message is required' });
+    }
+
+    const plan = await getBusinessPlan(businessId);
+    if (!canAccessZuriQo(plan)) {
+      return res.status(403).json({ error: 'ZuriQO is temporarily unavailable.' });
+    }
+
+    const credit = await consumeDailyAiCredit(businessId, plan, 'ZuriQO');
+    if (!credit.ok) {
+      return res.status(credit.status || 429).json({ error: credit.error, quota: credit.quota });
+    }
+
+    const { handleZuriQoChat } = require('../lib/zuriQoChat');
+    const result = await handleZuriQoChat({
+      businessId,
+      message: message.trim(),
+      preferredTier,
+      history
+    });
+    if (result.error) return res.status(result.status || 500).json({ error: result.error });
+    return res.json({ ...result.data, quota: credit.quota });
+  } catch (err) {
+    console.error('[ZURI] ai.chat error:', err);
+    return res.status(500).json({ error: 'ZuriQO couldn’t answer right now. Please try again.' });
+  }
+});
+
+/**
+ * POST /api/ai/chat/confirm — execute a Tier 3 proposed action after human confirm.
+ */
+router.post('/chat/confirm', requireBusinessAuth, async (req, res) => {
+  try {
+    const { businessId, actionType, payload } = req.body || {};
+    if (!businessId || businessId !== req.businessId) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    const plan = await getBusinessPlan(businessId);
+    if (!canAccessZuriQo(plan)) {
+      return res.status(403).json({ error: 'ZuriQO is temporarily unavailable.' });
+    }
+    const { confirmZuriQoAction } = require('../lib/zuriQoChat');
+    const result = await confirmZuriQoAction({ businessId, actionType, payload });
+    if (result.error) return res.status(result.status || 500).json({ error: result.error });
+    return res.json(result.data);
+  } catch (err) {
+    console.error('[ZURI] ai.chat.confirm error:', err);
+    return res.status(500).json({ error: 'Could not apply that change. Please try again.' });
   }
 });
 

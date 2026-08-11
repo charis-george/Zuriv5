@@ -180,14 +180,14 @@ function BusinessPaymentPage(): JSX.Element {
           )}
 
           <p className="text-gray-600 text-sm mb-3 leading-relaxed">
-            Add a Nigerian payout account so customer payments can settle to you. Account names are verified through{' '}
+            Add a payout account so customer payments can settle to you. Account names are verified through{' '}
             <span className="font-semibold text-zuri-black">{paymentProvider === 'monnify' ? 'Monnify' : 'Paystack'}</span>
             , then you confirm with your Zuri business password—only you can change where money goes.
           </p>
           <div className="rounded-xl border border-zuri-orange/25 bg-zuri-orange/5 p-4 mb-6">
             <p className="text-sm font-semibold text-zuri-black mb-1">Before you can save a bank account</p>
             <ul className="text-xs text-gray-600 space-y-1.5 list-disc list-inside leading-relaxed">
-              <li>Choose your bank and enter your full account number (NUBAN).</li>
+              <li>Choose your bank and enter your full account number.</li>
               <li>Tap <span className="font-semibold text-zuri-black">Verify account</span> so the account name appears.</li>
               <li>Enter your Zuri <span className="font-semibold text-zuri-black">login password</span> and save—this stops anyone who gets into your session from changing your payout details.</li>
             </ul>
@@ -196,7 +196,7 @@ function BusinessPaymentPage(): JSX.Element {
             <div className="mb-6 p-4 rounded-xl border border-amber-200 bg-amber-50">
               <p className="text-sm font-semibold text-amber-900 mb-1">Bank list unavailable</p>
               <p className="text-xs text-amber-800 leading-relaxed">
-                We couldn&apos;t load Nigerian banks right now. Refresh the page in a moment. If this keeps happening, check your connection or contact Zuri support—without the list you can&apos;t pick a bank yet.
+                We couldn&apos;t load banks right now. Refresh the page in a moment. If this keeps happening, check your connection or contact Zuri support—without the list you can&apos;t pick a bank yet.
               </p>
             </div>
           ) : null}
@@ -299,7 +299,7 @@ function BusinessPaymentPage(): JSX.Element {
                     setBankFormError(null)
                     setBankResolveError(null)
                   }}
-                  placeholder="8–16 digits (e.g. 10 for Nigerian NUBAN)"
+                  placeholder="8–16 digits (usually 10)"
                   maxLength={16}
                   className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-zuri-orange/50 focus:border-zuri-orange"
                 />
@@ -328,7 +328,7 @@ function BusinessPaymentPage(): JSX.Element {
                       const msg = formatUserFacingError(data, '')
                       setBankResolveError(
                         msg ||
-                          `We could not match this account via ${paymentProvider === 'monnify' ? 'Monnify' : 'Paystack'}. Double-check the bank and your NUBAN (usually 10 digits), then try Verify again. If your details are correct, try again later or ask your bank.`
+                          `We could not match this account via ${paymentProvider === 'monnify' ? 'Monnify' : 'Paystack'}. Double-check the bank and your account number (usually 10 digits), then try Verify again. If your details are correct, try again later or ask your bank.`
                       )
                     } finally {
                       setBankResolving(false)

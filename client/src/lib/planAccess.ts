@@ -6,7 +6,7 @@ export function isGrowthPlusPlan(plan: string | undefined | null): boolean {
   return ['growth', 'scale', 'pro', 'zuri_plus', 'enterprise', 'basic', 'advanced'].includes(plan)
 }
 
-/** AI assistant tab + premium analytics (Scale+; legacy pro / zuri_plus rows). */
+/** AI Assist insights tab + premium analytics (Scale+; legacy pro / zuri_plus rows). */
 export function isAiInsightsTier(plan: string | undefined | null): boolean {
   if (!plan) return false
   return ['scale', 'pro', 'zuri_plus', 'enterprise'].includes(plan)
@@ -18,15 +18,29 @@ export function isOpsAiTier(plan: string | undefined | null): boolean {
   return ['scale', 'zuri_plus', 'enterprise'].includes(plan)
 }
 
-/** Guest-facing AI menu controls (dashboard + storefront); Growth and above. */
-export function isGuestAiMenuTier(plan: string | undefined | null): boolean {
-  return isGrowthPlusPlan(plan)
+/** Guest-facing AI menu personalization — all plans (tease with other paid gates elsewhere). */
+export function isGuestAiMenuTier(_plan?: string | null): boolean {
+  return true
+}
+
+/** ZuriQO chat — all plans; server enforces daily AI credits. */
+export function canUseZuriQo(_plan?: string | null): boolean {
+  return true
 }
 
 /** Guest menu image pills (For you / Reorder / Trending) — Scale, Enterprise, legacy Pro / Zuri Plus. */
 export function isScaleGuestMenuTagPlan(plan: string | undefined | null): boolean {
   if (!plan) return false
   return ['scale', 'enterprise', 'pro', 'zuri_plus'].includes(plan)
+}
+
+/** Marketing copy for daily AI credit ceilings (keep in sync with server/lib/aiUsageLimits.js). */
+export function aiDailyCreditLimitLabel(plan: string | undefined | null): string {
+  const p = String(plan || 'free').toLowerCase()
+  if (['scale', 'pro', 'zuri_plus', 'enterprise', 'advanced'].includes(p)) return 'Unlimited'
+  if (p === 'growth' || p === 'basic') return '60 / day'
+  if (p === 'starter') return '25 / day'
+  return '8 / day'
 }
 
 export function planLabelForDisplay(plan: PlanId | string | undefined): string {

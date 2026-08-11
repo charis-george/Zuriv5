@@ -30,7 +30,7 @@ const businessSizes: { id: BusinessSize; title: string; description: string }[] 
 
 const dashboardHighlights: { title: string; description: string }[] = [
   { title: 'Orders', description: 'See every order in real time and update status as you prepare.' },
-  { title: 'Menu', description: 'Add categories and items, set prices, guest-language names, and toggle availability.' },
+  { title: 'Menu', description: 'Add categories and items, set prices, and toggle availability.' },
   {
     title: 'Analytics',
     description:
@@ -70,22 +70,22 @@ const SAMPLE_MENU_CATEGORIES = [
   {
     name: 'Popular',
     items: [
-      { name: 'Jollof & grilled chicken', description: 'Smoky rice with house marinade.', price: 4500, cost: 0 },
-      { name: 'Afro grain bowl', description: 'Greens, grains, and pepper sauce.', price: 5200, cost: 0 }
+      { name: 'Grilled chicken plate', description: 'House marinade with seasonal sides.', price: 4500, cost: 0 },
+      { name: 'Garden grain bowl', description: 'Greens, grains, and house dressing.', price: 5200, cost: 0 }
     ]
   },
   {
     name: 'Sides & extras',
     items: [
-      { name: 'Plantain wedges', description: 'Crispy sweet plantain.', price: 1200, cost: 0 },
+      { name: 'Crispy wedges', description: 'Golden, lightly seasoned.', price: 1200, cost: 0 },
       { name: 'Chef’s salad', description: 'Ask staff for today’s mix.', price: 2500, cost: 0 }
     ]
   },
   {
     name: 'Drinks',
     items: [
-      { name: 'Zobo (Hibiscus)', description: 'Chilled, refreshing and spicy.', price: 1800, cost: 0 },
-      { name: 'Ice-cold juice', description: 'Pick your flavour.', price: 2000, cost: 0 }
+      { name: 'House iced tea', description: 'Chilled and lightly sweetened.', price: 1800, cost: 0 },
+      { name: 'Fresh juice', description: 'Pick your flavour.', price: 2000, cost: 0 }
     ]
   }
 ]
@@ -1274,7 +1274,7 @@ function BusinessOnboarding(): JSX.Element {
                 <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 p-4">
                   <p className="text-sm font-semibold text-amber-900">Bank list unavailable</p>
                   <p className="text-xs text-amber-800 mt-1">
-                    We couldn&apos;t load Nigerian banks from Paystack right now. You can continue onboarding and verify your payout account later in Payment &amp; pricing.
+                    We couldn&apos;t load banks from Paystack right now. You can continue onboarding and verify your payout account later in Payment &amp; pricing.
                   </p>
                 </div>
               ) : null}

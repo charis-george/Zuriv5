@@ -858,7 +858,7 @@ router.post('/item/:id/enrich-dish', requireBusinessAuth, async (req, res) => {
     }
     const plan = await getBusinessPlan(existing.business_id);
     if (!canAccessGuestAiStorefront(plan)) {
-      return res.status(403).json({ error: 'Upgrade to Growth to use dish intelligence' });
+      return res.status(403).json({ error: 'Dish intelligence is temporarily unavailable.' });
     }
     const enriched = enrichDishMetadata(existing.name, existing.description || '');
     const { error } = await supabase

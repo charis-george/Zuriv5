@@ -62,11 +62,11 @@ function tasteScore(item: StorefrontMenuGridItem, prefs: GuestDietaryPrefs | und
   const t = textBlob(item)
   let s = 0
   if (prefs.vegetarian) {
-    if (/\b(veg|vegetable|plantain|salad|vegan|beans|moi|moi-moi|rice|yam|pap)\b/i.test(t)) s += 3
-    if (/\b(beef|goat|lamb|fish|chicken|pork|meat|suya|asun|pepper soup)\b/i.test(t)) s -= 2
+    if (/\b(veg|vegetable|salad|vegan|beans|greens|grain|rice)\b/i.test(t)) s += 3
+    if (/\b(beef|goat|lamb|fish|chicken|pork|meat|steak|burger)\b/i.test(t)) s -= 2
   }
   if (prefs.meatLover) {
-    if (/\b(beef|goat|lamb|fish|chicken|pork|meat|suya|asun|pepper|grill)\b/i.test(t)) s += 3
+    if (/\b(beef|goat|lamb|fish|chicken|pork|meat|steak|grill|burger)\b/i.test(t)) s += 3
   }
   if (prefs.noDairy) {
     if (/\b(cheese|cream|milk|dairy|yoghurt|yogurt|butter)\b/i.test(t)) s -= 4
@@ -92,16 +92,8 @@ function sortByTasteAndTrending(
   })
 }
 
-function resolveItemName(
-  item: StorefrontMenuGridItem,
-  lang: GuestMenuLang | undefined,
-  translations: StorefrontDetails['menuTranslations'] | undefined,
-  translationsEnabled: boolean | undefined
-): string {
-  if (!translationsEnabled || !lang || lang === 'en') return item.name
-  const row = translations?.[item.id]
-  const alt = lang === 'ha' ? row?.ha : lang === 'yo' ? row?.yo : row?.ig
-  return alt && alt.trim() ? alt.trim() : item.name
+function resolveItemName(item: StorefrontMenuGridItem): string {
+  return item.name
 }
 
 function findItemById(categories: StorefrontMenuGridCategory[], id: string): StorefrontMenuGridItem | null {
@@ -333,7 +325,6 @@ export function StorefrontMenuGrid({
 
   const trendSet = new Set(trendingItemIds || [])
   const upsellSet = new Set(upsellSeedIds || [])
-  const transOn = ag.translationsEnabled !== false
 
   return (
     <div className="w-full min-w-0 max-w-full overflow-x-hidden">
@@ -376,7 +367,7 @@ export function StorefrontMenuGrid({
                 style={{ background: theme.panel, borderColor: theme.border }}
               >
                 <p className="text-xs font-bold truncate" style={{ color: theme.text }}>
-                  {resolveItemName(item, activeMenuLang, menuTranslations, transOn)}
+                  {resolveItemName(item)}
                 </p>
                 <p className="text-[11px] tabular-nums font-semibold mt-0.5" style={{ color: config.brandColor }}>
                   ₦{Number(item.price).toFixed(2)}
@@ -414,7 +405,7 @@ export function StorefrontMenuGrid({
                 const isCircle = config.cardImageShape === 'circle'
                 const expanded = expandedId === item.id
                 const qrSrc = ticketPreviewQrImageUrl(ticketPreviewQrPayload(businessId || 'preview', item.id), 112)
-                const displayName = resolveItemName(item, activeMenuLang, menuTranslations, transOn)
+                const displayName = resolveItemName(item)
                 const showTrend = !isTicketing && ag.trendingOnMenu !== false && trendSet.has(item.id)
                 const showUpsell = !isTicketing && ag.intelligentUpsell !== false && upsellSet.has(item.id)
                 const signal = personalisationActive ? itemSignals[item.id] : undefined
@@ -558,11 +549,6 @@ export function StorefrontMenuGrid({
                         <h3 className="font-bold break-words hyphens-auto" style={{ color: theme.text }}>
                           {displayName}
                         </h3>
-                        {displayName !== item.name && transOn && activeMenuLang !== 'en' ? (
-                          <p className="text-[10px] mt-0.5 truncate" style={{ color: theme.sub }}>
-                            {item.name}
-                          </p>
-                        ) : null}
                       </div>
                       <div className="flex flex-row sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-2 shrink-0 sm:pl-2">
                         <span className="font-bold text-sm tabular-nums whitespace-nowrap" style={{ color: config.priceTextColor || config.brandColor }}>

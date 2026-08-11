@@ -141,6 +141,10 @@ function PricingPage(): JSX.Element {
                   </li>
                   <li className="flex items-start">
                     <span className="text-zuri-yellow mr-2">✓</span>
+                    Guest AI menu + ZuriQO — 8 AI credits / day
+                  </li>
+                  <li className="flex items-start">
+                    <span className="text-zuri-yellow mr-2">✓</span>
                     Orders & payments to your bank
                   </li>
                   <li className="flex items-start text-gray-400">
@@ -177,6 +181,10 @@ function PricingPage(): JSX.Element {
                   <li className="flex items-start">
                     <span className="text-green-500 mr-2">✓</span>
                     Menu item photos & business logo
+                  </li>
+                  <li className="flex items-start">
+                    <span className="text-green-500 mr-2">✓</span>
+                    Guest AI menu + ZuriQO — 25 AI credits / day
                   </li>
                   <li className="flex items-start">
                     <span className="text-green-500 mr-2">✓</span>
@@ -234,11 +242,11 @@ function PricingPage(): JSX.Element {
                   </li>
                   <li className="flex items-start">
                     <span className="text-blue-500 mr-2">✓</span>
-                    Zuri Assist on the guest menu — trending, upsells, taste sort, Hausa · Yorùbá · Igbo
+                    ZuriQO AI — 60 credits / day + guest menu personalization
                   </li>
                   <li className="flex items-start">
                     <span className="text-blue-500 mr-2">✓</span>
-                    Agentic AI storefront — one-time batch of 3–4 brand directions; regenerate on Scale
+                    Agentic AI storefront — fair-use regenerations (8 on Growth)
                   </li>
                   <li className="flex items-start">
                     <span className="text-blue-500 mr-2">✓</span>
@@ -271,7 +279,11 @@ function PricingPage(): JSX.Element {
                 <ul className="space-y-3 text-sm text-gray-300 flex-1">
                   <li className="flex items-start">
                     <span className="text-purple-300 mr-2">✓</span>
-                    Everything in Growth — including guest AI menu controls
+                    Unlimited ZuriQO + unlimited storefront AI regenerations
+                  </li>
+                  <li className="flex items-start">
+                    <span className="text-purple-300 mr-2">✓</span>
+                    Everything in Growth — analytics, Tap, guest AI
                   </li>
                   <li className="flex items-start">
                     <span className="text-purple-300 mr-2">✓</span>
@@ -284,10 +296,6 @@ function PricingPage(): JSX.Element {
                   <li className="flex items-start">
                     <span className="text-purple-300 mr-2">✓</span>
                     Live ops — briefing, rush signals, slow hours, low-stock flags
-                  </li>
-                  <li className="flex items-start">
-                    <span className="text-purple-300 mr-2">✓</span>
-                    AI storefront regenerations without Growth caps
                   </li>
                 </ul>
                 <div className="mt-4 flex justify-center">
