@@ -495,7 +495,28 @@ async function executeTool(name, input, ctx, bag) {
   }
 
   if (name === 'guide_owner') {
-    const destination = String(input?.destination || 'orders');
+    let destination = String(input?.destination || 'orders').toLowerCase().trim();
+    if (/analytic|sales|report|insight/i.test(destination)) destination = 'analytics';
+    else if (/tap/i.test(destination)) destination = 'tap';
+    else if (/qr/i.test(destination)) destination = 'qr';
+    else if (/menu|catalog|ticket/i.test(destination)) destination = 'menu';
+    else if (/payout|billing|payment|upgrade|bank|plan/i.test(destination)) destination = 'payment';
+    else if (/customiz|storefront|theme/i.test(destination)) destination = 'customize';
+    else if (/setting/i.test(destination)) destination = 'settings';
+    else if (/mode|shop/i.test(destination)) destination = 'mode_switch';
+    else if (/order/i.test(destination)) destination = 'orders';
+    const allowed = new Set([
+      'orders',
+      'menu',
+      'qr',
+      'analytics',
+      'tap',
+      'payment',
+      'customize',
+      'settings',
+      'mode_switch'
+    ]);
+    if (!allowed.has(destination)) destination = 'orders';
     const title = String(input?.title || 'Next steps').trim().slice(0, 120);
     const steps = Array.isArray(input?.steps)
       ? input.steps.map((s) => String(s || '').trim()).filter(Boolean).slice(0, 8)
@@ -806,16 +827,23 @@ function tryInstantChat(ctx, message, preferredTier) {
     };
   }
 
-  if (/where (is|do i)|how do i (open|find|get to)|take me to|show me (the )?(orders|menu|tap|qr|analytics|settings|payout)/i.test(lower)) {
+  if (
+    /where (is|do i|can i)|how do i (open|find|get to)|take me (to|there)|go to|open (the )?(orders|menu|tap|qr|analytics|settings|payout|billing)|show me (the )?(orders|menu|tap|qr|analytics|settings|payout)/i.test(
+      lower
+    )
+  ) {
     let destination = 'orders';
-    if (/tap/i.test(lower)) destination = 'tap';
-    else if (/analytics|sales chart/i.test(lower)) destination = 'analytics';
-    else if (/qr/i.test(lower)) destination = 'qr';
-    else if (/menu|catalog|ticket type/i.test(lower)) destination = 'menu';
-    else if (/payout|billing|bank|upgrade|plan/i.test(lower)) destination = 'payment';
+    // Prefer specific destinations before loose "tap" matching ("take" must not steal these).
+    if (/\banalytics\b|sales chart|sales report|\breports?\b|\binsights?\b/i.test(lower)) destination = 'analytics';
+    else if (/\bzuri\s*tap\b|(^|[^\w])tap([^\w]|$)/i.test(lower) && !/take me/i.test(lower)) destination = 'tap';
+    else if (/\bqr\b|qr code/i.test(lower)) destination = 'qr';
+    else if (/\bmenu\b|\bcatalog\b|ticket type/i.test(lower)) destination = 'menu';
+    else if (/\bpayout|\bbilling\b|\bbank\b|\bupgrade\b|\bplan\b/i.test(lower)) destination = 'payment';
     else if (/customiz|storefront|theme/i.test(lower)) destination = 'customize';
-    else if (/setting/i.test(lower)) destination = 'settings';
-    else if (/mode|shop|ticket/i.test(lower)) destination = 'mode_switch';
+    else if (/\bsettings?\b/i.test(lower)) destination = 'settings';
+    else if (/\bmode\b|\bshop\b|\btickets?\b/i.test(lower)) destination = 'mode_switch';
+    else if (/\bzuri\s*tap\b|(^|[^\w])tap([^\w]|$)/i.test(lower)) destination = 'tap';
+    else if (/\borders?\b/i.test(lower)) destination = 'orders';
     const map = {
       orders: 'Orders tab',
       menu: 'Menu / Catalog / Tickets tab',

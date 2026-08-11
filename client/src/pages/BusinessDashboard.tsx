@@ -29,6 +29,7 @@ import { useDialog } from '../components/DialogProvider'
 import { BusinessDashboardMobileShell } from '../components/business/BusinessDashboardMobileShell'
 import { MobileBottomSheet } from '../components/business/MobileBottomSheet'
 import { ZuriQoAiChatBar, ZuriQoSummonButton } from '../components/business/ZuriQoAiChatBar'
+import { normalizeGuideDestination } from '../lib/zuriQoAiPrompts'
 import {
   formatOrderStatusLabel,
   getOrderStatusColor,
@@ -4782,23 +4783,24 @@ function BusinessDashboard(): JSX.Element {
           .catch(() => {})
       }}
       onGuideNavigate={(destination) => {
-        const dest = String(destination || '').toLowerCase()
-        if (dest === 'payment') {
-          setZuriQoOpen(false)
+        const resolved = normalizeGuideDestination(destination)
+
+        // Close chat so the destination is visible (overlay otherwise hides the switch).
+        setZuriQoOpen(false)
+
+        if (resolved === 'payment') {
           navigate(`/business/dashboard/${businessId}/payment`)
           return
         }
-        if (dest === 'customize') {
-          setZuriQoOpen(false)
+        if (resolved === 'customize') {
           navigate(`/business/dashboard/${businessId}/customize`)
           return
         }
-        if (dest === 'settings') {
-          setZuriQoOpen(false)
+        if (resolved === 'settings') {
           navigate(`/business/dashboard/${businessId}/settings`)
           return
         }
-        if (dest === 'mode_switch') {
+        if (resolved === 'mode_switch') {
           if (isPhone) {
             setNotificationsOpen(false)
             setLogoMenuOpen(false)
@@ -4807,27 +4809,34 @@ function BusinessDashboard(): JSX.Element {
             setProfileOpen(true)
             window.setTimeout(() => {
               document.getElementById('zuri-mode-switch')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-            }, 80)
+            }, 120)
           }
           return
         }
-        if (dest === 'tap') {
+        if (resolved === 'tap') {
           setActiveTab('orders')
-          if (isPhone) {
-            // Tap controls are desktop-first; keep chat open with steps
-            return
+          if (!isPhone) {
+            window.setTimeout(() => {
+              document.getElementById('zuri-tap-controls')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            }, 120)
           }
-          window.setTimeout(() => {
-            document.getElementById('zuri-tap-controls')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-          }, 80)
           return
         }
-        if (dest === 'orders' || dest === 'menu' || dest === 'qr' || dest === 'analytics') {
-          if ((dest === 'analytics') && (business?.plan === 'free' || business?.plan === 'starter')) {
-            setActiveTab('orders')
+        if (resolved === 'analytics') {
+          const canAnalytics = !!(business?.plan && business.plan !== 'free' && business.plan !== 'starter')
+          if (!canAnalytics) {
+            navigate(`/business/dashboard/${businessId}/payment`)
             return
           }
-          setActiveTab(dest)
+          setActiveTab('analytics')
+          fetchAnalytics()
+          window.setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 80)
+          return
+        }
+        if (resolved === 'orders' || resolved === 'menu' || resolved === 'qr') {
+          setActiveTab(resolved)
+          if (resolved === 'orders') fetchOrders()
+          window.setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 80)
         }
       }}
       onUpgradeClick={() => {

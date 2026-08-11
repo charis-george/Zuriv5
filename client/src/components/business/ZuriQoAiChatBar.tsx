@@ -7,7 +7,8 @@ import {
   ZURIQO_TIER_META,
   type ZuriQoChip,
   type ZuriQoGuide,
-  type ZuriQoTier
+  type ZuriQoTier,
+  normalizeGuideDestination
 } from '../../lib/zuriQoAiPrompts'
 
 export type ZuriQoProposedAction = {
@@ -326,6 +327,15 @@ export function ZuriQoAiChatBar({
         proposedAction: data.proposedAction,
         agentRun: data.agentRun,
         guide: data.guide
+          ? {
+              ...data.guide,
+              destination: normalizeGuideDestination(
+                typeof data.guide === 'object' && data.guide && 'destination' in data.guide
+                  ? String((data.guide as { destination?: string }).destination || '')
+                  : ''
+              )
+            }
+          : undefined
       })
     } catch (err: unknown) {
       const ax = err as { response?: { status?: number; data?: { quota?: AiDailyQuota; error?: string } } }
@@ -627,7 +637,11 @@ export function ZuriQoAiChatBar({
                         {onGuideNavigate ? (
                           <button
                             type="button"
-                            onClick={() => onGuideNavigate(m.guide!.destination)}
+                            onClick={(e) => {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              onGuideNavigate(normalizeGuideDestination(m.guide!.destination))
+                            }}
                             className={`${BTN} mt-2.5 w-full rounded-lg bg-zuri-black text-white text-xs font-semibold px-3 py-2`}
                           >
                             Take me there

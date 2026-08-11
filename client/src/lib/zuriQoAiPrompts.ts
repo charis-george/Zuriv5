@@ -15,6 +15,55 @@ export type ZuriQoGuide = {
   tip?: string | null
 }
 
+/** Map free-text / Claude guide targets onto dashboard destinations. */
+export function normalizeGuideDestination(raw: string | null | undefined): string {
+  const s = String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+  if (!s) return 'orders'
+
+  if (
+    s === 'analytics' ||
+    /\banalytics\b/.test(s) ||
+    /\bsales\b/.test(s) ||
+    /\breports?\b/.test(s) ||
+    /\binsights?\b/.test(s)
+  ) {
+    return 'analytics'
+  }
+  if (s === 'menu' || /\bmenu\b/.test(s) || /\bcatalog\b/.test(s) || /\btickets?\b/.test(s)) {
+    if (/\bmode\b|\bswitch\b/.test(s)) return 'mode_switch'
+    return 'menu'
+  }
+  if (s === 'qr' || /\bqr\b/.test(s)) return 'qr'
+  if (s === 'orders' || /\borders?\b/.test(s)) return 'orders'
+  if (
+    s === 'tap' ||
+    /\bzuri\s*tap\b/.test(s) ||
+    /(^|\s)tap(\s|$)/.test(s)
+  ) {
+    return 'tap'
+  }
+  if (
+    s === 'payment' ||
+    /\bpayout/.test(s) ||
+    /\bbilling\b/.test(s) ||
+    /\bupgrade\b/.test(s) ||
+    /\bbank\b/.test(s) ||
+    /\bplan\b/.test(s)
+  ) {
+    return 'payment'
+  }
+  if (s === 'customize' || /\bcustomiz/.test(s) || /\bstorefront\b/.test(s) || /\btheme\b/.test(s)) {
+    return 'customize'
+  }
+  if (s === 'settings' || /\bsettings?\b/.test(s)) return 'settings'
+  if (s === 'mode_switch' || /\bmode\b/.test(s) || /\bshop\b/.test(s)) return 'mode_switch'
+
+  return s.split(/\s+/)[0] || 'orders'
+}
+
 export const ZURIQO_CHIPS: ZuriQoChip[] = [
   { id: 'snapshot', label: 'Snapshot', prompt: 'Give me a live business snapshot and what I should do next', tier: 1, icon: 'chart' },
   { id: 'orders-today', label: 'Orders today', prompt: 'How many orders came in today?', tier: 1, icon: 'orders' },
