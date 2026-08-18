@@ -35,6 +35,14 @@ let openedAt = 0;
 let openStreak = 0;
 
 function summarizeUpstreamError(raw) {
+  if (raw && typeof raw === 'object' && !raw.message) {
+    const parts = [raw.code, raw.details, raw.hint, raw.error, raw.status, raw.statusCode]
+      .map((v) => (v == null ? '' : String(v).trim()))
+      .filter(Boolean);
+    if (parts.length) {
+      raw = { ...raw, message: parts.join(' ') };
+    }
+  }
   const s = String(raw?.message || raw || '').trim();
   if (!s) return 'unknown_error';
 

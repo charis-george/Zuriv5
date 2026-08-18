@@ -16,7 +16,8 @@ const {
 const {
   getDailyAiQuota,
   consumeDailyAiCredit,
-  assertStorefrontAiAllowed
+  assertStorefrontAiAllowed,
+  getStorefrontAiLifetimeLimit
 } = require('../lib/aiUsageLimits');
 
 const supabase = getDb();
@@ -762,12 +763,19 @@ router.post('/storefront-generate', requireBusinessAuth, handleStorefrontAiUploa
       return res.status(500).json({ error: 'Failed to generate storefront with AI' });
     }
 
+    const used = Number(
+      gate.quota?.used ?? business.storefront_ai_generations ?? 0
+    );
+    const nextUsed = used + 1;
+    const lifetimeLimit = getStorefrontAiLifetimeLimit(plan);
+    const unlimited = lifetimeLimit === 0;
+
     const { error: upErr } = await supabase
       .from('businesses')
       .update({
         storefront_config: generatedConfig,
         storefront_details: generatedDetails,
-        storefront_ai_generations: used + 1
+        storefront_ai_generations: nextUsed
       })
       .eq('id', businessId);
     if (upErr) {
@@ -788,13 +796,20 @@ router.post('/storefront-generate', requireBusinessAuth, handleStorefrontAiUploa
       console.error('[ZURI] ai.storefront-generate socket error:', e);
     }
 
+    const remaining = unlimited ? null : Math.max(0, lifetimeLimit - nextUsed);
     return res.json({
       success: true,
       storefrontConfig: generatedConfig,
       storefrontDetails: generatedDetails,
       reasoning,
-      generationsUsed: used + 1,
-      generationsRemainingOnGrowth: Math.max(0, 1 - (used + 1))
+      generationsUsed: nextUsed,
+      generationsRemainingOnGrowth: remaining,
+      quota: {
+        used: nextUsed,
+        limit: unlimited ? null : lifetimeLimit,
+        remaining,
+        unlimited
+      }
     });
   } catch (e) {
     console.error('[ZURI] ai.storefront-generate error:', e);

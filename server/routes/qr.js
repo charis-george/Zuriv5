@@ -36,7 +36,7 @@ const {
   CODE_LENGTH,
   MAX_CODES_PER_BUSINESS
 } = require('../lib/scannerAccessCodes');
-const { normalizeUuid } = require('../lib/normalizeUuid');
+const { normalizeUuid, isUuid } = require('../lib/normalizeUuid');
 
 function db() {
   return getDb();
@@ -301,10 +301,28 @@ router.post('/scanner-codes/redeem', async (req, res) => {
 // Get business public info (for customer ordering page)
 router.get('/business/:businessId', async (req, res) => {
   try {
-    const businessId = normalizeUuid(req.params.businessId) || req.params.businessId;
+    const rawId = normalizeUuid(req.params.businessId) || String(req.params.businessId || '').trim();
+    let businessId = rawId;
     const storefrontSlug = String(req.query.storefront || req.query.storefrontSlug || '').trim();
     const eventSlug = String(req.query.event || req.query.eventSlug || '').trim();
     const cacheParts = { storefront: storefrontSlug, event: eventSlug };
+
+    if (rawId && !isUuid(rawId)) {
+      try {
+        const { normalizePublicSlug } = require('../lib/publicSlug');
+        const slug = normalizePublicSlug(rawId);
+        if (slug) {
+          const { data: bySlug } = await db()
+            .from('businesses')
+            .select('id')
+            .ilike('public_slug', slug)
+            .maybeSingle();
+          if (bySlug?.id) businessId = bySlug.id;
+        }
+      } catch (slugErr) {
+        console.warn('Get business public info slug resolve:', summarizeUpstreamError(slugErr));
+      }
+    }
 
     const cached = getCachedPublicBusiness(businessId, cacheParts);
     if (cached) {
@@ -330,7 +348,14 @@ router.get('/business/:businessId', async (req, res) => {
     }
 
     if (error || !business) {
-      console.error('Get business public info:', summarizeUpstreamError(error));
+      if (error) {
+        console.error('Get business public info:', summarizeUpstreamError(error), {
+          businessId,
+          code: error.code || null
+        });
+      } else {
+        console.warn('Get business public info: not found', { businessId: rawId });
+      }
       return res.status(404).json({ error: 'Business not found' });
     }
 
