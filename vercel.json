@@ -1,17 +1,27 @@
 {
-  "installCommand": "npm install",
-  "buildCommand": "npm run build",
-  "outputDirectory": "client/dist",
-  "functions": {
-    "api/storefront-html.js": {
-      "includeFiles": "client/dist/index.html"
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "client": {
+      "root": "client",
+      "framework": "vite"
+    },
+    "server": {
+      "root": "server",
+      "framework": "express"
     }
   },
   "rewrites": [
-    { "source": "/order/:businessId", "destination": "/api/storefront-html?businessId=:businessId" },
-    { "source": "/order/:businessId/:storefrontSlug", "destination": "/api/storefront-html?businessId=:businessId&storefrontSlug=:storefrontSlug" },
-    { "source": "/event/:businessId/:eventSlug", "destination": "/api/storefront-html?businessId=:businessId&eventSlug=:eventSlug" },
-    { "source": "/api/(.*)", "destination": "/api/$1" },
-    { "source": "/((?!assets/).*)", "destination": "/index.html" }
+    {
+      "source": "/api/(.*)",
+      "destination": {
+        "service": "server"
+      }
+    },
+    {
+      "source": "/(.*)",
+      "destination": {
+        "service": "client"
+      }
+    }
   ]
 }
