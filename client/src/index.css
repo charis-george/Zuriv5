@@ -1,0 +1,456 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #ffffff;
+  color: #000000;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Mobile business dashboard — fixed shell, stable when keyboard opens/closes */
+:root {
+  --mobile-header-h: calc(4.25rem + env(safe-area-inset-top, 0px));
+  --mobile-nav-h: calc(4.75rem + env(safe-area-inset-bottom, 0px));
+}
+
+html.mobile-dashboard-active {
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: manipulation;
+}
+
+html.mobile-dashboard-active body {
+  overflow: hidden;
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  max-width: 100vw;
+}
+
+.mobile-dashboard-shell {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 100vw;
+  height: var(--layout-height, 100dvh);
+  max-height: var(--layout-height, 100dvh);
+  overflow: hidden;
+  background: #f3f4f6;
+}
+
+.mobile-dashboard-header {
+  flex: 0 0 var(--mobile-header-h);
+  height: var(--mobile-header-h);
+  min-height: var(--mobile-header-h);
+  max-height: var(--mobile-header-h);
+  width: 100%;
+  z-index: 30;
+}
+
+.mobile-dashboard-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  max-width: 100vw;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: var(--mobile-nav-h);
+}
+
+.mobile-dashboard-nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  height: var(--mobile-nav-h);
+  min-height: var(--mobile-nav-h);
+  max-height: var(--mobile-nav-h);
+  width: 100%;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  box-sizing: border-box;
+  background: #fff;
+  border-top: 1px solid #e5e7eb;
+  transform: translateZ(0);
+}
+
+.mobile-dashboard-content {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding-bottom: var(--zuriqo-mobile-pad, 0px);
+  transition: padding-bottom 0.2s ease;
+}
+
+.mobile-dashboard-chip-row {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  max-width: 100%;
+}
+
+.mobile-dashboard-chip-row::-webkit-scrollbar {
+  display: none;
+}
+
+.mobile-dashboard-chip-row > * {
+  flex-shrink: 0;
+}
+
+.mobile-dashboard-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  width: 100%;
+  max-width: 100%;
+}
+
+.mobile-dashboard-shell input,
+.mobile-dashboard-shell textarea,
+.mobile-dashboard-shell select,
+.mobile-dashboard-shell .mobile-dashboard-input {
+  font-size: 16px !important;
+  line-height: 1.4;
+  max-width: 100%;
+}
+
+.mobile-dashboard-shell input:focus,
+.mobile-dashboard-shell textarea:focus,
+.mobile-dashboard-shell select:focus {
+  font-size: 16px !important;
+}
+
+/* Full-screen / bottom-sheet modals on mobile dashboard */
+.mobile-dashboard-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  background: rgb(0 0 0 / 0.55);
+}
+
+.mobile-dashboard-modal-sheet {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 100vw;
+  /* Leave top breathing room so long forms (add ticket) keep the sticky CTA in view */
+  max-height: min(85dvh, calc(var(--layout-height, 100dvh) - 3rem));
+  border-radius: 1rem 1rem 0 0;
+  background: #fff;
+  overflow: hidden;
+}
+
+.mobile-dashboard-modal-sheet > form {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+.mobile-dashboard-modal-sheet-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1rem 1rem 0.75rem;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.mobile-dashboard-modal-sheet-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  /* Footer owns safe-area padding so the submit row stays pinned */
+  padding: 1rem;
+}
+
+.mobile-dashboard-modal-sheet-footer {
+  flex-shrink: 0;
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid #f3f4f6;
+  background: #fff;
+  box-shadow: 0 -10px 24px rgb(0 0 0 / 0.06);
+  z-index: 2;
+}
+
+.mobile-dashboard-form-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: 100%;
+}
+
+.mobile-dashboard-form-section {
+  width: 100%;
+  border-radius: 0.75rem;
+  border: 2px solid #e5e7eb;
+  padding: 0.875rem;
+}
+
+.mobile-dashboard-segment-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+@media (min-width: 380px) {
+  .mobile-dashboard-segment-row--3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* Swipeable bottom sheets (notifications, profile, more) */
+.mobile-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  border: 0;
+  background: rgb(0 0 0 / 0.4);
+}
+
+.mobile-sheet-panel {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 75;
+  display: flex;
+  flex-direction: column;
+  max-height: min(88dvh, calc(var(--layout-height, 100dvh) - var(--mobile-header-h)));
+  border-radius: 1rem 1rem 0 0;
+  background: #fff;
+  border-top: 1px solid #f3f4f6;
+  box-shadow: 0 -8px 30px rgb(0 0 0 / 0.12);
+  overflow: hidden;
+  touch-action: pan-y;
+}
+
+.mobile-sheet-grabber-hit {
+  flex-shrink: 0;
+  padding: 0.625rem 0 0.375rem;
+  cursor: grab;
+  touch-action: none;
+}
+
+.mobile-sheet-grabber {
+  width: 2.5rem;
+  height: 0.25rem;
+  margin: 0 auto;
+  border-radius: 9999px;
+  background: #e5e7eb;
+}
+
+.mobile-sheet-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0 1.25rem 0.75rem;
+}
+
+.mobile-sheet-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 0 0.75rem calc(1rem + env(safe-area-inset-bottom, 0px));
+}
+
+/* Dashboard button touch feedback */
+.dashboard-btn {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  transition:
+    transform 0.07s ease-out,
+    background-color 0.07s ease-out,
+    border-color 0.07s ease-out,
+    color 0.07s ease-out,
+    opacity 0.07s ease-out,
+    box-shadow 0.07s ease-out;
+}
+
+.dashboard-btn:active:not(:disabled) {
+  transform: scale(0.96);
+  opacity: 0.9;
+}
+
+.dashboard-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.mobile-dashboard-chip-row .dashboard-btn,
+.mobile-dashboard-chip-row a.dashboard-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.25;
+  min-height: 2.25rem;
+}
+
+/* Mobile Zuri Assist chat layout */
+.mobile-ai-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  width: 100%;
+}
+
+.mobile-ai-composer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  border-radius: 9999px;
+  border: 1px solid rgb(255 189 89 / 0.35);
+  background: #fff;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.06);
+}
+
+.mobile-ai-insight {
+  border-radius: 1rem;
+  border: 1px solid rgb(255 189 89 / 0.25);
+  background: rgb(255 189 89 / 0.08);
+  padding: 0.875rem;
+  max-height: min(50dvh, 22rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #ffcd1c;
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #e6b800;
+}
+
+/* Zuri loader — tiny MP4 decoded off-screen, painted to canvas (no Safari play button) */
+.zuri-loader-video-source {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.zuri-loader-canvas {
+  display: block;
+  object-fit: contain;
+  pointer-events: none;
+  background: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Storefront customizer — mobile */
+.storefront-customizer-mobile-tabs {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid #f3f4f6;
+  background: #fff;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.storefront-customizer-mobile-tab {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.75rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-align: center;
+  border: 1px solid #e5e7eb;
+  color: #6b7280;
+  background: #fff;
+  touch-action: manipulation;
+}
+
+.storefront-customizer-mobile-tab--active {
+  border-color: rgb(255 189 89 / 0.5);
+  background: rgb(255 189 89 / 0.12);
+  color: #171717;
+}
+
+.storefront-customizer-mobile-publish {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  background: linear-gradient(to top, #fff 85%, rgb(255 255 255 / 0));
+  border-top: 1px solid #f3f4f6;
+}
+
+/* Paper plane loading animation – flies in a circle */
+@keyframes paper-plane-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+

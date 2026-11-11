@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install API dependencies
+        run: npm ci --ignore-scripts
+      - name: Test
+        run: npm test
+      - name: Install and build the client
+        run: npm ci --prefix client && npm run build --prefix client

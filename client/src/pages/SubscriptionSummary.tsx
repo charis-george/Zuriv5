@@ -1,0 +1,221 @@
+import { useMemo, useState, useEffect, useRef, useCallback } from 'react'
+import { useNavigate, useParams, useSearchParams, Link } from 'react-router-dom'
+import axios from 'axios'
+import { PLAN_LABELS, PLAN_PRICES, PLAN_PRICES_YEARLY, type PlanId, type BillingInterval, type Business } from '../types'
+import { PaperPlaneLoader } from '../components/PaperPlaneLoader'
+import { apiUrl } from '../lib/apiBase'
+import { clearBusinessAuth, getBusinessId, getBusinessToken } from '../lib/businessAuthStorage'
+import { preloadZuriPayment, startZuriPayment, type ZuriPaymentInitializePayload } from '../lib/zuriPayment'
+import { formatUserFacingError } from '../lib/formatApiError'
+
+function parseAmount(plan: PlanId, interval: BillingInterval): { display: string; numeric: number } {
+  const table = interval === 'yearly' ? PLAN_PRICES_YEARLY : PLAN_PRICES
+  const display = table[plan] || '₦0'
+  const numeric = Number(display.replace(/[^0-9]/g, '')) || 0
+  return { display, numeric }
+}
+
+function SubscriptionSummary(): JSX.Element {
+  const { plan: planParam } = useParams<{ plan: string }>()
+  const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const interval: BillingInterval = (searchParams.get('interval') === 'yearly' ? 'yearly' : 'monthly')
+  const autopay = searchParams.get('autopay') === '1'
+  const autopayStarted = useRef(false)
+  const loginRedirectRef = useRef(false)
+
+  const plan: PlanId | null = useMemo(() => {
+    const p = (planParam || '').toLowerCase()
+    const allowed: PlanId[] = ['starter', 'growth', 'scale']
+    return allowed.includes(p as PlanId) ? (p as PlanId) : null
+  }, [planParam])
+
+  const { display, numeric } = useMemo(
+    () => (plan ? parseAmount(plan, interval) : { display: '₦0', numeric: 0 }),
+    [plan, interval]
+  )
+
+  const handlePay = useCallback(async (): Promise<void> => {
+    if (!plan) return
+    setError(null)
+    const token = getBusinessToken()
+    const businessId = getBusinessId()
+    if (!token || !businessId) {
+      setError('Please log in to your business dashboard to complete this subscription.')
+      return
+    }
+    setLoading(true)
+    try {
+      const { data: business } = await axios.get<Business>(apiUrl(`/api/business/${businessId}`), {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      const body = {
+        businessId,
+        plan,
+        ...(business?.email ? { email: business.email } : {}),
+        callbackUrl: `${window.location.origin}/upgrade-done`,
+        interval
+      }
+      const { data } = await axios.post<ZuriPaymentInitializePayload>(apiUrl('/api/subscription/initialize'), body, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      preloadZuriPayment(data.provider)
+      const upgradeDoneUrl = `${window.location.origin}/upgrade-done?reference=${encodeURIComponent(data.reference)}`
+      await startZuriPayment(
+        {
+          provider: data.provider,
+          authorizationUrl: data.authorizationUrl,
+          accessCode: data.accessCode,
+          reference: data.reference,
+          orderId: data.reference,
+          checkoutUrl: data.checkoutUrl,
+          apiKey: data.apiKey,
+          contractCode: data.contractCode,
+          amount: data.amount ?? numeric,
+          customerEmail: data.customerEmail || business?.email,
+          customerName: data.customerName || business?.name,
+          isTestMode: data.isTestMode,
+        },
+        {
+          successPath: upgradeDoneUrl,
+          onError: (msg) => setError(msg || 'Could not start payment. Please try again.'),
+        },
+      )
+    } catch (err: unknown) {
+      if (axios.isAxiosError(err)) {
+        if (err.response?.status === 401 || err.response?.status === 403) {
+          setError('Please log in to your business dashboard to subscribe to a plan.')
+          clearBusinessAuth()
+        } else if (err.response?.status === 404) {
+          setError('Subscription is temporarily unavailable. Please try again shortly.')
+        } else if (err.response?.status === 422) {
+          setError(formatUserFacingError(err.response?.data, 'Your business account could not be loaded. Try logging out and back in.'))
+        } else {
+          setError(formatUserFacingError(err.response?.data, 'Failed to start subscription payment.'))
+        }
+      } else {
+        setError('Failed to start subscription payment.')
+      }
+    } finally {
+      setLoading(false)
+    }
+  }, [plan, interval])
+
+  useEffect(() => {
+    preloadZuriPayment()
+  }, [])
+
+  useEffect(() => {
+    if (!autopay || !plan || autopayStarted.current) return
+    const token = getBusinessToken()
+    const businessId = getBusinessId()
+    if (!token || !businessId) {
+      if (loginRedirectRef.current) return
+      loginRedirectRef.current = true
+      const back = `/subscribe/${plan}?interval=${interval}&autopay=1`
+      navigate(`/business/login?redirect=${encodeURIComponent(back)}`, { replace: true })
+      return
+    }
+    autopayStarted.current = true
+    void handlePay()
+  }, [autopay, plan, interval, navigate, handlePay])
+
+  if (autopay && plan) {
+    const tok = getBusinessToken()
+    if (!tok || loading) {
+      return (
+        <div className="min-h-screen bg-black flex items-center justify-center px-4">
+          <PaperPlaneLoader size="lg" />
+        </div>
+      )
+    }
+  }
+
+  if (!plan) {
+    return (
+      <div className="min-h-screen bg-[#f5f5f5] flex items-center justify-center px-4">
+        <div className="bg-white rounded-xl border border-gray-200 p-8 max-w-md w-full text-center">
+          <h1 className="text-lg font-semibold text-zuri-black mb-2">Plan not found</h1>
+          <p className="text-gray-500 text-sm mb-6">Please go back to the pricing section and choose a valid plan.</p>
+          <Link
+            to="/pricing"
+            className="inline-block bg-zuri-orange text-white px-3 py-1.5 rounded-lg text-sm hover:bg-zuri-orange-dark transition"
+          >
+            Back to pricing
+          </Link>
+        </div>
+      </div>
+    )
+  }
+
+  const planLabel = PLAN_LABELS[plan]
+  const duration = interval === 'monthly' ? '1 month' : '12 months'
+  const billingLabel = interval === 'monthly' ? 'Monthly' : 'Yearly'
+
+  return (
+    <div className="min-h-screen bg-[#f5f5f5] py-10 px-4">
+      <div className="max-w-md mx-auto">
+        <div className="mb-6">
+          <Link to="/" className="inline-flex items-center text-sm text-gray-500 hover:text-zuri-orange transition">
+            <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+            Back to home
+          </Link>
+        </div>
+        <div className="bg-white rounded-xl border border-gray-200 p-8">
+          <h1 className="text-lg font-semibold text-zuri-black mb-1">Subscription summary</h1>
+          <p className="text-gray-500 text-sm mb-6">
+            Review your subscription before continuing to Paystack. Plans renew automatically each billing period until you cancel.
+          </p>
+
+          <div className="space-y-4 mb-6">
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-500">Subscription plan</span>
+              <span className="font-semibold text-zuri-black">
+                {planLabel} ({interval === 'monthly' ? '1 Month' : '12 Months'})
+              </span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-500">Amount</span>
+              <span className="font-bold text-zuri-orange">{display}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-500">Duration</span>
+              <span className="font-semibold text-zuri-black">{duration}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-500">Billing period</span>
+              <span className="font-semibold text-zuri-black">{billingLabel}</span>
+            </div>
+          </div>
+
+          {error && (
+            <div className="mb-4 rounded-xl bg-red-50 border border-red-100 px-3 py-2 text-xs text-red-700">
+              {error}
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={() => void handlePay()}
+            disabled={loading || numeric <= 0}
+            className="w-full bg-zuri-orange text-white py-1.5 rounded-lg text-sm hover:bg-zuri-orange-dark transition disabled:opacity-60 mb-3"
+          >
+            {loading ? 'Redirecting…' : `Pay ${display}`}
+          </button>
+          <p className="text-[11px] text-gray-500 text-center">
+            Payment secured by <span className="font-semibold text-gray-700">Paystack</span>. You&rsquo;ll be redirected to
+            complete your payment.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default SubscriptionSummary
+

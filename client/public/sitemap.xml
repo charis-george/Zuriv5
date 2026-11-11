@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+
+  <!-- Homepage — targets: "Zuri" "Zuri QO" "Zuri Quick Order" -->
+  <url>
+    <loc>https://zuriqo.com/</loc>
+    <lastmod>2026-04-10</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+  </url>
+
+  <!-- Zuri Tap page — targets: "Zuri Tap" -->
+  <url>
+    <loc>https://zuriqo.com/zuri-tap</loc>
+    <lastmod>2026-04-10</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.9</priority>
+  </url>
+
+  <!-- Pricing section — targets: "Zuri QO pricing" "Zuri Quick Order pricing" -->
+  <url>
+    <loc>https://zuriqo.com/pricing</loc>
+    <lastmod>2026-04-10</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+
+  <!-- Waitlist -->
+  <url>
+    <loc>https://zuriqo.com/waitlist</loc>
+    <lastmod>2026-05-18</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.85</priority>
+  </url>
+
+  <!-- Demo page -->
+  <url>
+    <loc>https://zuriqo.com/demo</loc>
+    <lastmod>2026-04-10</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+
+  <!-- Privacy policy -->
+  <url>
+    <loc>https://zuriqo.com/privacy</loc>
+    <lastmod>2026-04-10</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.4</priority>
+  </url>
+
+</urlset>
