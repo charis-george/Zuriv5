@@ -17,5 +17,3 @@ CREATE INDEX IF NOT EXISTS scanner_access_codes_business_id_idx
 ALTER TABLE public.scanner_access_codes ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "scanner_access_codes_service_all" ON public.scanner_access_codes;
-CREATE POLICY "scanner_access_codes_service_all"
-  ON public.scanner_access_codes FOR ALL USING (true) WITH CHECK (true);

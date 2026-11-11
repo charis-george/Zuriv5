@@ -58,3 +58,5 @@ CREATE TABLE IF NOT EXISTS public.disputes (
 CREATE INDEX IF NOT EXISTS idx_disputes_order_id ON public.disputes (order_id);
 CREATE INDEX IF NOT EXISTS idx_disputes_business_id ON public.disputes (business_id);
 CREATE INDEX IF NOT EXISTS idx_disputes_status ON public.disputes (status);
+
+ALTER TABLE public.disputes ENABLE ROW LEVEL SECURITY;

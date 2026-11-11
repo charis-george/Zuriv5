@@ -42,7 +42,7 @@ JWT_SECRET=
 
 `JWT_SECRET` can be any long random string. In production the process still boots without it, but `/api/health` stays unhealthy and auth routes fail.
 
-Apply every file in `supabase/migrations/` in the Supabase SQL editor, from `001_initial_schema.sql` through `036_ai_daily_credits.sql`. Then run `supabase/seed_demo_full.sql` if you want the demo venue.
+Apply every file in `supabase/migrations/` in the Supabase SQL editor, from `001_initial_schema.sql` through `037_lock_down_rls.sql`. Then run `supabase/seed_demo_full.sql` if you want the demo venue.
 
 ```bash
 npm run dev

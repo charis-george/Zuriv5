@@ -18,5 +18,3 @@ CREATE INDEX IF NOT EXISTS password_reset_tokens_subject_idx
 ALTER TABLE public.password_reset_tokens ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "password_reset_tokens_service_all" ON public.password_reset_tokens;
-CREATE POLICY "password_reset_tokens_service_all"
-  ON public.password_reset_tokens FOR ALL USING (true) WITH CHECK (true);

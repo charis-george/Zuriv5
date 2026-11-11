@@ -32,7 +32,9 @@ Optional groups (Redis for multi-instance sockets, VAPID keys for web push, Anth
 ## Database initialization
 
 1. Create a Supabase project.
-2. Open the SQL editor and run each file in `supabase/migrations/` in numeric order. Start at `001_initial_schema.sql` and finish at `036_ai_daily_credits.sql`. Each file is written to be safe to re-run.
+2. Open the SQL editor and run each file in `supabase/migrations/` in numeric order. Start at `001_initial_schema.sql` and finish at `037_lock_down_rls.sql`. Each file is written to be safe to re-run.
+
+Row level security is on for every public table, and there are no policies for the anon or authenticated roles. The API uses `SUPABASE_SERVICE_ROLE_KEY`, which bypasses those policies. Do not put that key in the client. If a database was created before migration 037, run that file so the old `USING (true)` policies are removed.
 3. In Storage, create a public bucket named `menu-items` for logos and dish photos.
 4. Optional demo data: run `supabase/seed_demo_full.sql`. Login is `demo@zuri.com` / `demo123`. The smaller `supabase/seed_demo_business.sql` only inserts that login.
 

@@ -1,5 +1,5 @@
--- RLS: Node API uses the Supabase service role, which bypasses RLS.
--- These permissive policies match the prior migration style if you query with anon/authenticated keys.
+-- RLS: the Node API uses the Supabase service role, which bypasses RLS.
+-- anon and authenticated get no policies, so PostgREST cannot read or write these tables.
 
 ALTER TABLE public.businesses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.categories ENABLE ROW LEVEL SECURITY;
@@ -27,13 +27,4 @@ DROP POLICY IF EXISTS "reviews_service_all" ON public.reviews;
 DROP POLICY IF EXISTS "Reservations viewable by service role" ON public.reservations;
 DROP POLICY IF EXISTS "Reviews viewable by service role" ON public.reviews;
 
-CREATE POLICY "businesses_service_all" ON public.businesses FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "categories_service_all" ON public.categories FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "menu_items_service_all" ON public.menu_items FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "zuri_network_customers_service_all" ON public.zuri_network_customers FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "orders_service_all" ON public.orders FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "order_items_service_all" ON public.order_items FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "saved_cards_service_all" ON public.saved_cards FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "zuri_tap_users_service_all" ON public.zuri_tap_users FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "reservations_service_all" ON public.reservations FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "reviews_service_all" ON public.reviews FOR ALL USING (true) WITH CHECK (true);
+-- No replacement policies. Service role bypasses RLS. Anon stays denied.

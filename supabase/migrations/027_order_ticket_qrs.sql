@@ -22,3 +22,5 @@ CREATE INDEX IF NOT EXISTS idx_order_ticket_qrs_token
 CREATE INDEX IF NOT EXISTS idx_order_ticket_qrs_used_at
   ON public.order_ticket_qrs (used_at)
   WHERE used_at IS NOT NULL;
+
+ALTER TABLE public.order_ticket_qrs ENABLE ROW LEVEL SECURITY;

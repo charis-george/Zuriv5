@@ -20,9 +20,3 @@ ALTER TABLE public.guest_personalization_rnr_patterns ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "guest_personalization_rnr_patterns_service_all"
   ON public.guest_personalization_rnr_patterns;
-
-CREATE POLICY "guest_personalization_rnr_patterns_service_all"
-  ON public.guest_personalization_rnr_patterns
-  FOR ALL
-  USING (true)
-  WITH CHECK (true);

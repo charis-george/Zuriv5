@@ -53,11 +53,6 @@ COMMENT ON COLUMN public.payment_alerts.match_status IS
 ALTER TABLE public.payment_alerts ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "payment_alerts_service_all" ON public.payment_alerts;
-CREATE POLICY "payment_alerts_service_all"
-  ON public.payment_alerts
-  FOR ALL
-  USING (true)
-  WITH CHECK (true);
 
 -- -----------------------------------------------------------------------------
 -- orders: match metadata (payment_status stays pending|paid|failed|...)
@@ -90,11 +85,6 @@ CREATE INDEX IF NOT EXISTS idx_match_candidates_alert
 ALTER TABLE public.match_candidates ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "match_candidates_service_all" ON public.match_candidates;
-CREATE POLICY "match_candidates_service_all"
-  ON public.match_candidates
-  FOR ALL
-  USING (true)
-  WITH CHECK (true);
 
 -- -----------------------------------------------------------------------------
 -- agent_sms_log: outbound SMS audit
@@ -117,8 +107,3 @@ CREATE INDEX IF NOT EXISTS idx_agent_sms_log_business
 ALTER TABLE public.agent_sms_log ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "agent_sms_log_service_all" ON public.agent_sms_log;
-CREATE POLICY "agent_sms_log_service_all"
-  ON public.agent_sms_log
-  FOR ALL
-  USING (true)
-  WITH CHECK (true);

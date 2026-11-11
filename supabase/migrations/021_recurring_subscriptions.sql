@@ -31,3 +31,5 @@ CREATE TABLE IF NOT EXISTS public.paystack_plan_cache (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (plan_id, billing_interval)
 );
+
+ALTER TABLE public.paystack_plan_cache ENABLE ROW LEVEL SECURITY;

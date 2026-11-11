@@ -53,16 +53,8 @@ ALTER TABLE public.tap_staff_codes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.tap_sessions ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "tap_business_state_service_all" ON public.tap_business_state;
-CREATE POLICY "tap_business_state_service_all"
-  ON public.tap_business_state FOR ALL USING (true) WITH CHECK (true);
-
 DROP POLICY IF EXISTS "tap_staff_codes_service_all" ON public.tap_staff_codes;
-CREATE POLICY "tap_staff_codes_service_all"
-  ON public.tap_staff_codes FOR ALL USING (true) WITH CHECK (true);
-
 DROP POLICY IF EXISTS "tap_sessions_service_all" ON public.tap_sessions;
-CREATE POLICY "tap_sessions_service_all"
-  ON public.tap_sessions FOR ALL USING (true) WITH CHECK (true);
 
 COMMENT ON TABLE public.tap_staff_codes IS 'Per-staff Zuri Tap join codes; customers join a specific staff code so requests do not mix across tables.';
 COMMENT ON TABLE public.tap_sessions IS 'Tap payment request sessions shared across API instances.';
