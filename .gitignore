@@ -9,3 +9,5 @@ client/dist
 .cursor/
 debug-agent.log
 *.pdf
+.DS_Store
+*.sqlite
